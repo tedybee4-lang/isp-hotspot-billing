@@ -1,0 +1,73 @@
+---
+name: ✨ Feature Request
+description: Suggest a new feature or improvement for the ISP billing system.
+title: "[Feature]: "
+labels: ["enhancement"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Thanks for suggesting a feature! 💡
+        The best features come from ISPs using this in the real world — your input matters.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Payment Gateway (M-Pesa, Airtel Money, MTN MoMo, etc.)
+        - Admin Dashboard
+        - Client Billing Portal
+        - Hotspot Portal
+        - MikroTik Integration
+        - Analytics & Reporting
+        - Authentication / Security
+        - Mobile / PWA
+        - Multi-language / i18n
+        - API / Backend
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the pain point you're experiencing as an ISP operator.
+      placeholder: "As an ISP in Uganda, I need to accept Airtel Money because..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Describe your proposed solution
+      placeholder: "Add an Airtel Money payment button that..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      placeholder: "I tried using X but it didn't work because..."
+
+  - type: dropdown
+    id: willing
+    attributes:
+      label: Would you like to implement this?
+      options:
+        - "Yes — I can submit a PR"
+        - "Maybe — I can help with design/testing"
+        - "No — I just have the idea"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate
+          required: true

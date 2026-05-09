@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ultrafaiba Hotspot Login</title>
+    <link rel="stylesheet" href="style.css" />
+    <script>
+      function submitLogin() {
+        const form = document.forms.login;
+        form.password.value = form.username.value;
+        return true;
+      }
+    </script>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel hero">
+        <p class="eyebrow">Ultrafaiba Internet Services</p>
+        <h1>Connect instantly to your hotspot</h1>
+        <p class="lead">
+          Use your voucher code or phone number to get online without changing your current MikroTik configuration.
+        </p>
+
+        <div class="card accent">
+          <span class="label">M-Pesa Payment</span>
+          <strong class="big">0724167975</strong>
+          <span class="muted">Send payment to this number if you need to buy or renew access.</span>
+        </div>
+
+        <form name="login" class="form" action="$(link-login-only)" method="post" onsubmit="return submitLogin()">
+          <input type="hidden" name="dst" value="$(link-orig)" />
+          <input type="hidden" name="popup" value="true" />
+
+          <label>
+            Voucher code or phone number
+            <input name="username" type="text" placeholder="Enter code or number" autocomplete="username" required />
+          </label>
+
+          <input name="password" type="hidden" value="" />
+
+          <button type="submit">Connect Now</button>
+        </form>
+
+        <div class="note">
+          <span>Already paid? Enter your voucher code and connect immediately.</span>
+          <span>Need help? support@ultrafaiba.net</span>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,37 @@
+:root {
+  color-scheme: dark;
+  --bg: #020617;
+  --panel: rgba(15, 23, 42, 0.82);
+  --border: rgba(148, 163, 184, 0.18);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #8b5cf6;
+  --accent2: #06b6d4;
+  --button: #7c3aed;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; font-family: Inter, system-ui, sans-serif; background:
+  radial-gradient(circle at top, rgba(139,92,246,0.25), transparent 35%),
+  radial-gradient(circle at bottom right, rgba(6,182,212,0.18), transparent 30%),
+  var(--bg); color: var(--text); }
+a { color: inherit; text-decoration: none; }
+
+.shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.panel { width: min(680px, 100%); padding: 28px; border: 1px solid var(--border); border-radius: 28px; background: var(--panel); backdrop-filter: blur(24px); box-shadow: 0 30px 80px rgba(2, 6, 23, 0.4); }
+.hero h1, .panel h1 { margin: 0; font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.05; }
+.eyebrow { margin: 0 0 10px; text-transform: uppercase; letter-spacing: .22em; font-size: 11px; color: #c4b5fd; }
+.lead { color: var(--muted); line-height: 1.7; margin: 14px 0 0; font-size: 15px; }
+.form { margin-top: 22px; display: grid; gap: 14px; }
+.form label { display: grid; gap: 8px; font-size: 12px; color: #cbd5e1; }
+.form input { width: 100%; border-radius: 16px; border: 1px solid rgba(148,163,184,.22); background: rgba(15,23,42,.85); color: white; padding: 14px 16px; font-size: 15px; outline: none; }
+.form input:focus { border-color: rgba(34,211,238,.7); box-shadow: 0 0 0 3px rgba(34,211,238,.14); }
+.form button, .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 0; border-radius: 16px; padding: 14px 18px; background: linear-gradient(90deg, var(--button), #2563eb); color: white; font-weight: 700; cursor: pointer; }
+.button.secondary { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); }
+.card { margin-top: 18px; padding: 18px; border-radius: 20px; border: 1px solid rgba(255,255,255,.1); background: linear-gradient(180deg, rgba(16,185,129,.18), rgba(8,145,178,.12)); }
+.card .label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .22em; color: #99f6e4; }
+.card .big { display: block; margin-top: 4px; font-size: 28px; font-weight: 900; letter-spacing: .08em; }
+.card .muted { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.note, .stack { margin-top: 18px; display: grid; gap: 10px; color: var(--muted); font-size: 12px; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 12px 14px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); border-radius: 14px; }
+.row strong { color: #fff; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }

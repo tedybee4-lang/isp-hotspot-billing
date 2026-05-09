@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ultrafaiba Session Status</title>
+    <link rel="stylesheet" href="style.css" />
+    <meta http-equiv="refresh" content="30" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <p class="eyebrow">Session Active</p>
+        <h1>You're connected</h1>
+        <div class="stack">
+          <div class="row"><span>User</span><strong>$(username)</strong></div>
+          <div class="row"><span>IP Address</span><strong>$(ip)</strong></div>
+          <div class="row"><span>Uptime</span><strong>$(uptime)</strong></div>
+          <div class="row"><span>Data Used</span><strong>$(bytes-in-nice) down / $(bytes-out-nice) up</strong></div>
+        </div>
+        <a class="button secondary" href="$(link-logout)">Logout</a>
+      </section>
+    </main>
+  </body>
+</html>

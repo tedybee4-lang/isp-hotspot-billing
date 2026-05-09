@@ -1,0 +1,12 @@
+---
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Ask a Question (Discussions)
+    url: https://github.com/Jobkizz/isp-hotspot-billing/discussions
+    about: For general questions, use GitHub Discussions — not Issues.
+  - name: 📧 Email Support
+    url: mailto:support@ultrafaiba.net
+    about: For private inquiries, email us directly.
+  - name: 🌐 Live Demo
+    url: https://ultrafaiba.net
+    about: See the full system running live.
