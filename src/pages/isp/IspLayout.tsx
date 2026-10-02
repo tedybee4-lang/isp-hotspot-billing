@@ -12,6 +12,7 @@ import { useTenant } from '../../context/TenantContext'
 import { useTheme } from '../../context/ThemeContext'
 import { config } from '../../lib/config'
 import { cn } from '../../utils/cn'
+const CardIcon = CreditCard
 
 const GROUPS: Array<{ label: string; items: Array<{ to: string; label: string; icon: typeof Users; badge?: 'tickets' | 'sms' | 'resellers' | 'inventory' }> }> = [
   { label: 'Dashboard', items: [{ to: '/app', label: 'Overview', icon: LayoutDashboard }] },
@@ -28,6 +29,7 @@ const GROUPS: Array<{ label: string; items: Array<{ to: string; label: string; i
   ] },
   { label: 'Network', items: [
     { to: '/app/routers', label: 'Routers', icon: RadioIcon },
+    { to: '/app/provision', label: 'Add MikroTik', icon: Plug },
     { to: '/app/status', label: 'Network Status', icon: RadioIcon },
   ] },
   { label: 'Billing', items: [
@@ -54,6 +56,10 @@ const GROUPS: Array<{ label: string; items: Array<{ to: string; label: string; i
   ] },
   { label: 'Settings', items: [
     { to: '/app/settings', label: 'ISP Settings', icon: Settings },
+    { to: '/app/settings/portal', label: 'Captive Portal', icon: Globe },
+    { to: '/app/settings/payment', label: 'Payment Settings', icon: CardIcon },
+    { to: '/app/settings/network', label: 'Network Settings', icon: RadioIcon },
+    { to: '/app/settings/sms', label: 'SMS Settings', icon: MessageSquare },
     { to: '/app/audit', label: 'Audit Log', icon: ScrollText },
   ] },
 ]

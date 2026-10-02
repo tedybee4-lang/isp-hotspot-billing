@@ -18,6 +18,9 @@ import AuditLogPage from './pages/admin/AuditLog'
 import PlatformPayments from './pages/admin/PlatformPayments'
 
 import IspLayout from './pages/isp/IspLayout'
+import { CaptivePortalSettingsPage } from './pages/isp/settings/CaptivePortal'
+import { PaymentSettingsPage, NetworkSettingsPage, SmsSettingsPage } from './pages/isp/settings/Payment'
+import { ProvisioningPage } from './pages/isp/routers/Provisioning'
 import {
   DashboardPage, CustomersPage, PaymentsPage, InvoicesPage,
   SessionsPage, VouchersPage, SmsPage, ResellersPage, CommissionsPage,
@@ -119,6 +122,11 @@ export default function App() {
                 <Route path="roles" element={<RolesRoute />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="audit" element={<SuperAdminAuditRoute />} />
+                <Route path="provision" element={<ProvisioningPage />} />
+                <Route path="settings/portal" element={<CaptivePortalSettingsPage />} />
+                <Route path="settings/payment" element={<PaymentSettingsPage />} />
+                <Route path="settings/network" element={<NetworkSettingsPage />} />
+                <Route path="settings/sms" element={<SmsSettingsPage />} />
               </Route>
             </Route>
 

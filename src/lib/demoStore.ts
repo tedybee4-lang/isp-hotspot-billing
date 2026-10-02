@@ -902,6 +902,63 @@ export function demoAddClient(
   saveDb(db)
   return client
 }
+// -- Package CRUD (demo) --------------------------------------------------------
+// Keeps the package screens usable with no backend. Values stay local.
+
+export function demoAddPlan(ispId: string, draft: {
+  name: string; kind: string; duration_label: string; duration_hours: number
+  price: number; speed_down: string; speed_up: string; data_limit: string
+  fup: string; shared_users: number; description: string
+  is_active: boolean; is_popular: boolean; show_on_portal: boolean
+}) {
+  const db = loadDb()
+  const plan: Plan = {
+    id: uid('pln'),
+    isp_id: ispId,
+    name: draft.name,
+    kind: draft.kind as Plan['kind'],
+    duration_label: draft.duration_label,
+    duration_hours: draft.duration_hours,
+    price: draft.price,
+    speed_down: draft.speed_down,
+    speed_up: draft.speed_up,
+    shared_users: draft.shared_users,
+    data_limit: draft.data_limit,
+    fup: draft.fup || null,
+    description: draft.description || null,
+    is_popular: draft.is_popular,
+    is_active: draft.is_active,
+    show_on_portal: draft.show_on_portal,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }
+  db.plans.push(plan)
+  saveDb(db)
+  return plan
+}
+
+export function demoUpdatePlan(planId: string, patch: Partial<Plan>) {
+  const db = loadDb()
+  const i = db.plans.findIndex((p) => p.id === planId)
+  if (i < 0) throw new Error('Package not found')
+  db.plans[i] = { ...db.plans[i], ...patch }
+  saveDb(db)
+  return db.plans[i]
+}
+
+/** Refuses to orphan data, matching the server-side rule. */
+export function demoDeletePlan(planId: string) {
+  const db = loadDb()
+  const plan = db.plans.find((p) => p.id === planId)
+  if (!plan) throw new Error('Package not found')
+  const inUse = db.vouchers.some((v) => v.plan_id === planId)
+    || db.clients.some((c) => c.plan_name === plan.name)
+  if (inUse) {
+    throw new Error('This package is used by existing records. Deactivate it instead.')
+  }
+  db.plans = db.plans.filter((p) => p.id !== planId)
+  saveDb(db)
+}
 // -- Router management (demo) -------------------------------------------------
 // Demo mode keeps routers in localStorage so the management screens are fully
 // usable without a backend. Telemetry stays null here on purpose: there is no

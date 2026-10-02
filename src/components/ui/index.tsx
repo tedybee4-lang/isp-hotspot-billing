@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
 import { cn } from '../../utils/cn'
-import { Loader2, AlertTriangle, CheckCircle2, X } from 'lucide-react'
+import { Loader2, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -189,17 +189,30 @@ export const inputClass =
   'placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-500/40 ' +
   'focus:border-violet-500 transition dark:bg-slate-800 dark:border-slate-700 dark:text-white'
 
-export function Alert({ kind, children }: { kind: 'error' | 'success'; children: ReactNode }) {
+export function Alert({
+  kind, children,
+}: {
+  kind: 'error' | 'success' | 'warning' | 'info'
+  children: ReactNode
+}) {
+  const styles = {
+    error: 'bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300',
+    success: 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300',
+    warning: 'bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-500/10 dark:border-amber-500/30 dark:text-amber-200',
+    info: 'bg-sky-50 border-sky-200 text-sky-900 dark:bg-sky-500/10 dark:border-sky-500/30 dark:text-sky-200',
+  }
+  const icons = {
+    error: <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />,
+    success: <CheckCircle2 className="w-4 h-4 shrink-0 mt-px" />,
+    warning: <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />,
+    info: <Info className="w-4 h-4 shrink-0 mt-px" />,
+  }
   return (
     <div className={cn(
       'flex items-start gap-2.5 rounded-xl px-3.5 py-3 text-xs border',
-      kind === 'error'
-        ? 'bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-500/10 dark:border-rose-500/30 dark:text-rose-300'
-        : 'bg-emerald-50 border-emerald-200 text-emerald-800 dark:bg-emerald-500/10 dark:border-emerald-500/30 dark:text-emerald-300',
+      styles[kind],
     )}>
-      {kind === 'error'
-        ? <AlertTriangle className="w-4 h-4 shrink-0 mt-px" />
-        : <CheckCircle2 className="w-4 h-4 shrink-0 mt-px" />}
+      {icons[kind]}
       <span className="leading-relaxed">{children}</span>
     </div>
   )

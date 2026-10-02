@@ -1,18 +1,19 @@
 /**
  * Public captive portal for one tenant, served at /portal/:slug.
- * This is what an MikroTik hotspot redirects to. No login required — the
+ * This is what an MikroTik hotspot redirects to. No login required ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the
  * voucher itself is the credential.
  */
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Wifi, LogIn, LogOut, ShieldCheck, CheckCircle2 } from 'lucide-react'
 import { redeemVoucher } from '../lib/data'
+import { fetchPublicPortalSettings, type PortalSettings } from '../lib/data'
 import { loadDb } from '../lib/demoStore'
 import type { Isp, Plan } from '../lib/types'
 import { cn } from '../utils/cn'
 import { Alert, Button, Card, Field, Spinner, inputClass } from '../components/ui'
 
-interface PortalState { isp: Isp; plans: Plan[] }
+interface PortalState { isp: Isp; plans: Plan[]; settings: PortalSettings | null }
 
 export default function CaptivePortal() {
   const { slug } = useParams<{ slug: string }>()
@@ -23,15 +24,30 @@ export default function CaptivePortal() {
   const [connected, setConnected] = useState(false)
   const [busy, setBusy] = useState(false)
 
+  // Load the ISP's own portal settings alongside its plans. The slug identifies
+  // the tenant; nothing about another ISP is ever fetched here.
   useEffect(() => {
-    const isp = loadDb().isps.find((i) => i.slug === slug)
-    if (!isp) { setMissing(true); return }
-    setState({
-      isp,
-      plans: loadDb().plans
-        .filter((p) => p.isp_id === isp.id && p.kind === 'hotspot' && p.is_active)
-        .sort((a, b) => Number(a.price) - Number(b.price)),
-    })
+    let live = true
+    void (async () => {
+      const isp = loadDb().isps.find((i) => i.slug === slug)
+      if (!isp) { setMissing(true); return }
+      let settings: PortalSettings | null = null
+      try {
+        settings = await fetchPublicPortalSettings(slug!)
+      } catch {
+        // No backend, or no settings yet: fall back to the ISP defaults.
+        settings = null
+      }
+      if (!live) return
+      setState({
+        isp,
+        plans: loadDb().plans
+          .filter((p) => p.isp_id === isp.id && p.kind === 'hotspot' && p.is_active)
+          .sort((a, b) => Number(a.price) - Number(b.price)),
+        settings,
+      })
+    })()
+    return () => { live = false }
   }, [slug])
 
   async function submit(e: FormEvent) {
@@ -66,10 +82,20 @@ export default function CaptivePortal() {
     )
   }
 
-  if (!state) return <CenteredShell><Spinner label="Loading portal…" /></CenteredShell>
+  if (!state) return <CenteredShell><Spinner label="Loading portalÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦" /></CenteredShell>
 
-  const { isp, plans } = state
-  const brand = isp.brand_color
+  const { isp, plans, settings } = state
+  // The portal renders whatever the ISP configured in Settings -> Captive
+  // Portal. In demo mode there is no backend, so it falls back to the ISP's
+  // brand colour rather than showing empty fields.
+  const brand = settings?.primary_color || isp.brand_color
+  const title = settings?.portal_name || isp.name
+  const subtitle = settings?.welcome_message || 'Enter your voucher code to get online'
+  const footer = settings?.footer_text || `${isp.name}`
+  const showPackages = settings ? settings.show_packages : true
+  const visible = showPackages && settings?.package_ids?.length
+    ? plans.filter((p) => settings.package_ids.includes(p.id))
+    : plans
 
   if (connected) {
     return (
@@ -78,7 +104,7 @@ export default function CaptivePortal() {
           <CheckCircle2 className="w-14 h-14 mx-auto text-emerald-500" />
           <h1 className="text-xl font-black text-slate-900 dark:text-white mt-4">You're online</h1>
           <p className="text-sm text-slate-600 dark:text-slate-300 mt-2">{result?.message}</p>
-          <p className="text-[11px] text-slate-400 mt-3 font-mono">{isp.name} · RouterOS hotspot</p>
+          <p className="text-[11px] text-slate-400 mt-3 font-mono">{isp.name} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· RouterOS hotspot</p>
           <Button
             variant="secondary" className="mt-6"
             onClick={() => { setConnected(false); setCode(''); setResult(null) }}
@@ -102,10 +128,10 @@ return (
             <Wifi className="w-7 h-7 stroke-[2.5]" />
           </span>
           <h1 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
-            {isp.name}
+            {title}
           </h1>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-            Enter your voucher code to get online
+            {subtitle}
           </p>
         </div>
 
@@ -130,7 +156,7 @@ return (
           </form>
         </Card>
 
-        {plans.length > 0 && (
+                {visible.length > 0 && (
           <Card>
             <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800">
               <h2 className="text-xs font-black text-slate-800 dark:text-white">Buy a package</h2>
@@ -139,12 +165,12 @@ return (
               </p>
             </div>
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {plans.map((p) => (
+                {visible.map((p) => (
                 <div key={p.id} className="flex items-center justify-between gap-3 px-5 py-3">
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-slate-800 dark:text-white">{p.name}</p>
                     <p className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
-                      {p.duration_label} · up to {p.speed_down}
+                      {p.duration_label} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· up to {p.speed_down}
                     </p>
                   </div>
                   <span className="text-sm font-black text-slate-900 dark:text-white font-mono shrink-0">
@@ -158,7 +184,7 @@ return (
 
         <p className="text-center text-[10px] text-slate-400 flex items-center justify-center gap-1.5">
           <ShieldCheck className="w-3.5 h-3.5" />
-          Secured by {isp.name} · Powered by ISPFlow
+          Secured by {footer}
         </p>
       </div>
     </CenteredShell>

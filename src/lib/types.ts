@@ -66,6 +66,15 @@ export interface Plan {
   data_limit: string
   is_popular: boolean
   is_active: boolean
+  /** Speed after the quota is used up, e.g. "512 kbps". */
+  fup?: string | null
+  description?: string | null
+  /** Whether this package appears on the ISP's captive portal. */
+  show_on_portal?: boolean
+  /** What happens when the package expires. */
+  expiry_action?: 'disable' | 'remove' | 'notify'
+  created_at?: string
+  updated_at?: string
 }
 
 export interface Voucher {
