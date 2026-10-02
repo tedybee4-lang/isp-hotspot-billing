@@ -103,6 +103,11 @@ begin
     (v_isp, 'Home Fiber 5M',  'fiber',   'Monthly',   720,  1500,'5 Mbps', '5 Mbps',  5, true),
     (v_isp, 'Home Fiber 10M', 'fiber',   'Monthly',   720,  2000,'10 Mbps','10 Mbps', 10, false);
 
+  -- Seed the staff roles so Roles & Permissions is populated from day one.
+  -- Without this a brand new ISP has no isp_roles rows, which also means
+  -- has_permission() can never grant anything to a non-owner staff member.
+  perform public.seed_default_roles(v_isp);
+
   return v_isp;
 end;
 $$;
