@@ -187,6 +187,11 @@ grant execute on function public.set_isp_staff_role(uuid, uuid, platform_role) t
 -- ── M-Pesa configuration (super admin) ────────────────────────────────────────
 -- Returns readiness WITHOUT exposing the secrets: the caller gets booleans,
 -- never the raw passkey / consumer key / secret.
+--
+-- The DROP makes this file re-runnable. Migration 20260101000300 widens the
+-- return type, and PostgreSQL refuses to change a function's OUT parameters
+-- under CREATE OR REPLACE, so the old signature has to go first.
+drop function if exists public.payment_config_status(uuid);
 create or replace function public.payment_config_status(p_isp_id uuid)
   returns table (
     mpesa_env      text,

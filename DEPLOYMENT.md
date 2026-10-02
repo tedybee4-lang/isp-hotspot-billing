@@ -270,3 +270,94 @@ Then confirm in a browser:
 | Callback never arrives | Safaricom cannot reach the URL | Confirm the URL is public HTTPS and set in the Daraja portal |
 | Direct URL load gives 404 | SPA rewrite missing | `vercel.json` handles Vercel; `nginx.conf` handles Docker |
 | Tenant cannot see their data | Profile has no `isp_id` | Re-run `signup_isp`, or set `profiles.isp_id` manually |
+## MikroTik routers
+
+The panel talks to real MikroTik hardware over the RouterOS REST API.
+
+### Adding a router
+
+1. **Routers -> Add router**
+2. Enter the router's LAN address (not the WAN address) and the REST port.
+   The default is `8728`; RouterOS v7 deployments often use `8729`.
+3. Enter a RouterOS username and password.
+4. Press **Test connection**. You should see the router identity, model and
+   RouterOS version. If it fails, the error says which of the common causes
+   applies - wrong credentials, REST API disabled, or unreachable host.
+5. Save. The credentials are encrypted before they are stored.
+
+On the router itself:
+
+```
+/ip service enable www
+/ip service set www port=8728
+```
+
+Give the panel its own restricted account rather than the `admin` account:
+
+```
+/user group add name=isp-panel policy=read,write,api,test,policy=read
+/user add name=isp-panel group=isp-panel password="<strong password>"
+```
+
+### Credentials
+
+RouterOS passwords are encrypted with AES-256-GCM using
+`ROUTER_CREDENTIALS_KEY`, which lives only in the Edge Function environment.
+The database stores ciphertext. `router_credentials` has RLS enabled with no
+policy for `authenticated`, so tenant staff cannot read it even with a valid
+session - only the service role, inside the Edge Function, can decrypt.
+
+Rotating the key invalidates every stored credential and every router must be
+re-saved.
+
+### Telemetry
+
+`mikrotik-poll` reads identity, resources and live HotSpot users from every
+enabled router and writes the result to `nodes` and `sessions`. Values it could
+not read stay `null` and the UI shows **No data** rather than a placeholder.
+
+A router that fails to answer is marked `offline` with the reason in
+`last_error`, and each attempt is recorded in `router_poll_runs`. One
+unreachable router never aborts the sweep.
+
+### Automatic polling
+
+Run this once to schedule the poller every two minutes:
+
+```sql
+insert into public.poller_config (project_url, service_key, enabled)
+values (
+  'https://<project-ref>.supabase.co',
+  '<service-role key>',
+  true
+);
+
+select cron.schedule(
+  'mikrotik-poll',
+  '*/2 * * * *',
+  $$
+  select net.http_post(
+    url := (select project_url || '/functions/v1/mikrotik-poll' from public.poller_config where id),
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select service_key from public.poller_config where id)
+    )
+  );
+  $$
+);
+```
+
+Verify with `select * from cron.job_run_details order by start_time desc limit 5;`.
+
+### Sessions
+
+Disconnecting a session asks the router to drop the user, then closes the row.
+If the router cannot be reached the panel says so explicitly - it never claims
+a customer is offline when only the database record changed.
+
+### Firewall
+
+RouterOS must be reachable from Supabase's edge network. The panel cannot reach
+a router sitting behind NAT with no inbound rule. Open the REST port to
+Supabase's outbound addresses, or run a poller inside your own network instead
+and point it at the same Edge Function.

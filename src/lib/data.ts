@@ -984,12 +984,42 @@ export const setClientStatus = (clientId: string, status: Client['status']) =>
     () => { demo.demoSetClientStatus(clientId, status) },
   )
 
-export const kickSession = (sessionId: string) =>
-  tenantWrite<void>(
-    async (sb) => sb.from('sessions')
-      .update({ ended_at: new Date().toISOString() }).eq('id', sessionId),
-    () => { demo.demoKickSession(sessionId) },
-  )
+/**
+ * Ends a customer session.
+ *
+ * Live mode goes through the `mikrotik` Edge Function so the customer is
+ * actually dropped from the router; only then is the row closed. Marking the
+ * row alone would leave the subscriber online with working bandwidth while the
+ * panel claimed otherwise.
+ *
+ * Returns whether the router was reached, so the UI can be honest about a
+ * session that was only closed in the database.
+ */
+export async function kickSession(sessionId: string): Promise<{
+  removedOnRouter: boolean
+  alreadyEnded?: boolean
+  message: string
+}> {
+  if (!IS_LIVE) {
+    demo.demoKickSession(sessionId)
+    return { removedOnRouter: true, message: 'Session ended.' }
+  }
+
+  const body = await invokeMikrotik({ action: 'disconnect', sessionId })
+
+  if (body.alreadyEnded) {
+    return { removedOnRouter: false, alreadyEnded: true, message: 'Session was already closed.' }
+  }
+  if (body.removedOnRouter) {
+    return { removedOnRouter: true, message: 'Disconnected from the router.' }
+  }
+  // The row is closed, but the router refused. Say so rather than implying the
+  // customer is offline.
+  return {
+    removedOnRouter: false,
+    message: 'Closed in the system, but the router did not confirm. The customer may still be online.',
+  }
+}
 
 export const upgradePlan = (clientId: string, planName: string) =>
   tenantWrite<void>(
@@ -1034,4 +1064,170 @@ export async function initiateStkPush(input: {
     }
   }
   throw new DataError('Select an invoice before paying.')
+}
+// -- Router (MikroTik) management ---------------------------------------------
+
+export interface RouterConnectionTest {
+  ok: boolean
+  error?: string
+  latencyMs?: number
+  identity?: string | null
+  model?: string | null
+  version?: string | null
+  activeUsers?: number
+}
+
+export interface RouterLiveUser {
+  id: string
+  name: string
+  address: string
+  macAddress: string
+  upBytes: number
+  downBytes: number
+  uptimeSeconds: number
+  loginBy: string | null
+}
+
+/** Calls the `mikrotik` Edge Function with the caller's own session. */
+async function invokeMikrotik(
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const sb = requireSupabase()
+  const { data: sess } = await sb.auth.getSession()
+  const res = await fetch(functionsUrl('mikrotik'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${sess.session?.access_token ?? ''}`,
+      apikey: config.supabaseAnonKey,
+    },
+    body: JSON.stringify(payload),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new DataError(body.error ?? 'The router request failed.')
+  return body as Record<string, unknown>
+}
+
+/** Checks whether a router answers, without storing anything. */
+export async function testRouterConnection(input: {
+  host: string
+  port: number
+  username: string
+  password: string
+}): Promise<RouterConnectionTest> {
+  if (!IS_LIVE) {
+    return {
+      ok: true,
+      latencyMs: 42,
+      identity: 'Demo Router',
+      model: 'RB941',
+      version: '7.14.3',
+      activeUsers: 0,
+    }
+  }
+  return (await invokeMikrotik({ action: 'test', ...input })) as unknown as RouterConnectionTest
+}
+
+/** Encrypts and stores router credentials via the Edge Function. */
+export async function saveRouterCredentials(input: {
+  nodeId: string
+  username: string
+  password: string
+}): Promise<void> {
+  if (!IS_LIVE) return
+  await invokeMikrotik({ action: 'save', ...input })
+}
+
+/** Forces an immediate telemetry read for one router. */
+export async function pollRouterNow(nodeId: string): Promise<void> {
+  if (!IS_LIVE) {
+    demo.demoSetNodeStatus(nodeId, 'online')
+    return
+  }
+  await invokeMikrotik({ action: 'poll', nodeId })
+}
+
+/** Lists the sessions a router currently reports. */
+export async function fetchRouterLiveUsers(nodeId: string): Promise<RouterLiveUser[]> {
+  if (!IS_LIVE) return []
+  const body = await invokeMikrotik({ action: 'list-users', nodeId })
+  return (body.users as RouterLiveUser[]) ?? []
+}
+
+/** Registers or updates a router in the tenant. */
+export async function saveNode(input: {
+  id?: string
+  name: string
+  host: string
+  apiPort: number
+  model?: string | null
+  notes?: string | null
+}): Promise<void> {
+  const ispId = await tenantId()
+
+  if (!IS_LIVE) {
+    if (input.id) {
+      demo.demoUpdateNode(input.id, { name: input.name, host: input.host })
+    } else {
+      demo.demoAddNode(ispId, {
+        name: input.name, host: input.host, apiPort: input.apiPort,
+      })
+    }
+    return
+  }
+
+  const sb = requireSupabase()
+  const row = {
+    isp_id: ispId,
+    name: input.name,
+    host: input.host,
+    api_port: input.apiPort,
+    model: input.model ?? null,
+    notes: input.notes ?? null,
+  }
+  const query = input.id
+    ? sb.from('nodes').update(row).eq('id', input.id)
+    : sb.from('nodes').insert(row)
+  const { error } = await query
+  if (error) throw new DataError(error.message)
+}
+
+/** Turns polling on or off for one router. */
+export async function setNodeEnabled(nodeId: string, enabled: boolean): Promise<void> {
+  if (!IS_LIVE) return
+  const sb = requireSupabase()
+  const { error } = await sb.from('nodes').update({ enabled }).eq('id', nodeId)
+  if (error) throw new DataError(error.message)
+}
+
+/** Removes a router and, by cascade, its encrypted credentials. */
+export async function deleteNode(nodeId: string): Promise<void> {
+  if (!IS_LIVE) {
+    demo.demoDeleteNode(nodeId)
+    return
+  }
+  const sb = requireSupabase()
+  const { error } = await sb.from('nodes').delete().eq('id', nodeId)
+  if (error) throw new DataError(error.message)
+}
+
+/** The most recent poll outcome for each router. */
+export async function fetchPollRuns(limit = 50): Promise<Array<{
+  id: string
+  node_id: string
+  ok: boolean
+  error: string | null
+  latency_ms: number | null
+  users_seen: number | null
+  started_at: string
+}>> {
+  if (!IS_LIVE) return []
+  const sb = requireSupabase()
+  const { data, error } = await sb
+    .from('router_poll_runs')
+    .select('id, node_id, ok, error, latency_ms, users_seen, started_at')
+    .order('started_at', { ascending: false })
+    .limit(limit)
+  if (error) throw new DataError(error.message)
+  return data ?? []
 }

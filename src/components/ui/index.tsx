@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { cn } from '../../utils/cn'
-import { Loader2, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Loader2, AlertTriangle, CheckCircle2, X } from 'lucide-react'
 
 export function Card({ className, children }: { className?: string; children: ReactNode }) {
   return (
@@ -251,5 +251,58 @@ export function Td({ children, className }: { children?: ReactNode; className?: 
     )}>
       {children}
     </td>
+  )
+}
+/**
+ * Centred dialog used for forms. Closes on Escape or a backdrop click.
+ */
+export function Modal({
+  open, onClose, title, children,
+}: {
+  open: boolean
+  onClose: () => void
+  title: string
+  children: ReactNode
+}) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    const previous = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = previous
+    }
+  }, [open, onClose])
+
+  if (!open) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(e) => e.stopPropagation()}
+        className="my-8 w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-900 dark:ring-1 dark:ring-slate-800"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <h2 className="text-sm font-black text-slate-900 dark:text-white">{title}</h2>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
   )
 }

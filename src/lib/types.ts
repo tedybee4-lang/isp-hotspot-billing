@@ -144,6 +144,15 @@ export interface Node {
   uptime_seconds: number | null
   notes: string | null
   last_seen: string | null
+  /** RouterOS REST port. 8728 is the default; 8729 is often used instead. */
+  api_port: number
+  /** When false the poller skips this router. */
+  enabled: boolean
+  poll_interval_secs: number
+  last_poll_at: string | null
+  /** Why the last poll failed. Null when the last poll succeeded. */
+  last_error: string | null
+  last_latency_ms: number | null
 }
 
 export interface Session {

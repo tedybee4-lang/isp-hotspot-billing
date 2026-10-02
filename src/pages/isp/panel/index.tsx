@@ -4,11 +4,13 @@
  * No hardcoded statistics anywhere: every figure comes from the
  * `isp_dashboard_stats` view or from the tenant's own rows.
  */
+import { useState } from 'react'
 import {
   Users, CreditCard, Receipt, RefreshCw, MessageSquare, Package, Percent,
   Wallet, Boxes, Ticket as TicketIcon, Radio as RadioIcon,
 } from 'lucide-react'
 import { useTenant } from '../../../context/TenantContext'
+import * as api from '../../../lib/data'
 import { usePanel } from '../../../context/PanelContext'
 import { useAuth } from '../../../context/AuthContext'
 import { ResourcePage, Money, When, StatusCell, type Column } from '../../../components/ui/ResourcePage'
@@ -91,7 +93,7 @@ export function DashboardPage() {
                   <li key={c.id} className="px-5 py-3 flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-slate-800 dark:text-white truncate">{c.full_name}</p>
-                      <p className="text-[10px] text-slate-400 font-mono">{c.account_no} · {c.plan_name}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">{c.account_no} ï¿½ {c.plan_name}</p>
                     </div>
                     <When value={c.expires_at} />
                   </li>
@@ -205,7 +207,29 @@ export function InvoicesPage() {
 
 // -- Sessions -----------------------------------------------------------------
 export function SessionsPage() {
-  const { sessions, loading, kickSession } = useTenant()
+  const { sessions, loading } = useTenant()
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+
+  /**
+   * Asks the router to drop the customer, then reports what actually happened.
+   * A session closed in the database while the router still has the subscriber
+   * online is not the same thing as a disconnection, so the two outcomes are
+   * distinguished rather than merged into a generic success message.
+   */
+  async function disconnect(id: string) {
+    setBusy(id)
+    setNotice(null)
+    try {
+      const r = await api.kickSession(id)
+      setNotice({ ok: Boolean(r.removedOnRouter || r.alreadyEnded), text: r.message })
+    } catch (e) {
+      setNotice({ ok: false, text: e instanceof Error ? e.message : 'Could not disconnect.' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const columns: Column<NetSession>[] = [
     { key: 'device', header: 'Device', sort: (s) => s.device_type ?? '', cell: (s) => s.device_type ?? 'Unknown' },
     { key: 'ip', header: 'IP', cell: (s) => <span className="font-mono text-[10px]">{s.ip_address ?? '--'}</span> },
@@ -215,18 +239,29 @@ export function SessionsPage() {
     { key: 'up', header: 'Upload', sort: (s) => Number(s.uploaded_mb), cell: (s) => <span className="font-mono text-[10px]">{(Number(s.uploaded_mb) / 1024).toFixed(1)} MB</span> },
     { key: 'start', header: 'Started', sort: (s) => s.started_at, cell: (s) => <When value={s.started_at} /> },
     { key: 'action', header: '', cell: (s) => (
-      <button onClick={() => void kickSession(s.id)}
-        className="text-[11px] font-bold text-rose-600 hover:underline">Disconnect</button>
+      <button onClick={() => void disconnect(s.id)} disabled={busy === s.id}
+        className="text-[11px] font-bold text-rose-600 hover:underline disabled:opacity-40">
+        {busy === s.id ? 'Disconnecting...' : 'Disconnect'}
+      </button>
     ) },
   ]
   return (
-    <ResourcePage
-      title="Active Sessions" icon={<RadioIcon className="w-5 h-5" />}
-      rows={sessions.filter((s) => !s.ended_at)} columns={columns}
-      rowKey={(s) => s.id} loading={loading}
-      searchFields={(s) => [s.device_type ?? '', s.ip_address ?? '', s.mac_address ?? '', s.voucher_code ?? '']}
-      emptyTitle="No active sessions" emptyHint="Sessions appear when customers connect to a router."
-    />
+    <div className="space-y-4">
+      {notice && (
+        <Alert kind={notice.ok ? 'success' : 'error'}>
+          {notice.ok
+            ? notice.text
+            : `${notice.text} The customer may still be online until the router accepts the request.`}
+        </Alert>
+      )}
+      <ResourcePage
+        title="Active Sessions" icon={<RadioIcon className="w-5 h-5" />}
+        rows={sessions.filter((s) => !s.ended_at)} columns={columns}
+        rowKey={(s) => s.id} loading={loading}
+        searchFields={(s) => [s.device_type ?? '', s.ip_address ?? '', s.mac_address ?? '', s.voucher_code ?? '']}
+        emptyTitle="No active sessions" emptyHint="Sessions appear when customers connect to a router."
+      />
+    </div>
   )
 }
 
@@ -244,7 +279,7 @@ export function VouchersPage() {
   const firstPlan = plans[0]?.id
   return (
     <ResourcePage
-      title="Vouchers" subtitle={`${vouchers.length} vouchers · all belong to this ISP`}
+      title="Vouchers" subtitle={`${vouchers.length} vouchers ï¿½ all belong to this ISP`}
       icon={<Package className="w-5 h-5" />} rows={vouchers} columns={columns}
       rowKey={(v) => v.id} loading={loading}
       statusField="status" statusOptions={['unused', 'active', 'expired', 'disabled']}
@@ -276,7 +311,7 @@ export function SmsPage() {
   return (
     <div className="space-y-6">
       <ResourcePage
-        title="SMS" subtitle={`${smsTemplates.length} templates · ${smsMessages.length} messages`}
+        title="SMS" subtitle={`${smsTemplates.length} templates ï¿½ ${smsMessages.length} messages`}
         icon={<MessageSquare className="w-5 h-5" />} rows={smsMessages} columns={columns}
         rowKey={(m) => m.id} loading={loading}
         statusField="status" statusOptions={['queued', 'sent', 'delivered', 'failed']}
@@ -322,7 +357,7 @@ export function ResellersPage() {
   ]
   return (
     <ResourcePage
-      title="Resellers" subtitle={`${resellers.length} resellers · ${commissions.length} commission records`}
+      title="Resellers" subtitle={`${resellers.length} resellers ï¿½ ${commissions.length} commission records`}
       icon={<Users className="w-5 h-5" />} rows={resellers} columns={columns}
       rowKey={(r) => r.id} loading={loading}
       statusField="status" statusOptions={['active', 'suspended']}
@@ -500,7 +535,7 @@ export function RolesPage() {
           Roles &amp; Permissions
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          {Object.keys(byCategory).length} permission groups · {permissions.length} permissions
+          {Object.keys(byCategory).length} permission groups ï¿½ {permissions.length} permissions
         </p>
       </div>
 

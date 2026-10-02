@@ -3,6 +3,7 @@ import { useTenant } from '../../../context/TenantContext'
 import { usePanel } from '../../../context/PanelContext'
 import { ResourcePage, Money, When, StatusCell, type Column } from '../../../components/ui/ResourcePage'
 import NetworkStatus from '../../../components/NetworkStatus'
+import { RoutersPage } from '../routers/RoutersPage'
 import HotspotPortal from '../../../components/HotspotPortal'
 import { toTicket, toVoucher } from '../../../lib/adapters'
 import { Spinner } from '../../../components/ui'
@@ -131,6 +132,7 @@ export function RoutersRoute() {
   return (
     <div className="space-y-6">
       <NetworkStatus nodes={nodes} />
+      <RoutersPage />
       <NodeTable nodes={nodes} />
     </div>
   )

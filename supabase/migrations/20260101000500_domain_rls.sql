@@ -73,6 +73,7 @@ begin
       'create policy %I on public.%I for insert with check (
          public.is_super_admin() or (isp_id = public.current_isp_id() and public.can_write_tenant()))',
       t || '_write', t);
+    execute format('drop policy if exists %I on public.%I', t || '_update', t);
     execute format(
       'create policy %I on public.%I for update using (
          public.is_super_admin() or (isp_id = public.current_isp_id() and public.can_write_tenant()))

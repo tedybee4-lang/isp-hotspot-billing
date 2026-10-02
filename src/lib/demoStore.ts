@@ -217,6 +217,8 @@ const vouchers: Voucher[] = Array.from({ length: 40 }, () => {
       active_users: 20 + Math.floor(Math.random() * 400),
       load_percent: Math.floor(Math.random() * 95),
       capacity: i === 0 ? '10 Gbps' : '1 Gbps', last_seen: daysAgo(0),
+      api_port: 8728, enabled: true, poll_interval_secs: 120,
+      last_poll_at: null, last_error: null, last_latency_ms: null,
     }),
   )
 
@@ -672,6 +674,8 @@ export function demoCreateIsp(
     cpu_load: null, ram_used_mb: null, ram_total_mb: null, uptime_seconds: null, notes: null,
     status: 'online', active_users: 0, load_percent: 0,
     capacity: '1 Gbps', last_seen: new Date().toISOString(),
+    api_port: 8728, enabled: true, poll_interval_secs: 120,
+    last_poll_at: null, last_error: null, last_latency_ms: null,
   })
   saveDb(db)
   audit('INSERT:isp', actor, seed.isp, 'isp', seed.isp.id, { status: 'trial', plan: input.plan })
@@ -897,4 +901,60 @@ export function demoAddClient(
   db.clients.unshift(client)
   saveDb(db)
   return client
+}
+// -- Router management (demo) -------------------------------------------------
+// Demo mode keeps routers in localStorage so the management screens are fully
+// usable without a backend. Telemetry stays null here on purpose: there is no
+// real router behind it, so the UI shows "No data" rather than inventing CPU
+// and memory figures.
+
+export function demoAddNode(
+  ispId: string,
+  input: { name: string; host: string; apiPort?: number },
+) {
+  const db = loadDb()
+  const node: Node = {
+    id: uid('nod'),
+    isp_id: ispId,
+    name: input.name,
+    host: input.host,
+    api_port: input.apiPort ?? 8728,
+    model: null,
+    os_version: null,
+    serial_number: null,
+    routeros_version: null,
+    status: 'offline',
+    active_users: 0,
+    load_percent: 0,
+    capacity: null,
+    cpu_load: null,
+    ram_used_mb: null,
+    ram_total_mb: null,
+    uptime_seconds: null,
+    notes: null,
+    last_seen: null,
+    enabled: true,
+    poll_interval_secs: 120,
+    last_poll_at: null,
+    last_error: null,
+    last_latency_ms: null,
+  }
+  db.nodes.push(node)
+  saveDb(db)
+  return node
+}
+
+export function demoUpdateNode(nodeId: string, patch: Partial<Node>) {
+  const db = loadDb()
+  const idx = db.nodes.findIndex((n) => n.id === nodeId)
+  if (idx < 0) throw new Error('Router not found')
+  db.nodes[idx] = { ...db.nodes[idx], ...patch }
+  saveDb(db)
+  return db.nodes[idx]
+}
+
+export function demoDeleteNode(nodeId: string) {
+  const db = loadDb()
+  db.nodes = db.nodes.filter((n) => n.id !== nodeId)
+  saveDb(db)
 }
