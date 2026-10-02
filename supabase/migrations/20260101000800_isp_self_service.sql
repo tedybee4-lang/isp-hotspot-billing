@@ -619,6 +619,52 @@ $$;
 
 grant execute on function public.revoke_provisioning_session(uuid) to authenticated;
 
+-- ── Public captive portal ────────────────────────────────────────────────────
+-- The captive portal is visited by customers who have not signed in, so
+-- portal_settings cannot simply be opened up to `anon`: that would expose the
+-- row to anyone who guessed a slug, including columns we do not want public.
+--
+-- This function returns one ISP's presentation copy and nothing else. It is
+-- read-only, takes a slug rather than an id, and the allow-list below is the
+-- only data it can ever return.
+create or replace function public.public_portal_settings(p_slug text)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'portal_name',          s.portal_name,
+    'welcome_message',      s.welcome_message,
+    'terms_conditions',     s.terms_conditions,
+    'support_email',        s.support_email,
+    'support_phone',        s.support_phone,
+    'support_whatsapp',     s.support_whatsapp,
+    'logo_url',             s.logo_url,
+    'favicon_url',          s.favicon_url,
+    'background_url',       s.background_url,
+    'background_color',     s.background_color,
+    'primary_color',        s.primary_color,
+    'accent_color',         s.accent_color,
+    'login_method',         s.login_method,
+    'show_packages',        s.show_packages,
+    'package_ids',          s.package_ids,
+    'payment_instructions', s.payment_instructions,
+    'footer_text',          s.footer_text,
+    'social_links',         s.social_links,
+    'hide_routeros',        s.hide_routeros,
+    'show_usage',           s.show_usage,
+    'is_enabled',           s.is_enabled,
+    -- Denormalised so the portal needs only this one call.
+    'isp_name',    i.name,
+    'isp_slug',    i.slug,
+    'brand_color', i.brand_color,
+    'contact_email', i.contact_email,
+    'contact_phone', i.contact_phone
+  )
+  from public.portal_settings s
+  join public.isps i on i.id = s.isp_id
+  where i.slug = lower(trim(p_slug));
+$$;
+
+grant execute on function public.public_portal_settings(text) to anon, authenticated;
+
 
 -- Creates a package for the calling tenant, enforcing the plan's package cap.
 create or replace function public.create_plan(p_plan jsonb)
