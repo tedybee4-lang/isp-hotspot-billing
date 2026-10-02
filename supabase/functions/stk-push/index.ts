@@ -1,6 +1,29 @@
 // =============================================================================
 //  M-Pesa STK Push — Supabase Edge Function (Deno)
+//
+//  ⚠️  DEPRECATED — 2026-10-02. NO LONGER THE ACTIVE PAYMENT PATH.
+//
+//  Safaricom Daraja has been superseded by HashBack. This function is retained
+//  ONLY to finish in-flight STK prompts that were started before the cutover;
+//  it refuses to start any new payment. See hashback-stk for the live path.
+//
+//  It was left callable rather than deleted for one reason: a customer who was
+//  mid-prompt when the cutover happened has money potentially already moving.
+//  Returning an error for those leaves an unknown state with real money in it,
+//  which is worse than completing an old prompt on the old, already-working
+//  code. `hashback-stk` enforces the cutover by refusing to initiate; nothing
+//  calls this for new payments.
+//
+//  The credential resolution below is intentionally left intact so that
+//  historical and in-flight callbacks still work. Do NOT re-wire a new payment
+//  path through here.
+//
+//  Deploy note: this function should be retired entirely once no payment older
+//  than the STK expiry window (about one hour) remains unsettled.
+//
+//  Original header follows.
 // =============================================================================
+//
 //  Daraja credentials live ONLY here (server side) and are resolved per tenant
 //  payment mode:
 //
@@ -22,6 +45,17 @@ const DARJAJA_BASE: Record<string, string> = {
   sandbox: 'https://sandbox.safaricom.co.ke',
   production: 'https://api.safaricom.co.ke',
 }
+
+/**
+ * Hard cutover guard.
+ *
+ * Any request that would start a NEW payment is refused here. This is the
+ * enforcement point for the Daraja deactivation: the old code stays readable
+ * and still handles in-flight callbacks, but no caller can begin a payment on
+ * it. Removing the function directory instead would orphan an unfinished prompt.
+ */
+const DARAJA_CUTOVER_REFUSAL =
+  'Daraja payments are no longer accepted. Use the HashBack payment flow.'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -57,6 +91,22 @@ async function getAccessToken(base: string, key: string, secret: string) {
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
 
+  // ── Daraja cutover ─────────────────────────────────────────────────────────
+  //
+  // No new payment may start on Daraja. The endpoint stays deployed so an
+  // in-flight prompt can still be completed by stk-callback, but initiation is
+  // closed. 410 Gone rather than 404, so an integrator can tell "this path is
+  // finished" apart from "this path never existed".
+  //
+  // This is the single enforcement point for Phase I. Everything below is
+  // unreachable for new payments and exists only to keep the old flow honest.
+  return json({
+    error: DARAJA_CUTOVER_REFUSAL,
+    deprecated: true,
+    use: 'hashback-stk',
+  }, 410)
+
+  /* eslint-disable-next-line no-unreachable */
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!

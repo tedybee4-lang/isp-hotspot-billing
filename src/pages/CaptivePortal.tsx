@@ -7,8 +7,9 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Wifi, LogIn, LogOut, ShieldCheck, CheckCircle2 } from 'lucide-react'
 import { redeemVoucher } from '../lib/data'
-import { fetchPublicPortalSettings, type PortalSettings } from '../lib/data'
+import { fetchPublicPortalSettings, fetchPublicPortalPackages, type PortalSettings } from '../lib/data'
 import { loadDb } from '../lib/demoStore'
+import { config } from '../lib/config'
 import type { Isp, Plan } from '../lib/types'
 import { cn } from '../utils/cn'
 import { Alert, Button, Card, Field, Spinner, inputClass } from '../components/ui'
@@ -31,21 +32,62 @@ export default function CaptivePortal() {
     void (async () => {
       const isp = loadDb().isps.find((i) => i.slug === slug)
       if (!isp) { setMissing(true); return }
+
       let settings: PortalSettings | null = null
+      let plans: Plan[]
       try {
         settings = await fetchPublicPortalSettings(slug!)
       } catch {
         // No backend, or no settings yet: fall back to the ISP defaults.
         settings = null
       }
-      if (!live) return
-      setState({
-        isp,
-        plans: loadDb().plans
+
+      // Against a live project the packages come from the public RPC, because
+      // an anonymous visitor cannot read `plans` under RLS. The demo store is
+      // read directly since it has no tenancy to enforce.
+      if (config.mode === 'live') {
+        try {
+          const rows = await fetchPublicPortalPackages(slug!)
+          plans = rows
+            .filter((r) => r.kind === 'hotspot')
+            .map((r) => ({
+              // The RPC returns presentation columns, so the local Plan shape is
+              // filled in rather than spread: a missing field must not become
+              // undefined in a place the page renders as a price.
+              id: r.id,
+              isp_id: isp.id,
+              name: r.name,
+              kind: r.kind as Plan['kind'],
+              price: r.price,
+              currency: 'KES',
+              duration_hours: r.duration_hours ?? 0,
+              duration_label: r.duration_label ?? '',
+              speed_down: r.speed_down ?? null,
+              speed_up: r.speed_up ?? null,
+              data_limit: r.data_limit ?? null,
+              device_limit: 1,
+              fup: r.fup,
+              price_type: 'voucher',
+              status: 'active',
+              is_active: true,
+              show_on_portal: true,
+              is_popular: r.is_popular,
+              description: r.description,
+              validity_days: 0,
+              shared_users: 0,
+              created_at: '',
+            })) as unknown as Plan[]
+        } catch {
+          plans = []
+        }
+      } else {
+        plans = loadDb().plans
           .filter((p) => p.isp_id === isp.id && p.kind === 'hotspot' && p.is_active)
-          .sort((a, b) => Number(a.price) - Number(b.price)),
-        settings,
-      })
+          .sort((a, b) => Number(a.price) - Number(b.price))
+      }
+
+      if (!live) return
+      setState({ isp, plans, settings })
     })()
     return () => { live = false }
   }, [slug])

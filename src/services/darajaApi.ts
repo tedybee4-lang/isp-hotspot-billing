@@ -1,16 +1,17 @@
-// =============================================================================
-//  M-Pesa STK Push — browser-side helper
-// =============================================================================
-//  ⚠️  SECURITY: Daraja consumer key / secret / passkey must NEVER live in
-//      client code. They ship in the public JS bundle, so anyone can read them
-//      from DevTools and drain your paybill.
-//
-//  This module holds no credentials. It calls the `stk-push` Supabase Edge
-//  Function, which reads the tenant's credentials from Postgres using the
-//  service role and performs the Daraja call server-side.
-//
-//  Implementation: supabase/functions/stk-push/index.ts
-// =============================================================================
+/**
+ * Daraja compatibility shim — DEPRECATED.
+ *
+ * This used to wrap the `stk-push` Edge Function. Daraja is no longer the
+ * active payment path: that endpoint is deprecated and now returns 410 Gone, and
+ * live payments go through `hashback-stk`.
+ *
+ * Retained so an older import does not break the build. It delegates to the
+ * same `initiateStkPush` the rest of the app now uses, which routes to HashBack.
+ *
+ * New code should call `initiateStkPush` from `lib/data` directly, or
+ * `startHashBackPayment` from `lib/payments` when the pending-state contract
+ * matters.
+ */
 
 import { initiateStkPush as initiateStkPushRequest } from '../lib/data'
 

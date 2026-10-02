@@ -16,10 +16,12 @@ import IspsManager from './pages/admin/IspsManager'
 import IspDetail from './pages/admin/IspDetail'
 import AuditLogPage from './pages/admin/AuditLog'
 import PlatformPayments from './pages/admin/PlatformPayments'
+import PlatformHashBack from './pages/admin/PlatformHashBack'
 
 import IspLayout from './pages/isp/IspLayout'
 import { CaptivePortalSettingsPage } from './pages/isp/settings/CaptivePortal'
 import { PaymentSettingsPage, NetworkSettingsPage, SmsSettingsPage } from './pages/isp/settings/Payment'
+import { HashBackPaymentSettings } from './pages/isp/settings/HashBackPayments'
 import { ProvisioningPage } from './pages/isp/routers/Provisioning'
 import {
   DashboardPage, CustomersPage, PaymentsPage, InvoicesPage,
@@ -86,6 +88,11 @@ export default function App() {
                 <Route path="isps" element={<IspsManager />} />
                 <Route path="isps/:id" element={<IspDetail />} />
                 <Route path="payments" element={<PlatformPayments />} />
+                {/* The HashBack screen is where the platform's own payment
+                    credential is entered. It sits inside the super-admin guard
+                    AND re-checks the role server-side, so the route guard is a
+                    convenience rather than the actual protection. */}
+                <Route path="payment-gateway/hashback" element={<PlatformHashBack />} />
                 <Route path="audit" element={<AuditLogPage />} />
               </Route>
             </Route>
@@ -107,7 +114,8 @@ export default function App() {
                 <Route path="pppoe" element={<PppoeRoute />} />
                 <Route path="vouchers" element={<VouchersPage />} />
                 <Route path="routers" element={<RoutersRoute />} />
-                <Route path="status" element={<RoutersRoute />} />
+                {/* Network Status is its own page rather than part of Routers. It answers "is the network up and why not", which is a different question from "which routers do I own". Keeping them together is what let the old page show a router as online off the strength of a database row alone. */}
+                <Route path="status" element={<NetworkStatusRoute />} />
                 <Route path="payments" element={<PaymentsPage />} />
                 <Route path="invoices" element={<InvoicesPage />} />
                 <Route path="renewals" element={<RenewalsRoute />} />
@@ -125,6 +133,10 @@ export default function App() {
                 <Route path="provision" element={<ProvisioningPage />} />
                 <Route path="settings/portal" element={<CaptivePortalSettingsPage />} />
                 <Route path="settings/payment" element={<PaymentSettingsPage />} />
+                {/* HashBack self service. Separate from settings/payment so the
+                    legacy Till-only screen keeps working for an ISP that has
+                    not migrated, while a HashBack ISP gets the channel flow. */}
+                <Route path="settings/payments" element={<HashBackPaymentSettings />} />
                 <Route path="settings/network" element={<NetworkSettingsPage />} />
                 <Route path="settings/sms" element={<SmsSettingsPage />} />
               </Route>
@@ -145,6 +157,7 @@ const PackagesRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => 
 const HotspotRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.HotspotRoute })))
 const PppoeRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.PppoeRoute })))
 const RoutersRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.RoutersRoute })))
+const NetworkStatusRoute = lazy(() => import('./pages/isp/routers/NetworkStatus').then((m) => ({ default: m.default })))
 const RenewalsRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.RenewalsRoute })))
 const TransactionsRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.TransactionsRoute })))
 const RolesRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.RolesRoute })))

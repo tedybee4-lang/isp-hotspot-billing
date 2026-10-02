@@ -12,6 +12,10 @@ import { useTenant } from '../../context/TenantContext'
 import { useTheme } from '../../context/ThemeContext'
 import { config } from '../../lib/config'
 import { cn } from '../../utils/cn'
+// Aliased: an unaliased `Node` here would silently resolve to the DOM lib.dom
+// type rather than this project's router row, and the compiler would happily
+// report "last_seen does not exist" on the wrong Node.
+import type { Node as RouterNode } from '../../lib/types'
 const CardIcon = CreditCard
 
 const GROUPS: Array<{ label: string; items: Array<{ to: string; label: string; icon: typeof Users; badge?: 'tickets' | 'sms' | 'resellers' | 'inventory' }> }> = [
@@ -65,6 +69,39 @@ const GROUPS: Array<{ label: string; items: Array<{ to: string; label: string; i
 ]
 
 
+/**
+ * Whether a router should be counted as online.
+ *
+ * Deliberately the same rule the backend uses: a recent heartbeat, not the
+ * stored status. The sidebar and the Network Status page have to agree, and a
+ * sidebar that trusts a status string is exactly how a dead router keeps
+ * showing green next to the honest view.
+ *
+ * The threshold is `poll_interval_secs * 3`, matching the backend's rule. It is
+ * not read from the row because the panel's `nodes` list does not carry the
+ * offline threshold, so the poll interval is the signal available on both
+ * sides. Where it is absent the 60-second default matches the migration.
+ */
+export function isRouterOnline(
+  lastHeartbeat: string | null,
+  pollIntervalSecs: number,
+  now = Date.now(),
+): boolean {
+  if (!lastHeartbeat) return false
+  const beat = new Date(lastHeartbeat).getTime()
+  if (Number.isNaN(beat)) return false
+  const threshold = (pollIntervalSecs || 60) * 3
+  // Clamped at zero so clock skew cannot make a dead router look like it is
+  // offline for a negative number of seconds.
+  const ageSecs = Math.max(0, (now - beat) / 1000)
+  return ageSecs <= threshold
+}
+
+/** Counts routers that are genuinely beating, for the sidebar figure. */
+export function countLiveRouters(nodes: RouterNode[], now = Date.now()): number {
+  return nodes.filter((n) => isRouterOnline(n.last_seen, n.poll_interval_secs, now)).length
+}
+
 export default function IspLayout() {
   const { user, signOut } = useAuth()
   const { nodes, loading } = useTenant()
@@ -74,7 +111,7 @@ export default function IspLayout() {
   const [menuOpen, setMenuOpen] = useState(false)
 
   const isp = user?.isp
-  const online = nodes.filter((n) => n.status === 'online').length
+  const online = countLiveRouters(nodes)
 
   const badgeCount = (b?: string) => {
     if (!b || !stats) return 0

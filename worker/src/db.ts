@@ -1,0 +1,233 @@
+// =============================================================================
+//  Supabase access for the worker.
+//
+//  The worker authenticates with the service role, which bypasses RLS. That is
+//  correct for a trusted backend process, and only correct because every call
+//  here is tenant-scoped in the query itself: a job carries its own isp_id, and a
+//  router is always addressed by its node id, never by a browser-supplied one.
+//
+//  Credentials are decrypted here, in memory, only for as long as a session is
+//  open. They are never logged, never written back, and never put in a result.
+// =============================================================================
+
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { decryptSecret } from './crypto.ts'
+import type { JobStore, RouterJob } from './runner.ts'
+import type { RouterTarget } from './router-client.ts'
+import type { HandlerContext } from './handlers.ts'
+
+export interface DbConfig {
+  url: string
+  serviceRoleKey: string
+  /** AES key the Edge Function uses for router credentials. */
+  credentialKey: string
+  workerName: string
+  hostname?: string
+  region?: string
+  publicIp?: string
+  wgAddress?: string
+  wgPublicKey?: string
+}
+
+export class Db implements JobStore {
+  readonly client: SupabaseClient
+
+  constructor(private readonly cfg: DbConfig) {
+    this.client = createClient(cfg.url, cfg.serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  }
+
+  /**
+   * Claims jobs atomically.
+   *
+   * `claim_router_jobs()` does the locking in Postgres with
+   * `for update skip locked`, so two workers can never be handed the same job.
+   * `set_job_worker` records who we are, which is what `complete_router_job`
+   * checks before it will record a result.
+   */
+  async claim(workerName: string, limit: number, kinds: string[] | null): Promise<RouterJob[]> {
+    const { error: whoErr } = await this.client.rpc('set_job_worker', { p_worker: workerName })
+    if (whoErr) throw new Error(`set_job_worker failed: ${whoErr.message}`)
+
+    const { data, error } = await this.client.rpc('claim_router_jobs', {
+      p_worker: workerName,
+      p_limit: limit,
+      p_lease_secs: 120,
+      p_kinds: kinds,
+    })
+    if (error) throw new Error(`claim_router_jobs failed: ${error.message}`)
+    return (data ?? []) as RouterJob[]
+  }
+
+  async complete(
+    jobId: string, result: Record<string, unknown>,
+    method: string | null, durationMs: number,
+  ): Promise<void> {
+    const { error } = await this.client.rpc('complete_router_job', {
+      p_job_id: jobId, p_result: result, p_method: method, p_duration_ms: durationMs,
+    })
+    if (error) throw new Error(`complete_router_job failed: ${error.message}`)
+  }
+
+  async fail(
+    jobId: string, errorText: string, result: Record<string, unknown>,
+    method: string | null, durationMs: number, retryable: boolean,
+  ): Promise<void> {
+    const { error } = await this.client.rpc('fail_router_job', {
+      p_job_id: jobId,
+      p_error: errorText.slice(0, 500),
+      p_result: result,
+      p_method: method,
+      p_duration_ms: durationMs,
+      p_retryable: retryable,
+    })
+    if (error) throw new Error(`fail_router_job failed: ${error.message}`)
+  }
+/**
+ * Loads every router this worker should manage, with credentials decrypted.
+ *
+ * `host` is preferred over the public IP because a router reached through a VPN
+ * tunnel has no useful public address for management; `management_ip` is the
+ * fallback for a directly reachable device.
+ */
+  async targets(): Promise<RouterTarget[]> {
+    // The select is explicit, and the result is cast, because supabase-js types
+    // an untyped client as `GenericStringError` on the data side. The column
+    // list above is the contract; the cast just tells the compiler so.
+    const { data, error } = await this.client
+      .from('nodes')
+      .select('id, isp_id, name, host, management_ip, api_port, api_ssl_port, ' +
+        'rest_port, heartbeat_interval_secs, enabled')
+      .eq('enabled', true)
+    if (error) throw new Error(`loading routers failed: ${error.message}`)
+
+    const nodes = (data ?? []) as unknown as Array<{
+      id: string; isp_id: string; name: string
+      host: string | null; management_ip: string | null
+      api_port: number | null; api_ssl_port: number | null; rest_port: number | null
+      heartbeat_interval_secs: number | null; enabled: boolean
+    }>
+
+    const out: RouterTarget[] = []
+    for (const node of nodes) {
+      const address = node.host ?? node.management_ip
+      // No address means nothing to connect to. Skipped, never faked.
+      if (!address) continue
+
+      const { data: credRow } = await this.client
+        .from('router_credentials')
+        .select('username_ciphertext, password_ciphertext')
+        .eq('node_id', node.id)
+        .maybeSingle()
+      const creds = credRow as
+        | { username_ciphertext: string; password_ciphertext: string }
+        | null
+      if (!creds) continue
+
+      try {
+        out.push({
+          nodeId: node.id,
+          ispId: node.isp_id,
+          name: node.name,
+          host: address,
+          apiPort: node.api_port ?? 8728,
+          apiSslPort: node.api_ssl_port ?? 8729,
+          restPort: node.rest_port ?? 8080,
+          username: await decryptSecret(creds.username_ciphertext, this.cfg.credentialKey),
+          password: await decryptSecret(creds.password_ciphertext, this.cfg.credentialKey),
+          timeoutMs: (node.heartbeat_interval_secs ?? 60) * 1000,
+        })
+      } catch {
+        // A credential that will not decrypt is skipped, not guessed at. The
+        // router then receives no jobs and the panel shows it as unmanaged,
+        // rather than pretending the connection is fine.
+        continue
+      }
+    }
+    return out
+  }
+
+  /** Registers the worker and reports it alive. */
+  async heartbeat(counters: {
+    jobs_processed: number; jobs_failed: number
+  }): Promise<void> {
+    const { error } = await this.client
+      .from('network_workers')
+      .upsert({
+        name: this.cfg.workerName,
+        hostname: this.cfg.hostname ?? null,
+        public_ip: this.cfg.publicIp ?? null,
+        region: this.cfg.region ?? null,
+        version: '1.0.0',
+        wg_address: this.cfg.wgAddress ?? null,
+        wg_public_key: this.cfg.wgPublicKey ?? null,
+        status: 'online',
+        last_heartbeat_at: new Date().toISOString(),
+        jobs_processed: counters.jobs_processed,
+        jobs_failed: counters.jobs_failed,
+      }, { onConflict: 'name' })
+    if (error) throw new Error(`worker heartbeat failed: ${error.message}`)
+  }
+
+  /** Records a failure the operator needs to see on the worker card. */
+  async markError(message: string): Promise<void> {
+    await this.client
+      .from('network_workers')
+      .update({ last_error: message.slice(0, 500), status: 'degraded' })
+      .eq('name', this.cfg.workerName)
+  }
+
+  /** Builds the write-back surface the job handlers use. */
+  handlerContext(): HandlerContext {
+    const c = this.client
+    return {
+      heartbeat: async (args) => {
+        const { error } = await c.rpc('record_router_heartbeat', args)
+        if (error) throw new Error(`record_router_heartbeat failed: ${error.message}`)
+      },
+      saveCapabilities: async (nodeId, ispId, data) => {
+        const { error } = await c.from('router_capabilities')
+          .upsert({ node_id: nodeId, isp_id: ispId, ...data }, { onConflict: 'node_id' })
+        if (error) throw new Error(`saving capabilities failed: ${error.message}`)
+      },
+      setVoucherSync: async (voucherId, state, detail) => {
+        const { error } = await c.from('vouchers').update({
+          sync_state: state,
+          sync_error: typeof detail.error === 'string' ? detail.error : null,
+          synced_at: state === 'synced' ? new Date().toISOString() : null,
+          router_user_id: (detail.router_user_id as string | null) ?? null,
+        }).eq('id', voucherId)
+        if (error) throw new Error(`saving voucher sync failed: ${error.message}`)
+      },
+      completeSessionCommand: async (commandId, status, detail) => {
+        const { error } = await c.from('router_session_commands').update({
+          status,
+          method: (detail.method as string | null) ?? null,
+          error: (detail.note as string | null) ?? null,
+          detail,
+          completed_at: new Date().toISOString(),
+        }).eq('id', commandId)
+        if (error) throw new Error(`saving session command failed: ${error.message}`)
+      },
+      recordDiagnostic: async (nodeId, ispId, row) => {
+        const { error } = await c.from('network_diagnostics')
+          .insert({ isp_id: ispId, node_id: nodeId, ...row })
+        if (error) throw new Error(`saving diagnostic failed: ${error.message}`)
+      },
+      saveNode: async (nodeId, patch) => {
+        const { error } = await c.from('nodes').update(patch).eq('id', nodeId)
+        if (error) throw new Error(`saving router failed: ${error.message}`)
+      },
+      saveCustomer: async (clientId, patch) => {
+        const { error } = await c.from('clients').update(patch).eq('id', clientId)
+        if (error) throw new Error(`saving customer failed: ${error.message}`)
+      },
+      saveRadiusAccount: async (row) => {
+        const { error } = await c.from('radius_accounts')
+          .upsert(row, { onConflict: 'isp_id,username' })
+        if (error) throw new Error(`saving radius account failed: ${error.message}`)
+      },
+    }
+  }
+}

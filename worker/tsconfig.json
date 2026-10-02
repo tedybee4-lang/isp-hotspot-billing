@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    // DOM is included for the Web Crypto types (`CryptoKey`, `crypto.subtle`),
+    // which Node provides natively at runtime. Without it the crypto helpers
+    // would not typecheck even though they work.
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "../supabase/functions/_shared/**/*.ts",
+    // Ambient declarations for the https:// imports the Edge runtime resolves.
+    "../supabase/functions/_shared/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    // Deno-only: uses Deno.env and runs on the Edge runtime, not on Node.
+    "../supabase/functions/_shared/secrets.ts",
+    // Deno-only: the Edge Function entry point. Its credential-store helpers are
+    // still typechecked via this file; only this module needs the Deno global.
+    "../supabase/functions/_shared/hashback-credentials.ts",
+    // Also Deno-only, for the same reason: it dynamically imports the Supabase
+    // client from an https:// specifier, which Node's resolver cannot type.
+    // Its pure helpers are covered by the root typecheck and by vitest.
+    "../supabase/functions/_shared/**/admin*.ts",
+    // Tests are checked by vitest, not by the production build.
+    "src/**/*.test.ts",
+    // Vitest-only. Still typechecked by the root `npm run typecheck`, which
+    // covers the whole repository including this tree.
+    "../supabase/functions/_shared/**/*.test.ts"
+  ]
+}

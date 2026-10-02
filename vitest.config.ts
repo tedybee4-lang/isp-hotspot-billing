@@ -2,10 +2,28 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    // The demo backend is browser-shaped (localStorage), so jsdom is required.
+    // The frontend needs jsdom (localStorage-shaped demo store) and the worker
+    // tests need plain Node. A per-file environment is the clean way to get
+    // both without two configs.
     environment: 'jsdom',
-    // e2e/ belongs to Playwright — see playwright.config.ts.
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // Frontend tests live in src/.
+    include: [
+      'src/**/*.{test,spec}.{ts,tsx}',
+      // The Edge Function shared library is pure TypeScript with no Deno
+      // imports, so the RouterOS protocol and compatibility rules are covered
+      // by the same runner. This is how the hAP lite and CHR paths are tested
+      // on a machine with no MikroTik hardware attached.
+      'supabase/functions/_shared/**/*.{test,spec}.ts',
+      'supabase/functions/**/*.{test,spec}.ts',
+      // The VPS worker, which runs on Node rather than the browser. Included
+      // here so one `npm test` proves the whole system, and so a broken worker
+      // cannot be merged unnoticed.
+      'worker/src/**/*.{test,spec}.ts',
+    ],
+    environmentMatchGlobs: [
+      ['worker/**', 'node'],
+      ['supabase/**', 'node'],
+    ],
     globals: false,
   },
 })
