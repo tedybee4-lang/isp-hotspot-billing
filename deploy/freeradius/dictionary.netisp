@@ -1,0 +1,21 @@
+# =============================================================================
+#  ISPFlow — FreeRADIUS dictionary.
+#
+#  The reply attributes MikroTik understands. Defining them explicitly is what
+#  stops FreeRADIUS from silently dropping a value it has no dictionary entry
+#  for — which is the usual reason "Mikrotik-Rate-Limit works in the lab but not
+#  in production".
+# =============================================================================
+
+VENDOR        Mikrotik
+
+BEGIN-VENDOR    Mikrotik
+
+# Applied to the subscriber's session by the router.
+ATTRIBUTE   Mikrotik-Rate-Limit         1   string
+ATTRIBUTE   Mikrotik-Expires            2   string
+ATTRIBUTE   Mikrotik-Simultaneous-Limit  4   integer
+ATTRIBUTE   Mikrotik-Group              5   string
+ATTRIBUTE   Mikrotik-Wireless-Forward   6   integer
+
+END-VENDOR      Mikrotik

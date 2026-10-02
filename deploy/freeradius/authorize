@@ -1,0 +1,153 @@
+# =============================================================================
+#  ISPFlow — FreeRADIUS `authorize` module.
+#
+#  Answers the two questions a MikroTik router asks when a device comes online:
+#
+#    1. May this subscriber in?
+#    2. At what speed, and with what session limits?
+#
+#  Both answers come from ISPFlow's own tables, so a payment, a suspension or a
+#  package change takes effect on the next authentication without anyone
+#  touching the router.
+#
+#  ── Username normalisation ─────────────────────────────────────────────────
+#
+#  HotSpot and PPPoE present a RADIUS username but arrive by different routes:
+#
+#    HotSpot  MikroTik sends whatever the login form collected, optionally
+#             suffixed with the login-by realm: "user@radius". The realm
+#             identifies the router, not the subscriber.
+#    PPPoE    the customer dials with the username they were given. There is no
+#             realm, and none should be invented.
+#
+#  Both are normalised to one lookup key. Anything that matches neither shape is
+#  rejected BEFORE any database call. A permissive LIKE here would let a crafted
+#  username read another subscriber's speed limit, so the filter is deliberate.
+#
+#  ── Data sources ────────────────────────────────────────────────────────────
+#
+#    service_accounts   the login credential, its status and its expiry
+#    clients            the billing customer
+#    plans              the package and its speeds
+#
+#  The tenant is never taken from the request. It comes from the service account
+#  row, so one ISP's subscribers can never be read through another's RADIUS server.
+# =============================================================================
+
+update control {
+    # Capped well below FreeRADIUS's default so a hostile username cannot
+    # become an expensive query.
+    &NETISP::LookupKey := "%{User-Name}"
+}
+
+# HotSpot realm stripping. Kept before the character filter so "user@radius"
+# is reduced to "user" and the filter below sees a clean value.
+if ("%{NETISP::LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
+    update control {
+        &NETISP::LookupKey := "%{1}"
+    }
+}
+
+# Reject anything that is not a plausible subscriber name before touching the
+# database. HotSpot allows arbitrary characters in the login field, so this is
+# the only place they are filtered.
+if (!"%{NETISP::LookupKey}" =~ /^[A-Za-z0-9._-]{1,64}$/) {
+    update control {
+        &Auth-Type := Reject
+    }
+    reject
+}
+
+# ── Load the subscriber ──────────────────────────────────────────────────────
+#
+# One row per (isp_id, username) is guaranteed unique by a database
+# constraint, so this can never return two candidates.
+sql_load_accounts()
+
+if (!ok) {
+    # No such subscriber. This is the single most common failure for a new
+    # customer whose provisioning job has not run yet, so the error says so.
+    update control {
+        &Auth-Type := Reject
+        &Auth-Error := "NETISP: no service account for this username"
+    }
+    reject
+}
+
+# ── Status gate ──────────────────────────────────────────────────────────────
+#
+# Checked here rather than only at provisioning, so a suspension takes effect on
+# the next login even if the router was never told.
+#
+#   active     normal service
+#   pending    account created but never activated (e.g. unpaid)
+#   suspended  deliberately cut off by the ISP
+#   expired    the subscription period has run out
+#
+# `pending` and `expired` get distinct messages, because telling a customer
+# "unauthorised" when the real answer is "your subscription expired" wastes an
+# entire support call.
+if ("%{NETISP::AccountStatus}" != "active") {
+    if ("%{NETISP::AccountStatus}" == "expired") {
+        update control {
+            &Auth-Type := Reject
+            &Auth-Error := "NETISP: subscription expired. Please renew."
+        }
+    } elsif ("%{NETISP::AccountStatus}" == "suspended") {
+        update control {
+            &Auth-Type := Reject
+            &Auth-Error := "NETISP: account suspended. Please contact your ISP."
+        }
+    } else {
+        update control {
+            &Auth-Type := Reject
+            &Auth-Error := "NETISP: account not activated yet."
+        }
+    }
+    reject
+}
+
+# Expiry is enforced from the row as well as from `status`. The two can disagree
+# for a few minutes while a renewal propagates, and the row is the newer of the
+# two, so it wins.
+if ("%{NETISP::ExpiresAt}" != "" && "%{NETISP::ExpiresAt}" < "%{NOW}") {
+    update control {
+        &Auth-Type := Reject
+        &Auth-Error := "NETISP: subscription expired. Please renew."
+    }
+    reject
+}
+
+# ── Session limits ───────────────────────────────────────────────────────────
+#
+# A radius_accounts row means "we have told the router about this subscriber at
+# least once". Its sync_state says whether that actually reached the router, which
+# is what the worker reports back after applying it.
+#
+# The values applied here come from the plan, not from the account, so an
+# un-provisioned subscriber still gets the right speed on first login — which is
+# what stops a brand new customer being locked out at a default speed.
+update control {
+    &Session-Timeout := 86400
+    &Idle-Timeout := 900
+    &Auth-Type := Accept
+}
+
+update reply {
+    &Mikrotik-Rate-Limit := "%{NETISP::RateLimit}"
+    &Mikrotik-Expires := "%{NETISP::ExpiresAt}"
+}
+
+if ("%{NETISP::SimultaneousUse}" != "") {
+    update reply {
+        &Mikrotik-Simultaneous-Limit := "%{NETISP::SimultaneousUse}"
+    }
+}
+
+# Bind the session to the address the router saw, when one is known. This is what
+# stops a captured credential being replayed from a different machine.
+if ("%{NETISP::CalledStationId}" != "") {
+    update control {
+        &NETISP::FramedIp := "%{NETISP::CalledStationId}"
+    }
+}

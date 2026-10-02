@@ -1,0 +1,330 @@
+/**
+ * VPS deployment artefacts.
+ *
+ * The systemd unit, install script and FreeRADIUS configuration are what turn
+ * the worker from "code that runs" into "a service that survives a reboot". They
+ * are also where a security mistake would be invisible in review, because
+ * nothing executes them until someone installs onto a real host.
+ *
+ * These tests read the shipped files and assert the properties that matter:
+ *   * no secret is committed anywhere
+ *   * RADIUS is never opened to the world
+ *   * the worker runs unprivileged with credentials in a file, not on argv
+ *   * the RADIUS SQL the server executes matches the real schema
+ *
+ * Nothing here runs FreeRADIUS or touches a VPS. These are assertions about the
+ * shipped configuration, not about a running system.
+ */
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const ROOT = join(import.meta.dirname, '..', '..')
+const read = (...parts: string[]) => readFileSync(join(ROOT, ...parts), 'utf8')
+const has = (...parts: string[]) => existsSync(join(ROOT, ...parts))
+
+/** Placeholders the shipped files are allowed to contain. */
+const PLACEHOLDERS = /PASTE_[A-Z_]+_HERE|ENTER-[A-Z-]+-?REF|YOUR-PROJECT-REF/
+
+const DEPLOY_FILES = [
+  'deploy/install-vps.sh',
+  'deploy/netisp-worker.service',
+  'deploy/freeradius/sql.conf',
+  'deploy/freeradius/clients.conf',
+  'deploy/freeradius/radiusd.conf',
+  'deploy/freeradius/authorize',
+  'deploy/freeradius/post-auth',
+  'deploy/freeradius/queries.conf',
+  'deploy/freeradius/dictionary.netisp',
+  'deploy/wireguard/netisp.conf.template',
+  'worker/.env.example',
+]
+
+describe('secret hygiene in deployment files', () => {
+  it('ships every deployment file it needs', () => {
+    for (const f of DEPLOY_FILES) {
+      expect(has(...f.split('/')), `${f} is missing`).toBe(true)
+    }
+  })
+
+  it('contains no real-looking secret in any of them', () => {
+    for (const f of DEPLOY_FILES) {
+      const body = read(...f.split('/'))
+      // A 40+ character run of base64-ish characters is what an accidentally
+      // committed key looks like. Placeholders and shell expansions are fine.
+      const suspicious = body.match(/[A-Za-z0-9+/]{40,}={0,2}/g) ?? []
+      for (const candidate of suspicious) {
+        expect(
+          PLACEHOLDERS.test(candidate) || candidate.startsWith('${'),
+          `${f} appears to contain a real credential`,
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('never commits a filled-in environment file', () => {
+    // The real file must be ignored, or a `git add .` after editing it on the
+    // VPS would publish the service-role key.
+    const ignore = read('worker', '.gitignore')
+    expect(ignore).toMatch(/^\.env$/m)
+    expect(ignore).toMatch(/^\.env\.local$/m)
+  })
+
+  it('documents the required variables as placeholders, never values', () => {
+    const env = read('worker', '.env.example')
+    for (const name of [
+      'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY',
+      'ROUTER_CREDENTIALS_KEY', 'WORKER_NAME',
+    ]) {
+      expect(env, `${name} missing from .env.example`).toContain(name)
+    }
+    // Every secret is an explicit PASTE_ placeholder. A value here would be a
+    // committed key, which is the one thing this file must never contain.
+    for (const name of ['SUPABASE_SERVICE_ROLE_KEY', 'ROUTER_CREDENTIALS_KEY']) {
+      const line = env.split('\n').find((l) => l.startsWith(`${name}=`))
+      expect(line, `${name} has no assignment`).toBeTruthy()
+      // Trim before matching: the file may carry CRLF, and a trailing \r is not
+      // a reason to accept a real value.
+      expect(line!.trim(), `${name} must be a placeholder`).toMatch(
+        new RegExp(`^${name}=PASTE_[A-Z_]+_HERE$`),
+      )
+    }
+  })
+
+  it('warns that the service-role key bypasses RLS', () => {
+    // A reader who does not know this will paste the service key into every
+    // component and hand out cross-tenant access.
+    const env = read('worker', '.env.example')
+    expect(env).toMatch(/never the anon/i)
+    expect(env).toMatch(/bypasses RLS/i)
+  })
+})
+
+describe('systemd unit hardening', () => {
+  const unit = read('deploy', 'netisp-worker.service')
+
+  it('runs as a dedicated unprivileged account, not root', () => {
+    expect(unit).toMatch(/^User=netisp-worker$/m)
+    // `User=root` would be the single most damaging line in the file.
+    expect(unit).not.toMatch(/^User=root$/m)
+  })
+
+  it('reads credentials from a file rather than the command line', () => {
+    expect(unit).toMatch(/^EnvironmentFile=\/etc\/netisp-worker\/environment$/m)
+    // A secret in ExecStart is visible to every local user through /proc.
+    expect(unit).not.toMatch(/^ExecStart=.*SUPABASE_SERVICE_ROLE_KEY/m)
+  })
+
+  it('restarts on failure but stops a crash loop', () => {
+    expect(unit).toMatch(/^Restart=always$/m)
+    expect(unit).toMatch(/^RestartSec=\d+$/m)
+    // Without a start limit a misconfiguration spins forever and the service
+    // looks alive while doing nothing.
+    expect(unit).toMatch(/^StartLimitBurst=\d+$/m)
+  })
+
+  it('applies the standard hardening set', () => {
+    for (const directive of [
+      'NoNewPrivileges=true',
+      'PrivateTmp=true',
+      'ProtectSystem=strict',
+      'ProtectHome=true',
+      'RestrictSUIDSGID=true',
+      'LockPersonality=true',
+    ]) {
+      expect(unit, `${directive} missing`).toContain(directive)
+    }
+    // An empty capability set is the strongest statement available: the worker
+    // needs no Linux capabilities at all.
+    expect(unit).toMatch(/^CapabilityBoundingSet=\s*$/m)
+  })
+
+  it('waits for the network rather than claiming jobs too early', () => {
+    expect(unit).toMatch(/After=network-online\.target/)
+    expect(unit).toMatch(/Wants=network-online\.target/)
+  })
+
+  it('sends logs to the journal so rotation is handled', () => {
+    expect(unit).toMatch(/^StandardOutput=journal$/m)
+    expect(unit).toMatch(/^SyslogIdentifier=netisp-worker$/m)
+  })
+})
+
+describe('firewall posture', () => {
+  const script = read('deploy', 'install-vps.sh')
+
+  it('opens RADIUS only for private source ranges', () => {
+    // An unqualified `ufw allow 1812/udp` exposes RADIUS to the internet,
+    // where it is a password oracle rather than an authentication service.
+    expect(script).not.toMatch(/ufw allow 1812\/udp\s*$/m)
+    expect(script).not.toMatch(/ufw allow 1813\/udp\s*$/m)
+    expect(script).toMatch(/for cidr in 10\.0\.0\.0\/8 172\.16\.0\.0\/12 192\.168\.0\.0\/16/)
+    expect(script).toMatch(/ufw allow from "\$cidr" to any port 1812 proto udp/)
+    expect(script).toMatch(/ufw allow from "\$cidr" to any port 1813 proto udp/)
+  })
+
+  it('keeps the worker health endpoint on loopback', () => {
+    expect(script).toMatch(/ufw allow from 127\.0\.0\.1 to any port 9090/)
+  })
+
+  it('checks RADIUS over UDP rather than a TCP probe', () => {
+    // curl against 1812 proves nothing: RADIUS is UDP only.
+    expect(script).toMatch(/ss -lun \| grep -qE/)
+    expect(script).not.toMatch(/curl[^|]*1812/)
+    expect(script).toContain('radtest')
+  })
+
+  it('explains why an exposed RADIUS port is dangerous', () => {
+    // The comment is what stops the next person "fixing" the source ranges
+    // back to a bare allow.
+    expect(script).toMatch(/credential oracle/)
+  })
+})
+
+describe('FreeRADIUS configuration', () => {
+  it('never logs customer passwords', () => {
+    const radiusd = read('deploy', 'freeradius', 'radiusd.conf')
+    // `auth = yes` writes every password on every login attempt, which makes the
+    // log file a credential store.
+    expect(radiusd).toMatch(/^\s*auth = no$/m)
+    expect(radiusd).toMatch(/^\s*badpass = no$/m)
+    expect(radiusd).toMatch(/^\s*goodpass = no$/m)
+  })
+
+  it('binds to private addresses rather than every interface', () => {
+    const radiusd = read('deploy', 'freeradius', 'radiusd.conf')
+    expect(radiusd).toMatch(/^bind_address = 127\.0\.0\.1$/m)
+    // A bare `bind_address = *` alongside an open firewall is the failure mode.
+    expect(radiusd).not.toMatch(/^bind_address = \*$/m)
+  })
+
+  it('enables the protocols MikroTik actually uses', () => {
+    const radiusd = read('deploy', 'freeradius', 'radiusd.conf')
+    // PPPoE uses CHAP; HotSpot uses PAP or CHAP depending on the user profile.
+    // Disabling either locks out real customers.
+    expect(radiusd).toMatch(/Pap = yes/)
+    expect(radiusd).toMatch(/CHAP = yes/)
+    expect(radiusd).toMatch(/MS-CHAP = yes/)
+  })
+
+  it('allows roaming so a customer works across the ISP\'s routers', () => {
+    const radiusd = read('deploy', 'freeradius', 'radiusd.conf')
+    expect(radiusd).toMatch(/roaming \{/)
+    expect(radiusd).toMatch(/enabled = yes/)
+  })
+
+  it('defines the MikroTik reply attributes it sends', () => {
+    const dict = read('deploy', 'freeradius', 'dictionary.netisp')
+    for (const attr of [
+      'Mikrotik-Rate-Limit',
+      'Mikrotik-Expires',
+      'Mikrotik-Simultaneous-Limit',
+    ]) {
+      expect(dict, `${attr} not defined`).toContain(attr)
+    }
+  })
+
+  it('escapes every user-supplied value in its SQL', () => {
+    const queries = read('deploy', 'freeradius', 'queries.conf')
+    // FreeRADIUS interpolates %{...} into the query text. An unescaped username
+    // is SQL injection with a customer-facing trigger.
+    //
+    // Only expansions that reach the database matter. Control attributes such as
+    // %{NETISP::LookupKey} are set by this same file after being filtered, and
+    // an expansion quoted inside %{sql_escape:...} is already safe — matching
+    // those again would flag the escaping itself as the problem.
+    const outsideEscape = queries
+      // Strip the escaped ones first, comments included.
+      .replace(/^#.*$/gm, '')
+      .replace(/%\{sql_escape:[^}]*(?:\{[^}]*\}[^}]*)*\}/g, '')
+    const unescaped = [...outsideEscape.matchAll(/%\{[^}]+\}/g)]
+    expect(
+      unescaped.map((m) => m[0]),
+      'every %{...} reaching the database must be inside %{sql_escape:...}',
+    ).toHaveLength(0)
+    expect(queries).toMatch(/sql_escape:/)
+  })
+
+  it('reads only tables and columns that exist in the schema', () => {
+    const queries = read('deploy', 'freeradius', 'queries.conf')
+    // Verified against the live schema: service_accounts has no `ips` column
+    // and no rate_limit; simultaneous_use lives on radius_accounts.
+    expect(queries).toMatch(/from\s+public\.service_accounts\s+sa/i)
+    expect(queries).toMatch(/left\s+join\s+public\.plans\s+pl/i)
+    expect(queries).toMatch(/from\s+public\.radius_accounts\s+ra/i)
+    // These were the two real mistakes found while wiring this up.
+    expect(queries).not.toMatch(/sa\.ips\b/i)
+    expect(queries).not.toMatch(/pl\.speed_up\s*\|\|\s*'M'\//i)
+  })
+
+  it('normalises a unit-suffixed plan speed into MikroTik syntax', () => {
+    const queries = read('deploy', 'freeradius', 'queries.conf')
+    // plans.speed_up is TEXT and is usually entered as "2M". Concatenating it
+    // raw produced "2MM/10MM", which the router rejects.
+    expect(queries).toMatch(/regexp_replace\(pl\.speed_up::text/)
+    expect(queries).toMatch(/regexp_replace\(pl\.speed_down::text/)
+  })
+
+  it('takes no tenant parameter in the SQL', () => {
+    const queries = read('deploy', 'freeradius', 'queries.conf')
+    // The tenant comes from the service account row the unique constraint
+    // already selected, so there is no way to ask for another ISP's customers.
+    expect(queries).not.toMatch(/isp_id\s*=\s*'%\{/)
+  })
+
+  it('gates on account status before granting service', () => {
+    const authorize = read('deploy', 'freeradius', 'authorize')
+    // A suspension has to take effect on the next login even if the router was
+    // never told, so the check lives in authorize and not only in provisioning.
+    expect(authorize).toMatch(/NETISP::AccountStatus\}"\s*!=\s*"active"/)
+    expect(authorize).toMatch(/"expired"/)
+    expect(authorize).toMatch(/"suspended"/)
+  })
+
+  it('rejects an implausible username before querying the database', () => {
+    const authorize = read('deploy', 'freeradius', 'authorize')
+    // HotSpot allows arbitrary characters in the login field. A permissive LIKE
+    // would let a crafted username read another subscriber's rate limit, so the
+    // allow-list filter runs before sql_load_accounts() is ever reached.
+    //
+    // The filter is a negated match against an allow-list, not a deny-list: a
+    // deny-list only protects against the characters someone thought of.
+    expect(authorize).toMatch(/!\s*"%\{NETISP::LookupKey\}"\s*=~\s*\/\^\[A-Za-z0-9\._-\]\{1,64\}\$\//)
+    // Ordering is the security property, not the regex: the check must precede
+    // the query or it is decorative.
+    expect(authorize.indexOf('LookupKey}" =~')).toBeLessThan(
+      authorize.indexOf('sql_load_accounts'),
+    )
+  })
+
+  it('strips the HotSpot realm so PPPoE and HotSpot share one lookup', () => {
+    const authorize = read('deploy', 'freeradius', 'authorize')
+    // HotSpot sends "user@realm"; the realm identifies the router, not the
+    // subscriber. PPPoE sends no realm, so both must resolve to one key.
+    expect(authorize).toMatch(/~\s*\/\^\(\.\+\)@\[A-Za-z0-9\.\-\]\+\$\//)
+  })
+
+  it('does not close sessions from post-auth', () => {
+    const postAuth = read('deploy', 'freeradius', 'post-auth')
+    // A RADIUS restart that wrote acct_stop would disconnect every live
+    // customer. Sessions are closed by the router or by the worker.
+    expect(postAuth).not.toMatch(/delete\s+from/i)
+    expect(postAuth).not.toMatch(/update\s+public\.radius_sessions/i)
+  })
+
+  it('keeps database credentials out of the world-readable config', () => {
+    const sql = read('deploy', 'freeradius', 'sql.conf')
+    // The install script writes this file 0640; radiusd.conf stays readable.
+    expect(sql).toMatch(/PASTE_THE_GENERATED_PASSWORD_HERE/)
+    const radiusd = read('deploy', 'freeradius', 'radiusd.conf')
+    expect(radiusd).toMatch(/sqlconf = \$\{confdir\}\/sql\.conf/)
+  })
+
+  it('recommends a least-privilege role rather than the service key', () => {
+    const sql = read('deploy', 'freeradius', 'sql.conf')
+    // A RADIUS lookup has no JWT, so it bypasses RLS. Reusing the service_role
+    // key there would hand out full cross-tenant read access.
+    expect(sql).toMatch(/create role radius_reader/)
+    expect(sql).toMatch(/grant select on public\.service_accounts to radius_reader/)
+  })
+})

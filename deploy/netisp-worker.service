@@ -1,0 +1,90 @@
+# =============================================================================
+#  NETISP Network Worker — systemd unit.
+#
+#  Install:
+#      sudo cp netisp-worker.service /etc/systemd/system/
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now netisp-worker
+#      sudo systemctl status netisp-worker
+#      journalctl -u netisp-worker -f
+#
+#  Design decisions worth knowing before editing this file:
+#
+#  * The service runs as a dedicated unprivileged user, not root. The worker
+#    talks to routers and to Supabase; it has no reason to be able to write to
+#    /etc.
+#  * Credentials come from EnvironmentFile, mode 640, group-owned by the service
+#    account. They are never arguments on the command line, where any local
+#    user could read them from /proc.
+#  * Restart=always with a backoff, so a crashed worker returns without an
+#    operator. The start limit stops a crash-loop from hiding behind a service
+#    that is technically "running".
+#  * No NewPrivileges and a private /tmp, because the worker executes no
+#    external programs and has no need of privilege.
+# =============================================================================
+
+[Unit]
+Description=NETISP Network Worker (MikroTik job runner)
+Documentation=https://github.com/tedybee4-lang/isp-hotspot-billing
+# Outbound connectivity only. Requires network-online so the worker does not
+# start claiming jobs before DNS and a route exist.
+Wants=network-online.target
+After=network-online.target
+# If FreeRADIUS is on this host, the worker does not depend on it to start —
+# a RADIUS outage must not stop the worker from reporting router liveness.
+# The worker will simply fail RADIUS jobs and retry them.
+
+[Service]
+Type=simple
+User=netisp-worker
+Group=netisp-worker
+WorkingDirectory=/opt/netisp-worker
+
+# Mode 640, owned root:netisp-worker. Contains the service-role key.
+EnvironmentFile=/etc/netisp-worker/environment
+
+ExecStart=/usr/bin/node --enable-source-maps /opt/netisp-worker/dist/index.js
+
+# A crash must not silently become a permanent outage.
+Restart=always
+RestartSec=5
+# Give up after 5 rapid restarts in 60s and stop, so a genuine misconfiguration
+# is visible in `systemctl status` instead of spinning forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# ── Hardening ───────────────────────────────────────────────────────────────
+# The worker needs outbound TCP to routers and HTTPS to Supabase, and nothing
+# else. Everything below removes capability without breaking that.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+# The only writable path. Needed for nothing today, but it is where a future
+# cache or spool would go, and declaring it now is cheaper than relaxing
+# ProtectSystem later.
+ReadWritePaths=/opt/netisp-worker
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# Node needs to read its own installation and the CA bundle.
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+# journald handles rotation; these keep a runaway loop from filling the disk.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=netisp-worker
+
+[Install]
+WantedBy=multi-user.target

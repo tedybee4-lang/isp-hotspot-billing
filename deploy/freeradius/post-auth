@@ -1,0 +1,53 @@
+# =============================================================================
+#  ISPFlow — FreeRADIUS `post-auth` module.
+#
+#  Runs after a successful authentication and does the two things that turn a
+#  login into a usable, billable session:
+#
+#    1. Opens an accounting session in ISPFlow (acct_session_id, start time,
+#       framed address, called station) so the panel can show who is online and
+#       for how long.
+#    2. Records the router that accepted the login, so an operator can tell which
+#       site a customer is connected through.
+#
+#  Deliberately NOT done here:
+#
+#    * Deactivation. If FreeRADIUS is restarted or loses its database, an
+#      acct_stop written in this module would cut every live customer. Sessions
+#      are closed by the router's Acct-Stop/Interim-Update, and by the worker for
+#      a deliberate disconnect. Closing them from here would make a RADIUS
+#      restart an outage.
+#    * Rewriting the rate limit. MikroTik has already applied it by the time
+#      post-auth runs; changing it here would have no effect and would make the
+#      log disagree with the router.
+#
+#  The SQL queries use the same prepared statements as authorize, so a database
+#  outage fails authentication closed rather than open.
+# =============================================================================
+
+update control {
+    &NETISP::SessionStart := "%{Acct-Session-Id}"
+}
+
+# HotSpot and PPPoE both send an Acct-Session-Id, but HotSpot's can be empty on
+# some firmware. Falling back to a composed value keeps accounting rows
+# joinable; the fallback is derived from attributes already present, never from a
+# timestamp alone, so a retry of the same login reuses the same id.
+if ("%{Acct-Session-Id}" == "") {
+    update control {
+        &NETISP::SessionStart := "%{User-Name}-%{Called-Station-Id}"
+    }
+}
+
+sql_start_session()
+
+# A failure here must not reject a customer who has already been authenticated.
+# Logging it and continuing is the right trade: the router has admitted them, and
+# the panel will show the session once the next Interim-Update arrives.
+if (!ok) {
+    radius_log("%{NETISP::SessionStart}: could not open the ISPFlow session")
+}
+
+update control {
+    &Auth-Type := Accept
+}

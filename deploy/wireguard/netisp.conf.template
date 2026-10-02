@@ -1,0 +1,70 @@
+# =============================================================================
+#  ISPFlow — WireGuard server interface (VPS side).
+#
+#  Why this exists
+#  ---------------
+#  A MikroTik router behind CGNAT has no inbound route from the internet. Its
+#  RouterOS API port cannot be reached, which means the network worker cannot
+#  poll it, apply a configuration, or read its sessions. That is not a
+#  limitation to work around — it is the normal case for a customer-premises
+#  router.
+#
+#  The router dials out over WireGuard and holds a persistent tunnel to this VPS.
+#  The tunnel is the management path in both directions:
+#
+#    worker  → router   RouterOS API over the tunnel (or REST, on RouterOS 7)
+#    router  → VPS      RADIUS auth and accounting over the tunnel
+#
+#  Because the router initiates the connection, the ISP's own laptop does not
+#  need to be powered on, and no inbound port is opened on the customer's site.
+#
+#  ── Fill in before use ──────────────────────────────────────────────────────
+#
+#  Two values must be edited; the install script cannot guess either:
+#
+#    ListenPort   any UDP port. 51820 is conventional. It must be reachable from
+#                 the routers, so the firewall needs a rule for it.
+#    Address      this VPS's tunnel address and the subnet the routers live in.
+#                 10.77.0.0/24 is the convention the provisioning code already
+#                 uses (a router is assigned 10.77.0.2, .3, ...).
+#
+#  Check the subnet does not collide with the ISP's own network before using it.
+#
+#  ── Peers ───────────────────────────────────────────────────────────────────
+#
+#  Peers are NOT hand-written here. `router-provision` writes the client side
+#  onto each router, and each ISP's router gets its own public key and address.
+#  Adding peers here is only needed for a router provisioned by hand.
+# =============================================================================
+
+[Interface]
+# ── EDIT THESE TWO LINES ──────────────────────────────────────────────────────
+ListenPort = 51820
+Address = 10.77.0.1/24
+
+# Server private key. install-vps.sh generates it at /etc/wireguard/netisp.key;
+# keep this file mode 0600 and never commit the key.
+PrivateKey = PASTE_SERVER_PRIVATE_KEY_HERE
+
+# ── Routing ──────────────────────────────────────────────────────────────────
+#
+# 0.0.0.0/0 would send ALL router traffic through this VPS, which is not what an
+# ISP wants: customers would egress from the VPS and pay its bandwidth bill.
+# 10.77.0.0/24 is a subnet route that is valid on its own in WireGuard and keeps
+# the tunnel management-only.
+#
+# If the RADIUS server must be reachable at another address, add a route for it
+# here explicitly.
+AllowedIPs = 10.77.0.0/24
+
+# ── Peer example ─────────────────────────────────────────────────────────────
+#
+# One per router. A router behind CGNAT initiates the connection, so these are
+# the public endpoints rather than listening ones.
+#
+# [Peer]
+# # Alpha ISP, MikroTik hAP ac², provisioned 2026-01-15
+# PublicKey = PASTE_ROUTER_PUBLIC_KEY_HERE
+# AllowedIPs = 10.77.0.2/32
+# # Keeps the tunnel alive through NAT and survives a reboot without help.
+# PersistentKeepalive = 25
