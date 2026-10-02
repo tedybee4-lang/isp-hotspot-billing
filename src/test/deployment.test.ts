@@ -100,6 +100,65 @@ describe('secret hygiene in deployment files', () => {
   })
 })
 
+describe('the worker actually starts', () => {
+  // Both of these were real failures found by building and running the worker
+  // for real: it built cleanly and then died on startup. Neither is visible to
+  // a config-shape test, so both are pinned here.
+
+  it('does not run TypeScript directly through type stripping', () => {
+    const pkg = read('worker', 'package.json')
+    // `--experimental-strip-types` cannot handle a parameter property such as
+    // `constructor(private readonly cfg: DbConfig)`, which db.ts uses. It exits
+    // with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX before a single line runs.
+    expect(pkg).not.toMatch(/--experimental-strip-types/)
+  })
+
+  it('bundles to CommonJS on a .cjs extension', () => {
+    const pkg = read('worker', 'package.json')
+    const installer = read('deploy', 'install-vps.sh')
+    const unit = read('deploy', 'netisp-worker.service')
+
+    // package.json declares "type": "module", so a CommonJS bundle written to
+    // dist/index.js is loaded as ESM and throws "require is not defined in ES
+    // module scope". The extension has to be .cjs.
+    expect(pkg).toMatch(/--outfile=dist\/index\.cjs/)
+    expect(installer).toMatch(/--outfile=dist\/index\.cjs/)
+    // ExecStart must name the file that is actually produced.
+    expect(unit).toMatch(/^ExecStart=.*dist\/index\.cjs$/m)
+  })
+
+  it('needs no banner shim, which would be a quoting hazard', () => {
+    const installer = read('deploy', 'install-vps.sh')
+    // The ESM build needed `--banner:js='import{createRequire}from"node:module"...'`.
+    // When a shell drops those quotes the build still succeeds and the process
+    // dies with "Unexpected identifier 'fromnode'". CommonJS output removes it.
+    //
+    // Comments are stripped first: the file explains this exact hazard above the
+    // build command, and a test must not be satisfied by its own prose.
+    const code = installer
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n')
+    expect(code).not.toMatch(/--banner:js/)
+  })
+
+  it('stages the worker so its relative import into _shared resolves', () => {
+    const installer = read('deploy', 'install-vps.sh')
+    const code = installer
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('#'))
+      .join('\n')
+    // worker/src/session.ts imports '../../supabase/functions/_shared/session.ts'.
+    // `..` twice from <root>/worker/src lands on <root>, so the stage must keep
+    // the worker/ segment or esbuild cannot resolve the import.
+    expect(code).toMatch(/supabase\/functions\/_shared\s+"\$stage"\/supabase\/functions\//)
+    expect(code).toMatch(/worker\/src\/index\.ts/)
+    // And it must not copy src to the stage root, which is the bug: that puts
+    // the sources one level too shallow for the ../../ import to resolve.
+    expect(code).not.toMatch(/cp -r "\$WORKER_SRC"\/src "\$stage"\/\s*$/)
+  })
+})
+
 describe('systemd unit hardening', () => {
   const unit = read('deploy', 'netisp-worker.service')
 

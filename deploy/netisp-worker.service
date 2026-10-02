@@ -43,7 +43,7 @@ WorkingDirectory=/opt/netisp-worker
 # Mode 640, owned root:netisp-worker. Contains the service-role key.
 EnvironmentFile=/etc/netisp-worker/environment
 
-ExecStart=/usr/bin/node --enable-source-maps /opt/netisp-worker/dist/index.js
+ExecStart=/usr/bin/node --enable-source-maps /opt/netisp-worker/dist/index.cjs
 
 # A crash must not silently become a permanent outage.
 Restart=always

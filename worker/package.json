@@ -8,7 +8,8 @@
     "node": ">=20.11"
   },
   "scripts": {
-    "start": "node --experimental-strip-types src/index.ts",
+    "start": "npm run build && node dist/index.cjs",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node20 --outfile=dist/index.cjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -18,6 +19,7 @@
   },
   "devDependencies": {
     "@types/node": "22.19.17",
+    "esbuild": "^0.25.0",
     "typescript": "5.9.3",
     "vitest": "^2.1.9"
   }

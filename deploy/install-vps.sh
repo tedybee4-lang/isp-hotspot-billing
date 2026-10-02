@@ -115,23 +115,41 @@ install_worker() {
   ( cd "$stage" && npm ci --omit=dev --no-audit --no-fund )
 
   log "Type-checking against the shared library"
-  cp -r "$WORKER_SRC"/src "$stage"/
-  cp -r "$REPO_ROOT"/supabase/functions/_shared "$stage"/_shared
+  # The layout below is not cosmetic. worker/src/session.ts imports
+  # '../../supabase/functions/_shared/session.ts', and `..` twice from
+  # <root>/worker/src lands on <root> — the directory that holds `supabase/`.
+  # Copying src to the stage root instead puts it one level too shallow, so `..`
+  # twice escapes the stage entirely and esbuild reports
+  # "Could not resolve ../../supabase/functions/_shared/session.ts".
+  # Preserving the worker/ segment is what makes the relative import land.
+  mkdir -p "$stage"/worker "$stage"/supabase/functions
+  cp -r "$WORKER_SRC"/src "$stage"/worker/
+  cp -r "$REPO_ROOT"/supabase/functions/_shared "$stage"/supabase/functions/
   # The worker typechecks against _shared and its own tsconfig excludes the
   # Deno-only Edge Function entry points.
   ( cd "$stage" && npx --yes typescript@5.9.3 \
       --module esnext --moduleResolution bundler --target es2022 \
       --strict --skipLibCheck --noEmit --allowImportingTsExtensions \
-      --lib es2023,dom src/index.ts )
+      --lib es2023,dom worker/src/index.ts )
 
   # The repo's tsconfig is noEmit, so the worker is transpiled with esbuild.
   # esbuild is installed explicitly because it is only a dev dependency today
   # and the runtime install omits dev dependencies.
+  #
+  # Output is CommonJS on a `.cjs` extension. Two traps, both of which produce a
+  # bundle that builds cleanly and then dies at startup:
+  #
+  #   1. worker/package.json declares "type": "module", so a `.js` CommonJS
+  #      bundle is loaded as ESM and fails with "require is not defined in ES
+  #      module scope". Naming the file `.cjs` makes the extension authoritative.
+  #   2. The previous ESM build needed a `--banner:js` shim to define `require`.
+  #      That is a quoted shell argument; when the quotes are lost the build still
+  #      succeeds and the process dies with "Unexpected identifier 'fromnode'".
+  #      Nothing in worker/src uses import.meta or require, so the shim is gone.
   log "Building"
   ( cd "$stage" && npm i --no-save --no-audit --no-fund esbuild@0.25.0 \
-      && npx esbuild src/index.ts --bundle --platform=node --format=esm \
-        --target=node20 --outfile=dist/index.js \
-        --banner:js='import{createRequire}from"node:module";const require=createRequire(import.meta.url);' )
+      && npx esbuild worker/src/index.ts --bundle --platform=node --format=cjs \
+        --target=node20 --outfile=dist/index.cjs )
 
   rm -rf "${APP_DIR:?}/dist" "${APP_DIR:?}/node_modules"
   cp -r "$stage/dist" "$APP_DIR"/
