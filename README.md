@@ -1,246 +1,195 @@
-<div align="center">
+# ISPFlow — Multi-tenant ISP Hotspot Billing Platform
 
-<img src="public/images/social-preview.png" alt="Ultrafaiba ISP Hotspot Billing System" width="100%" />
+**One super admin. Every ISP. Fully isolated.**
 
-# 🌐 Ultrafaiba — ISP Hotspot Billing System
-
-### The **#1 open-source** billing & management platform for MikroTik hotspots — with **M-Pesa STK Push** 🇰🇪
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Vite](https://img.shields.io/badge/Vite-7-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vitejs.dev)
-[![TailwindCSS](https://img.shields.io/badge/Tailwind-4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white)](https://tailwindcss.com)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge)](CONTRIBUTING.md)
-[![Stars](https://img.shields.io/github/stars/Jobkizz/isp-hotspot-billing?style=for-the-badge&color=yellow&logo=github)](https://github.com/Jobkizz/isp-hotspot-billing/stargazers)
-[![Forks](https://img.shields.io/github/forks/Jobkizz/isp-hotspot-billing?style=for-the-badge&color=blue&logo=github)](https://github.com/Jobkizz/isp-hotspot-billing/network)
-
-<br/>
-
-**[🚀 Live Demo](https://ultrafaiba.net)** &nbsp;·&nbsp; **[📖 Setup Guide](#-getting-started)** &nbsp;·&nbsp; **[🐛 Report Bug](https://github.com/Jobkizz/isp-hotspot-billing/issues/new?template=bug_report.md)** &nbsp;·&nbsp; **[✨ Request Feature](https://github.com/Jobkizz/isp-hotspot-billing/issues/new?template=feature_request.md)**
-
-<br/>
-
-> ⭐ **If this project saves you weeks of work, please star it!** Stars help other ISPs in Africa discover this tool.
-
-</div>
-
----
-
-## 🎯 What is this?
-
-**Stop building hotspot billing from scratch.**
-
-This is a **complete, production-ready billing and management system** for ISPs running MikroTik hotspots anywhere in Africa. It solves the #1 pain point for small ISPs: collecting payments and managing access automatically.
-
-Clone → Configure → Go Live in **under 10 minutes**.
+Run hotspot billing, M-Pesa collection and MikroTik operations for many ISPs
+from a single platform — with tenant isolation enforced by Postgres Row Level
+Security, not by convention.
 
 ```
-✅ M-Pesa STK Push     ✅ MikroTik Voucher Engine    ✅ Admin Dashboard
-✅ Client Billing Portal  ✅ Real-time Analytics      ✅ Network Status Monitor
-✅ RouterOS Script Gen    ✅ Live Support Chat         ✅ ISP Legal Pages
+React 19 + Vite 7 + TypeScript 5.9 + Tailwind 4
+        ↓
+Supabase (Postgres · Auth · RLS · Edge Functions)
+        ↓
+Safaricom Daraja (M-Pesa STK Push)
 ```
 
 ---
 
-## ✨ Features at a Glance
-
-| Feature | Description | Status |
-|---|---|---|
-| 🔐 **Hotspot Login Portal** | Custom MikroTik-compatible login page with voucher & phone auth | ✅ Live |
-| 💳 **M-Pesa STK Push** | Automated payment collection via Safaricom Daraja API | ✅ Live |
-| 📊 **Admin Dashboard** | Real-time overview of clients, revenue, sessions & network | ✅ Live |
-| 🧾 **Client Billing Portal** | Invoices, payment history, plan upgrades, support tickets | ✅ Live |
-| 📡 **Network Status** | Live health monitoring across all your nodes | ✅ Live |
-| 📈 **Analytics** | Traffic, revenue, and usage charts | ✅ Live |
-| ⚙️ **MikroTik Config Generator** | One-click RouterOS script generation (PPPoE, Hotspot, Firewall) | ✅ Live |
-| 🎟️ **Bulk Voucher Engine** | Generate, track and expire voucher batches | ✅ Live |
-| 💬 **Live Chat Widget** | Built-in client support with NOC auto-response | ✅ Live |
-| 📜 **Legal Pages** | Terms, Privacy Policy, SLA, Acceptable Use, Refund — all ISP-ready | ✅ Live |
-| 🌙 **Dark Mode** | Full dark/light mode toggle | ✅ Live |
-| 🌍 **Multi-Currency** | Configurable for KES, TZS, UGX, GHS and more | 🔜 Roadmap |
-
----
-
-## 📸 Screenshots
-
-> *(Deploy your live demo and add GIFs here for maximum stars!)*
->
-> Tip: Use [ScreenToGif](https://www.screentogif.com/) to record the admin dashboard and billing portal — animated GIFs get **3× more stars** than static screenshots.
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Technology |
-|---|---|
-| **Framework** | React 19 + TypeScript 5.9 |
-| **Build Tool** | Vite 7 |
-| **Styling** | TailwindCSS 4 |
-| **Icons** | Lucide React |
-| **Payments** | Safaricom Daraja API (M-Pesa STK Push) |
-| **Hotspot** | MikroTik RouterOS v6/v7 compatible |
-| **Deploy** | GitHub Pages / Vercel / Netlify (1-click) |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- **Node.js 18+** → [Download](https://nodejs.org)
-- A **MikroTik** router (for hotspot portal integration)
-- A **Safaricom Daraja** account (for M-Pesa) → [Register free](https://developer.safaricom.co.ke)
-
-### Installation
+## Quick start
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/Jobkizz/isp-hotspot-billing.git
-cd isp-hotspot-billing
-
-# 2. Install dependencies
 npm install
-
-# 3. Configure environment variables
-cp .env.example .env
-# Edit .env with your Daraja API credentials
-
-# 4. Start the development server
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) — you'll see the full admin dashboard instantly.
+Open **<http://localhost:5173>**.
 
-> **No backend required for the demo.** All UI is fully functional with realistic mock data out of the box.
+No backend, no database, no configuration. The app boots in **demo mode** — a
+localStorage simulation of the whole platform with four seeded tenants. Every
+screen is fully interactive.
+
+| Role        | Email                    | Password     |
+| ----------- | ------------------------ | ------------ |
+| Super admin | `superadmin@ispflow.dev` | `Super@1234` |
+| ISP owner   | `owner@ultrafaiba.co.ke` | `Owner@1234` |
+
+The login screen has one-click buttons for both. Full setup instructions live
+in **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
 
 ---
 
-## 🔑 M-Pesa (Daraja API) Configuration
+## What you can do
 
-```env
-VITE_DARAJA_CONSUMER_KEY=your_consumer_key
-VITE_DARAJA_CONSUMER_SECRET=your_consumer_secret
-VITE_DARAJA_PASSKEY=your_passkey
-VITE_DARAJA_SHORTCODE=174379
-VITE_DARAJA_CALLBACK_URL=https://yourdomain.com/api/mpesa/callback
+### As the super admin (`/admin`)
+
+| Screen | What it does |
+| --- | --- |
+| **Platform Overview** | Tenants, subscribers, 30-day revenue and outstanding AR across the whole platform; tenant health bars; revenue ranking; churn-risk alerts |
+| **ISPs** (`/admin/isps`) | Search and filter tenants, create new ones, change tier and limits, suspend, reactivate, delete |
+| **Tenant detail** (`/admin/isps/:id`) | Contact record, usage against plan caps, team list, invite staff, suspend/delete |
+| **Audit log** (`/admin/audit`) | Every privileged action with actor, role, tenant and payload |
+
+### As an ISP (`/app`)
+
+| Screen | What it does |
+| --- | --- |
+| **ISP Panel** | Bulk voucher generation, session control, node status, expired-voucher cleanup |
+| **Hotspot** | Captive portal preview and voucher redemption |
+| **Billing** | Customer invoices, M-Pesa STK Push, plan upgrades, support tickets |
+| **Analytics** | Traffic, revenue and usage charts |
+| **Status** | Network node health |
+| **MikroTik** | RouterOS script generator (PPPoE, hotspot, firewall) |
+| **Legal** | Terms, privacy, AUP, refund policy, SLA |
+
+### Publicly
+
+`/portal/<slug>` — a per-tenant branded captive portal. No login: the voucher
+is the credential. This is what your MikroTik redirects customers to.
+
+---
+
+## Screenshots
+
+| | |
+| --- | --- |
+| ![Super admin overview](screenshots/02-superadmin-overview.png) | ![ISP management](screenshots/03-superadmin-isps.png) |
+| **Super admin — platform KPIs and tenant table** | **Super admin — tenant lifecycle management** |
+| ![Tenant detail](screenshots/05-tenant-detail.png) | ![ISP panel](screenshots/06-isp-panel.png) |
+| **Super admin — tenant detail and limits** | **ISP owner — operations panel** |
+
+---
+
+## Multi-tenancy & security
+
+Tenant isolation is enforced **in the database**, not in the UI. Every business
+table carries an `isp_id` and a `FORCE ROW LEVEL SECURITY` policy:
+
+```sql
+create policy plans_read on public.plans for select using (
+  public.is_super_admin() or isp_id = public.current_isp_id()
+);
 ```
 
-📖 Full step-by-step Daraja setup: **[DARAJA_SETUP.md](DARAJA_SETUP.md)**
+### Roles
+
+| Role | Scope |
+| --- | --- |
+| `super_admin` | Every tenant; reads `audit_logs`; manages payment configs |
+| `isp_owner` | Own tenant; can edit its record |
+| `isp_admin` | Own tenant; full operational access |
+| `isp_agent` | Own tenant; support access only |
+| `client` | Read-only access to their own account, invoices and tickets |
+
+### M-Pesa credentials never reach the browser
+
+Daraja consumer keys and passkeys live in `isp_payment_configs`, readable only
+by the service role. The `stk-push` Edge Function reads them server-side and
+performs the API call. The old build had them hardcoded in client code, which
+published them to anyone who opened DevTools — that is fixed.
+
+> The Supabase **anon key** *is* meant to be public. RLS is what protects your
+> data, not key secrecy.
 
 ---
 
-## 📡 MikroTik Hotspot Integration
-
-Upload files from `public/hotspot/` to your MikroTik's hotspot HTML directory:
-
-```routeros
-/ip hotspot set login-page=login.html
-```
-
-The login page supports:
-- **Voucher code** authentication
-- **Phone number** authentication (matches M-Pesa payer)
-
----
-
-## 🗂️ Project Structure
+## Project structure
 
 ```
-├── public/
-│   ├── hotspot/              # MikroTik RouterOS hotspot HTML files
-│   │   ├── login.html        # Custom captive portal login page
-│   │   ├── logout.html
-│   │   ├── status.html
-│   │   └── style.css
-│   └── images/               # Static assets & social preview
-├── src/
-│   ├── components/
-│   │   ├── AdminDashboard.tsx    # ISP admin panel: vouchers, sessions, nodes
-│   │   ├── Analytics.tsx         # Revenue & traffic analytics
-│   │   ├── ClientBilling.tsx     # Subscriber billing portal + support tickets
-│   │   ├── HotspotPortal.tsx     # Captive portal: buy & activate vouchers
-│   │   ├── LandingPage.tsx       # Public marketing homepage
-│   │   ├── LiveChat.tsx          # Real-time support chat widget
-│   │   ├── MikrotikConfig.tsx    # RouterOS script generator (PPPoE/Hotspot)
-│   │   ├── NetworkStatus.tsx     # Live node health monitoring
-│   │   └── TermsAndConditions.tsx # ISP-ready legal pages (5 tabs)
-│   ├── data/
-│   │   └── mockData.ts           # Realistic demo data (plans, sessions, nodes)
-│   ├── services/
-│   │   └── darajaApi.ts          # M-Pesa Daraja API integration
-│   └── App.tsx                   # Root app with global state management
-├── DARAJA_SETUP.md               # Full Daraja API setup walkthrough
-├── CONTRIBUTING.md               # How to contribute
-├── SECURITY.md                   # Security policy
-└── .env.example                  # Environment variable template
+src/
+  lib/
+    config.ts          live vs demo mode detection
+    supabase.ts        client + Edge Function helpers
+    types.ts           domain models mirroring the Postgres schema
+    data.ts            unified data access (Supabase or demo store)
+    demoStore.ts       localStorage platform simulation
+    adapters.ts        domain models → legacy view shapes
+  context/             Auth, Theme, Tenant data providers
+  pages/
+    admin/             super admin panel
+    isp/               tenant workspace
+    CaptivePortal.tsx  /portal/:slug
+  components/ui/       shared primitives
+supabase/
+  migrations/          schema, RLS policies, RPC functions
+  functions/           stk-push · stk-callback · admin-invite
+deploy/                nginx config for the VPS image
+e2e/                   Playwright smoke tests
 ```
 
 ---
 
-## 🌍 Who Is This For?
+## Commands
 
-| Who | Why This Helps |
-|---|---|
-| **ISPs in Kenya, Tanzania, Uganda, Ghana** | M-Pesa & mobile money billing built-in |
-| **MikroTik Resellers** | Ready-made billing UI for your clients |
-| **Cybercafé & Hotspot Owners** | Timed voucher internet access management |
-| **Developers** | Full Daraja API integration example |
-| **Students & Bootcamps** | Real-world React + TypeScript project reference |
-
----
-
-## 🤝 Contributing
-
-Contributions make open source great! **All skill levels welcome.**
-
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for full guidelines.
-
-### Priority Areas 🔥
-
-- 🌍 **More payment gateways** — Airtel Money, MTN MoMo, Flutterwave, Pesapal
-- 📱 **PWA / Mobile App** — React Native or Capacitor wrapper
-- 🔐 **Backend Auth** — Supabase or Firebase integration
-- 🌐 **i18n** — Swahili, French, Hausa translations
-- 🧪 **Tests** — Vitest unit tests for billing logic
-- 📊 **More charts** — Revenue forecasting, churn analytics
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Dev server on :5173 |
+| `npm run build` | Typecheck + production build |
+| `npm run typecheck` | TypeScript only |
+| `npm test` | 23 unit/behavioural tests (Vitest) |
+| `npm run test:e2e` | 7 browser tests (Playwright) |
 
 ---
 
-## 🗺️ Roadmap
+## Deployment
 
-- [ ] 🔗 Backend API (Node.js / Supabase)
-- [ ] 📲 PWA with push notifications
-- [ ] 🌍 Multi-currency & multi-language support
-- [ ] 🤖 AI-powered network anomaly detection
-- [ ] 📡 Live MikroTik API integration (RouterOS REST)
-- [ ] 📦 Docker deployment template
+| Target | Status | Config |
+| --- | --- | --- |
+| **Localhost** | ✅ Works now | `npm run dev` — demo mode needs nothing |
+| **Supabase** | ✅ Ready | 3 migrations + 3 Edge Functions, see [DEPLOYMENT.md](./DEPLOYMENT.md) |
+| **Vercel** | ✅ Ready | `vercel.json` — SPA rewrites, caching, security headers |
+| **VPS / Docker** | ✅ Ready | `Dockerfile` + `docker-compose.yml` + `deploy/nginx.conf` |
 
----
+```bash
+# Vercel
+vercel --prod
 
-## 📄 License
+# VPS
+cp .env.example .env && docker compose up -d --build
+```
 
-Distributed under the **MIT License** — free for commercial and private use. See [LICENSE](LICENSE) for details.
+### What do I need to provide?
 
----
-
-## 💬 Support & Contact
-
-| Channel | Details |
-|---|---|
-| 📧 Email | support@ultrafaiba.net |
-| 📞 Phone / M-Pesa | +254 724 167 975 |
-| 🐛 Bug Reports | [Open an Issue](https://github.com/Jobkizz/isp-hotspot-billing/issues) |
-| ⭐ Star the Repo | [Help other ISPs find this!](https://github.com/Jobkizz/isp-hotspot-billing/stargazers) |
+See **[SETUP_CHECKLIST.md](./SETUP_CHECKLIST.md)** — the short version is a
+Supabase project URL, the `anon` key, and your operator email. Everything else
+the platform creates for itself.
 
 ---
 
-<div align="center">
+## Testing
 
-Made with ❤️ in Kenya 🇰🇪
+```bash
+npm test        # tenant isolation, plan limits, cascade deletes,
+                # voucher lifecycle, audit trail
+npm run test:e2e   # both roles, captive portal, routing, 404s
+```
 
-**If this saved you time, [⭐ star this repo](https://github.com/Jobkizz/isp-hotspot-billing/stargazers) — it helps other ISPs in Africa find it!**
+---
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Jobkizz/isp-hotspot-billing&type=Date)](https://star-history.com/#Jobkizz/isp-hotspot-billing&Date)
+## License
 
-</div>
+MIT — see [LICENSE](./LICENSE).
+
+## Security
+
+See [SECURITY.md](./SECURITY.md).

@@ -7,7 +7,7 @@ interface HotspotPortalProps {
   plans: HotspotPlan[];
   vouchers: Voucher[];
   initialVoucherCode?: string;
-  onActivateVoucher: (code: string) => { success: boolean; message: string };
+  onActivateVoucher: (code: string) => Promise<{ success: boolean; message: string }>;
   isConnected: boolean;
   activeVoucherCode: string | null;
   onDisconnect: () => void;
@@ -41,22 +41,30 @@ export default function HotspotPortal({
   const hotspotPlans = plans.filter(p => p.type === 'hotspot');
   const activePlanDetails = plans.find(p => p.id === selectedPlanId);
 
-  const handleConnect = (e: React.FormEvent) => {
+  const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
     setAuthSuccess(null);
     
     if (!inputCode.trim()) {
-      setAuthError('Please enter a valid Ultrafaiba voucher code.');
+      setAuthError('Please enter a valid voucher code.');
       return;
     }
 
-    const result = onActivateVoucher(inputCode.trim());
-    if (result.success) {
-      setAuthSuccess(result.message);
-      setInputCode('');
-    } else {
-      setAuthError(result.message);
+    setLoading(true);
+    try {
+      // Redemption hits the database (or the demo store), so it is async.
+      const result = await onActivateVoucher(inputCode.trim());
+      if (result.success) {
+        setAuthSuccess(result.message);
+        setInputCode('');
+      } else {
+        setAuthError(result.message);
+      }
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : 'Could not verify that code.');
+    } finally {
+      setLoading(false);
     }
   };
 

@@ -3,28 +3,42 @@ import { fileURLToPath } from "url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { viteSingleFile } from "vite-plugin-singlefile";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Use "./" so assets work on GitHub Pages (subdirectory deploys)
-  base: "./",
-  plugins: [react(), tailwindcss(), viteSingleFile()],
+  // Absolute base so client-side routing (/admin, /app, /portal/:slug) works.
+  base: "/",
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
     },
   },
+  server: {
+    port: 5173,
+    strictPort: false,
+    // Lets you call the Edge Functions through the dev server if needed.
+    proxy: {
+      "/api": {
+        target: "http://localhost:54321",
+        changeOrigin: true,
+        rewrite: (p) => `/functions/v1${p.replace(/^\/api/, "")}`,
+      },
+    },
+  },
   build: {
-    // Inline everything as a single HTML file (viteSingleFile)
     outDir: "dist",
-    assetsInlineLimit: 100_000_000,
+    // The app is code-split per route, so keep the vendor chunk separate
+    // from app logic for better caching.
     rollupOptions: {
       output: {
-        inlineDynamicImports: true,
+        manualChunks: {
+          react: ["react", "react-dom", "react-router-dom"],
+          supabase: ["@supabase/supabase-js"],
+        },
       },
     },
   },

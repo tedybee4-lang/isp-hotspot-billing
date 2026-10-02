@@ -1,3 +1,14 @@
+/**
+ * Legacy view-shape types.
+ *
+ * These describe what the original UI components render (durations as strings,
+ * statuses as display labels). Live data comes from `src/lib/types.ts` and is
+ * translated by `src/lib/adapters.ts` — these interfaces are the target shapes.
+ *
+ * ⚠️ The `INITIAL_*` constants below are retained only as a visual reference for
+ *    component development. The app no longer seeds from them.
+ */
+
 export interface HotspotPlan {
   id: string;
   name: string;

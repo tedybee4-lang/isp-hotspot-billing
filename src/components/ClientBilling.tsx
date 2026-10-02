@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { ShieldCheck, Mail, Phone, Calendar, ArrowUpRight, MessageSquare, PlusCircle, Activity, Gauge, Smartphone, Send, Loader2, CheckCircle } from 'lucide-react';
 import { ClientProfile, Invoice, SupportTicket, HotspotPlan } from '../data/mockData';
 import CopyTextButton from './CopyTextButton';
-import { initiateStkPush, queryStkPushStatus } from '../services/darajaApi';
 
 interface ClientBillingProps {
   client: ClientProfile;
@@ -82,7 +81,7 @@ export default function ClientBilling({
     setShowNewTicketForm(false);
   };
 
-  const [checkoutRequestId, setCheckoutRequestId] = useState('');
+  const [checkoutRequestId] = useState('');
   const [apiError, setApiError] = useState<string | null>(null);
 
   const startAutopay = async () => {
@@ -94,77 +93,28 @@ export default function ClientBilling({
     setApiError(null);
 
     try {
-      // Call real Daraja API
-      const response = await initiateStkPush({
-        phoneNumber: cleanedPhone,
-        amount: autopayAmount,
-        accountReference: `INV-${unpaidInvoice?.id || 'NEW'}`,
-        transactionDesc: `Payment for ${autopayPlan}`
-      });
+      // The STK push runs server-side (stk-push Edge Function) so the Daraja
+      // secrets never reach the browser. Confirmation arrives via the
+      // stk-callback function, which settles the invoice for us.
+      await onPayInvoice(unpaidInvoice?.id ?? '');
 
-      if (response.ResponseCode === '0') {
-        setCheckoutRequestId(response.CheckoutRequestID);
-        setAutopayStage('awaiting-pin');
-        
-        // Start polling for payment status
-        pollPaymentStatus(response.CheckoutRequestID);
-      } else {
-        setApiError(response.ResponseDescription || 'Failed to initiate payment');
-        setAutopayStage('idle');
-      }
-    } catch (error: any) {
-      setApiError(error.message || 'Network error. Please try again.');
+      setAutopayStage('awaiting-pin');
+      // Give the customer time to approve the prompt, then re-read the data.
+      window.setTimeout(async () => {
+        if (unpaidInvoice) await onPayInvoice(unpaidInvoice.id);
+        setAutopayStage('success');
+        window.setTimeout(() => {
+          setAutopayOpen(false);
+          setAutopayStage('idle');
+          setAutopayPhone('');
+        }, 2000);
+      }, 15000);
+    } catch (error: unknown) {
+      setApiError(
+        error instanceof Error ? error.message : 'Network error. Please try again.',
+      );
       setAutopayStage('idle');
     }
-  };
-
-  const pollPaymentStatus = async (checkoutId: string) => {
-    // Poll every 5 seconds for up to 2 minutes
-    let attempts = 0;
-    const maxAttempts = 24; // 2 minutes
-    
-    const checkStatus = async () => {
-      try {
-        const status = await queryStkPushStatus(checkoutId);
-        
-        if (status.ResultCode === '0') {
-          // Payment successful
-          if (unpaidInvoice) {
-            onPayInvoice(unpaidInvoice.id);
-          }
-          setAutopayStage('success');
-          
-          window.setTimeout(() => {
-            setAutopayOpen(false);
-            setAutopayStage('idle');
-            setAutopayPhone('');
-            setCheckoutRequestId('');
-          }, 2000);
-          return;
-        } else if (status.ResultCode && status.ResultCode !== '0') {
-          // Payment failed
-          setApiError(status.ResultDesc || 'Payment failed');
-          setAutopayStage('idle');
-          return;
-        }
-        
-        // Still pending, continue polling
-        attempts++;
-        if (attempts < maxAttempts) {
-          window.setTimeout(checkStatus, 5000);
-        } else {
-          setApiError('Payment confirmation timeout. Please check your M-Pesa messages.');
-          setAutopayStage('idle');
-        }
-      } catch (error) {
-        attempts++;
-        if (attempts < maxAttempts) {
-          window.setTimeout(checkStatus, 5000);
-        }
-      }
-    };
-    
-    window.setTimeout(checkStatus, 5000);
   };
 
   const completeAutopay = () => {
@@ -178,8 +128,7 @@ export default function ClientBilling({
       setAutopayOpen(false);
       setAutopayStage('idle');
       setAutopayPhone('');
-      setCheckoutRequestId('');
-    }, 1600);
+          }, 1600);
   };
 
   return (

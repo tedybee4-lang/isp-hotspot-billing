@@ -6,3 +6,13 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Testing
+test-results/
+playwright-report/
+blob-report/
+coverage/
+
+# Supabase CLI
+.branches/
+.temp/

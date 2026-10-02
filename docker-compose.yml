@@ -1,0 +1,59 @@
+# =============================================================================
+#  ISPFlow — VPS deployment (Docker Compose)
+#
+#  Option A: host the SPA only, pointing at Supabase Cloud (recommended).
+#  Option B: also run self-hosted Supabase for full data sovereignty.
+#           See deploy/supabase/README.md
+# =============================================================================
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # These are PUBLIC values — the anon key is designed to ship in the
+        # browser (row-level security is what protects your data).
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?set VITE_SUPABASE_URL in .env}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:?set VITE_SUPABASE_ANON_KEY in .env}
+        VITE_APP_NAME: ${VITE_APP_NAME:-ISPFlow}
+        VITE_APP_URL: ${VITE_APP_URL:-http://localhost}
+        VITE_SUPER_ADMIN_EMAILS: ${VITE_SUPER_ADMIN_EMAILS:-}
+    image: ispflow-web:latest
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Optional: self-hosted Supabase on the same VPS.
+  # Uncomment the `supabase` service and run `docker compose --profile selfhost up -d`.
+  # Requires at least 4 GB RAM.
+  # ---------------------------------------------------------------------------
+  # supabase:
+  #   image: supabase/postgres:15.8.1
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+  #     POSTGRES_DB: postgres
+  #   volumes:
+  #     - supabase-db:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U postgres"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+
+volumes:
+  # supabase-db:
