@@ -1,3 +1,26 @@
+# Live deployment
+
+    https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app
+
+- Project id: `prj_Ze350DIlVGCyAVw1M9ZeBhezLSai`
+- Supabase: `https://dcqcunmdhyonaewwuama.supabase.co`
+
+`isp-hotspot-billing.vercel.app` is a **different project** in the same account
+and does not serve this app. Use the URL above, or attach a custom domain in
+the Vercel dashboard under Settings -> Domains.
+
+## Test accounts
+
+All use the password `ISINDU316711`.
+
+| Email | Role | Scope |
+|---|---|---|
+| `ops@ultrafaiba.net` | super_admin | platform-wide, all 3 ISPs |
+| `alpha@isp.test` | isp_owner | alpha-nets |
+| `beta@isp.test` | isp_owner | beta-broadband |
+| `gamma@isp.test` | isp_owner | gamma-fibre |
+
+---
 # Deployment Guide
 
 Everything below assumes you are in the project root.
