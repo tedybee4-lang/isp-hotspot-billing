@@ -39,6 +39,79 @@ const code = (...parts: string[]) =>
     .join('\n')
 const has = (...parts: string[]) => existsSync(join(ROOT, ...parts))
 
+/**
+ * Reads a harness file from scripts/.
+ *
+ * ROOT is the repository root, so `join(ROOT, '..', ...)` would escape it; the
+ * segments are joined against ROOT directly instead.
+ */
+const harness = (...parts: string[]) => code(...parts)
+describe('live VPS checks cannot strand the RADIUS service', () => {
+  it('ships the service-state guard the live checks depend on', () => {
+    expect(has('scripts', 'live', 'service-state.ts')).toBe(true)
+  })
+
+  it('restores on every exit path, not only the happy one', () => {
+    const guard = harness('scripts', 'live', 'service-state.ts')
+    // A `try/finally` is the whole point: without it any throw between the stop
+    // and the start is a platform-wide outage.
+    expect(guard).toMatch(/try\s*\{/)
+    expect(guard).toMatch(/finally\s*\{/)
+    // The restore is inside the finally, not merely somewhere in the file.
+    const finallyIdx = guard.indexOf('} finally {')
+    const after = guard.slice(finallyIdx)
+    expect(after).toMatch(/await this\.restore\(\)/)
+  })
+
+  it('records the initial state and restores that, not a hardcoded active', () => {
+    const guard = harness('scripts', 'live', 'service-state.ts')
+    // Reading the baseline is what makes the restore reversible.
+    expect(guard).toMatch(/this\.initial\s*=\s*await readServiceState/)
+    // A host that was deliberately stopped must stay stopped.
+    expect(guard).toMatch(/shouldRun\s*=\s*this\.initial\s*===\s*'active'/)
+    expect(guard).toMatch(/shouldRun\s*\?\s*'start'\s*:\s*'stop'/)
+    // And "unknown" is never treated as "active", because that is the outage.
+    expect(guard).toMatch(/includes\(out\)/)
+    expect(guard).not.toMatch(/initial\s*===\s*'unknown'.*'start'/)
+  })
+
+  it('handles signals, so Ctrl-C cannot leave the service down', () => {
+    const guard = harness('scripts', 'live', 'service-state.ts')
+    for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+      expect(guard).toContain(sig)
+    }
+    expect(guard).toMatch(/process\.exit\(/)
+  })
+
+  it('runs registered cleanups, and keeps going when one fails', () => {
+    const guard = harness('scripts', 'live', 'service-state.ts')
+    expect(guard).toMatch(/onCleanup\(/)
+    // A cleanup that throws must not skip the service restore.
+    expect(guard).toMatch(/catch \(err\)/)
+  })
+
+  it('verifies the restore instead of assuming it worked', () => {
+    const guard = harness('scripts', 'live', 'service-state.ts')
+    expect(guard).toMatch(/final\s*!==\s*this\.initial/)
+    expect(guard).toMatch(/failures\.push/)
+  })
+
+  it('regression test covers the failure modes, not just the happy path', () => {
+    const tests = code('src', 'test', 'live-harness.test.ts')
+    // The specific outage this exists to prevent.
+    expect(tests).toMatch(/restores an active service after the body throws/)
+    expect(tests).toMatch(/rejected promise/)
+    expect(tests).toMatch(/ORIGINAL state rather than assuming active/)
+  })
+
+  it('never deletes production data from the harness', () => {
+    // The guard manages process state only. Fixture teardown is explicit and
+    // scoped to the test fixtures, never a blanket delete.
+    const guard = harness('scripts', 'live', 'service-state.ts')
+    expect(guard).not.toMatch(/\brm\b\s+-rf|delete\s+from|truncate|drop\s+table/i)
+  })
+})
+
 /** Placeholders the shipped files are allowed to contain. */
 const PLACEHOLDERS = /PASTE_[A-Z_]+_HERE|ENTER-[A-Z-]+-?REF|YOUR-PROJECT-REF/
 
@@ -63,6 +136,25 @@ describe('secret hygiene in deployment files', () => {
     }
   })
 
+  it('puts the systemd start limit in [Unit], where systemd actually reads it', () => {
+    const unit = read('deploy', 'netisp-worker.service')
+    // A key written under the wrong section is reported as
+    //   Unknown key name 'StartLimitIntervalSec' in section 'Service', ignoring
+    // and then silently does nothing, so the guard that stops a crash-loop from
+    // hiding behind a nominally "running" service was not in force on the host.
+    // Section headers are matched at the start of a line. The comment above the
+    // real header names Service in prose, and a plain indexOf would find that
+    // one first and silently slice the wrong region.
+    const unitStart = unit.search(/^\[Unit\]$/m)
+    const serviceStart = unit.search(/^\[Service\]$/m)
+    expect(unitStart).toBeGreaterThanOrEqual(0)
+    expect(serviceStart).toBeGreaterThan(unitStart)
+    const unitSection = unit.slice(unitStart, serviceStart)
+    const serviceSection = unit.slice(serviceStart)
+    expect(unitSection).toMatch(/StartLimitIntervalSec=60/)
+    expect(unitSection).toMatch(/StartLimitBurst=5/)
+    expect(serviceSection).not.toMatch(/^StartLimit/m)
+  })
   it('contains no real-looking secret in any of them', () => {
     for (const f of DEPLOY_FILES) {
       const body = read(...f.split('/'))

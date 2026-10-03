@@ -10,3 +10,8 @@
 # matched reliably, which produced "Too many closing braces".
 deploy/freeradius/** text eol=lf
 deploy/install-vps.sh text eol=lf
+
+# Live VPS check helpers. Same reason as the FreeRADIUS config above: a shell
+# script with CRLF ends fails with "set: pipefail: invalid option name" and
+# "$'\r': command not found", which is easy to mistake for a bug in the script.
+scripts/live/** text eol=lf

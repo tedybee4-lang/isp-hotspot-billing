@@ -33,6 +33,15 @@ After=network-online.target
 # If FreeRADIUS is on this host, the worker does not depend on it to start —
 # a RADIUS outage must not stop the worker from reporting router liveness.
 # The worker will simply fail RADIUS jobs and retry them.
+#
+# The start limit lives here, not in [Service]. systemd's parser reports
+#   Unknown key name 'StartLimitIntervalSec' in section 'Service', ignoring
+# for a misplaced key, so with the limit written under [Service] it silently did
+# nothing and the "a crash-loop is visible instead of spinning forever"
+# property below was not actually in force. Observed in the journal on the
+# deployed host.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -48,10 +57,6 @@ ExecStart=/usr/bin/node --enable-source-maps /opt/netisp-worker/dist/index.cjs
 # A crash must not silently become a permanent outage.
 Restart=always
 RestartSec=5
-# Give up after 5 rapid restarts in 60s and stop, so a genuine misconfiguration
-# is visible in `systemctl status` instead of spinning forever.
-StartLimitIntervalSec=60
-StartLimitBurst=5
 
 # ── Hardening ───────────────────────────────────────────────────────────────
 # The worker needs outbound TCP to routers and HTTPS to Supabase, and nothing
