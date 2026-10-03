@@ -609,4 +609,120 @@ describe('FreeRADIUS configuration', () => {
     expect(migration).not.toMatch(/grant[^;]*router_credentials\s+to\s+radius_reader/)
     expect(migration).not.toMatch(/grant[^;]*payments\s+to\s+radius_reader/)
   })
+/**
+ * Found by running the queue rather than reading it: claiming a job SETS its
+ * status to 'processing', so a worker that died mid-job left a row that no claim
+ * query could ever select again. The lease-expiry recovery the function
+ * documents did not exist, and stranded work permanently.
+ */
+describe('the job queue recovers work stranded by a dead worker', () => {
+  const CLAIM = 'supabase/migrations/20260101150000_claim_expired_processing_jobs.sql'
+
+  it('ships the migration that fixes it', () => {
+    expect(has(...CLAIM.split('/'))).toBe(true)
+  })
+
+  it('claims a job whose lease has expired even while it is processing', () => {
+    const sql = code(...CLAIM.split('/'))
+    expect(sql).toMatch(/j\.status\s*=\s*'processing'/)
+    expect(sql).toMatch(/j\.locked_until\s*<\s*now\(\)/)
+  })
+
+  it('still refuses to steal a live lease', () => {
+    const sql = code(...CLAIM.split('/'))
+    expect(sql).toMatch(
+      /and\s*\(\s*j\.locked_until\s+is\s+null\s+or\s+j\.locked_until\s*<\s*now\(\)\s*\)/i,
+    )
+  })
+
+  it('keeps claiming pending and retrying work exactly as before', () => {
+    const sql = code(...CLAIM.split('/'))
+    expect(sql).toMatch(/j\.status\s+in\s*\(\s*'pending'\s*,\s*'retrying'\s*\)/)
+  })
+
+  it('does not cap reclaim attempts, which would strand the row again', () => {
+    const sql = code(...CLAIM.split('/'))
+    expect(sql).not.toMatch(
+      /status\s*=\s*'processing'[\s\S]{0,400}attempt_count\s*<\s*j\.max_attempts/i,
+    )
+  })
+})
+
+/**
+ * Both of these were found by running settlement against production and asserting
+ * on the resulting rows.
+ *
+ * The first shipped 30 days of service for every payment, whatever was bought.
+ * The second was a regression introduced WHILE fixing the first: replacing a
+ * function body by hand silently dropped the duplicate guard, which turned every
+ * redelivered webhook into a second activation, a second RADIUS job and a second
+ * SMS. The live replay test caught it on the first run.
+ */
+describe('payment settlement grants what was paid and stays idempotent', () => {
+  const GRANT = 'supabase/migrations/20260101170000_payment_grant_period.sql'
+
+  it('no longer grants a fixed 30 days', () => {
+    const sql = code(...GRANT.split('/'))
+    // Asserted against the function BODY, not the whole file: the migration's
+    // prose deliberately quotes the old expression to document the defect, and
+    // matching that comment would pass the test for the wrong reason.
+    const open = sql.indexOf('$$', sql.indexOf('create or replace function public.settle_hashback_payment'))
+    const body = sql.slice(open, sql.indexOf('$$', open + 2))
+    expect(body).not.toMatch(/v_from\s*\+\s*interval\s+'30 days'/)
+    expect(body).toMatch(/make_interval\(hours\s*=>\s*coalesce\(v_hours,\s*720\)\)/)
+  })
+
+  it('resolves the period inside one tenant only', () => {
+    const sql = code(...GRANT.split('/'))
+    // Two ISPs may both sell "Monthly" with different durations. The grant must
+    // follow the tenant that was actually paid.
+    // The first `$$` after the name is the dollar-quote OPENER, so the body runs
+    // to the second one.
+    const open = sql.indexOf('$$', sql.indexOf('payment_grant_hours'))
+    const fn = sql.slice(open, sql.indexOf('$$', open + 2))
+    expect(fn).toMatch(/where\s+isp_id\s*=\s*p_isp_id/i)
+  })
+
+  it('returns NULL rather than guessing an unparseable label', () => {
+    const sql = code(...GRANT.split('/'))
+    // A label that looks parseable but is not must not abort a real settlement.
+    expect(sql).toMatch(/exception\s+when\s+others\s+then[\s\S]{0,900}return\s+null/i)
+  })
+
+  it('keeps the duplicate guard in the replaced settlement function', () => {
+    const sql = code(...GRANT.split('/'))
+    // Dropping these two blocks is the regression that was nearly shipped.
+    expect(sql).toMatch(
+      /v_pay\.status\s*=\s*'success'\s*and[\s\S]{0,300}provider_transaction_id\s*<>\s*p_transaction_id\s*then/i,
+    )
+    expect(sql).toMatch(
+      /v_pay\.status\s*=\s*'success'\s*then\s+v_duplicate\s*:=\s*true;\s*end\s+if;/i,
+    )
+  })
+
+  it('guards every settlement write behind the duplicate flag', () => {
+    const sql = code(...GRANT.split('/'))
+    const body = sql.slice(sql.indexOf('create or replace function public.settle_hashback_payment'))
+    // The status change, the activation, the completion and the audit record must
+    // all be conditional, or one of them double-fires on a replay.
+    const writes = [
+      /set\s+status\s*=\s*'success'/i,
+      /update\s+public\.invoices\s+set\s+status\s*=\s*'paid'/i,
+      /update\s+public\.clients\s+set/i,
+      /complete_hashback_settlement\s*\(/i,
+      /insert\s+into\s+public\.audit_logs/i,
+    ]
+    for (const w of writes) {
+      const at = body.search(w)
+      expect(at, `missing write ${w}`).toBeGreaterThan(-1)
+      const before = body.slice(Math.max(0, at - 1500), at)
+      expect(before, `unguarded write ${w}`).toMatch(/if\s+not\s+v_duplicate/i)
+    }
+  })
+
+  it('still serialises concurrent deliveries of the same webhook', () => {
+    const sql = code(...GRANT.split('/'))
+    expect(sql).toMatch(/for\s+update/i)
+  })
+})
 })
