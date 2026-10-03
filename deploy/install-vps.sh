@@ -110,9 +110,14 @@ install_worker() {
   local stage
   stage="$(mktemp -d)"
 
-  log "Installing production dependencies (this takes a minute)"
+  log "Installing build dependencies (this takes a minute)"
   cp -r "$WORKER_SRC"/package*.json "$stage"/
-  ( cd "$stage" && npm ci --omit=dev --no-audit --no-fund )
+  # Dev dependencies ARE installed here, deliberately. The type-check below needs
+  # @types/node, and a prod-only install makes it fail with dozens of
+  # "Cannot find name 'process'" / "Cannot find module 'node:os'" errors that
+  # look like source defects but are really a missing dev dependency. The tree
+  # is pruned back to production-only before anything is copied into place.
+  ( cd "$stage" && npm ci --no-audit --no-fund )
 
   log "Type-checking against the shared library"
   # The layout below is not cosmetic. worker/src/session.ts imports
@@ -127,7 +132,12 @@ install_worker() {
   cp -r "$REPO_ROOT"/supabase/functions/_shared "$stage"/supabase/functions/
   # The worker typechecks against _shared and its own tsconfig excludes the
   # Deno-only Edge Function entry points.
-  ( cd "$stage" && npx --yes typescript@5.9.3 \
+  #
+  # `npx -p typescript@5.9.3 tsc`, not `npx typescript@5.9.3`: the typescript
+  # package installs its binary as `tsc`, so npx given the bare package name
+  # cannot determine an executable to run and aborts the install with
+  # "could not determine executable to run".
+  ( cd "$stage" && npx --yes -p typescript@5.9.3 tsc \
       --module esnext --moduleResolution bundler --target es2022 \
       --strict --skipLibCheck --noEmit --allowImportingTsExtensions \
       --lib es2023,dom worker/src/index.ts )
@@ -147,9 +157,14 @@ install_worker() {
   #      succeeds and the process dies with "Unexpected identifier 'fromnode'".
   #      Nothing in worker/src uses import.meta or require, so the shim is gone.
   log "Building"
-  ( cd "$stage" && npm i --no-save --no-audit --no-fund esbuild@0.25.0 \
-      && npx esbuild worker/src/index.ts --bundle --platform=node --format=cjs \
-        --target=node20 --outfile=dist/index.cjs )
+  ( cd "$stage" && npx esbuild worker/src/index.ts --bundle --platform=node \
+      --format=cjs --target=node20 --outfile=dist/index.cjs )
+
+  # Drop the build-only tree before it reaches the server. The worker runs as an
+  # unprivileged service account and has no reason to carry a compiler or type
+  # declarations on a 1 GB VPS.
+  log "Pruning build dependencies"
+  ( cd "$stage" && npm prune --omit=dev --no-audit --no-fund )
 
   rm -rf "${APP_DIR:?}/dist" "${APP_DIR:?}/node_modules"
   cp -r "$stage/dist" "$APP_DIR"/
@@ -212,6 +227,27 @@ install_freeradius() {
   if ! grep -q 'netisp-authorize' "$dir/sites-available/default"; then
     sed -i '1i netisp-authorize\nnetisp-post-auth' "$dir/sites-available/default"
   fi
+
+  # Link every module radiusd.conf references.
+  #
+  # radiusd.conf names them as ${modconfdir}/<name>, and ${modconfdir} is
+  # mods-enabled, so a name that exists in mods-available but not in
+  # mods-enabled is a dangling reference. FreeRADIUS treats that as a hard
+  # parse error and refuses to start at all:
+  #
+  #   radiusd.conf[146]: Parse error after "modconfdir": unexpected token "}"
+  #
+  # Ubuntu enables most modules by default but NOT cache, so an install that
+  # only links sql/pap/chap/mschap leaves the service permanently down.
+  log "Linking RADIUS modules"
+  local m
+  for m in cache pap chap mschap sql files; do
+    if [[ -e "$dir/mods-available/$m" ]]; then
+      ln -sfn "../mods-available/$m" "$dir/mods-enabled/$m"
+    else
+      warn "mods-available/$m not found; radiusd.conf references it"
+    fi
+  done
 
   warn "Edit $dir/sql.conf: set readall_group_file and the database"
   warn "connection to match your Supabase Postgres instance."
