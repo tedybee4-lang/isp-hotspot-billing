@@ -336,7 +336,12 @@ describe('FreeRADIUS configuration', () => {
     // and no rate_limit; simultaneous_use lives on radius_accounts.
     expect(queries).toMatch(/join\s+public\.service_accounts\s+sa/i)
     expect(queries).toMatch(/left\s+join\s+public\.plans\s+pl/i)
-    expect(queries).toMatch(/public\.radius_accounts\s+ra/i)
+    // Simultaneous-use is enforced in SQL rather than returned as a
+    // Mikrotik attribute: Mikrotik-Simultaneous-Limit does not exist in
+    // FreeRADIUS 3.2.5, and an unknown attribute fails the whole reply
+    // query rather than being ignored.
+    expect(queries).not.toMatch(/Mikrotik-Simultaneous-Limit/)
+    expect(queries).not.toMatch(/Mikrotik-Expires/)
     // These were the two real mistakes found while wiring this up.
     expect(queries).not.toMatch(/sa\.ips\b/i)
     expect(queries).not.toMatch(/pl\.speed_up\s*\|\|\s*'M'\//i)
@@ -386,12 +391,12 @@ describe('FreeRADIUS configuration', () => {
     //
     // The filter is a negated match against an allow-list, not a deny-list: a
     // deny-list only protects against the characters someone thought of.
-    expect(authorize).toMatch(/!"%\{NETISP-LookupKey\}"\s*=~/)
+    expect(authorize).toMatch(/!"%\{control:NETISP-LookupKey\}"\s*=~/)
     expect(authorize).toMatch(/\/\^\[A-Za-z0-9\._-\]\+\$\//)
     // Ordering is the security property, not the regex: the check must precede
     // the query or it is decorative.
-    expect(authorize.indexOf('NETISP-LookupKey}" =~')).toBeLessThan(
-      authorize.indexOf('sql'),
+    expect(authorize.indexOf('control:NETISP-LookupKey}" =~')).toBeLessThan(
+      authorize.search(/^sql$/m),
     )
   })
 
@@ -415,6 +420,11 @@ describe('FreeRADIUS configuration', () => {
       // and no reference to the undeclared NETISP:: namespace, which the parser
       // resolves as a module name and refuses: "Unknown module".
       expect(body, `${f} still uses NETISP::`).not.toMatch(/NETISP::/)
+      // A control-list attribute must be read as %{control:...}. Bare
+      // %{...} reads the REQUEST list, which never holds it, so the value
+      // silently expands to empty.
+      expect(body, `${f} reads a control attribute without control:`)
+        .not.toMatch(/%\{(?!control:|control:)[A-Za-z-]*NETISP/)
     }
   })
 

@@ -47,11 +47,19 @@ update control {
     # Capped well below FreeRADIUS's default so a hostile username cannot
     # become an expensive query.
     &NETISP-LookupKey := "%{User-Name}"
+    # rlm_sql's authorize_check_query returns a column named 'User-Name' and
+    # compares it against the CONTROL list. User-Name arrives in the REQUEST
+    # list, so without this the comparison is against an attribute that is not
+    # there, the row is discarded as a mismatch, and the module returns `fail`:
+    #     } # authorize = fail
+    # for a subscriber that exists and would otherwise authenticate.
+    &User-Name := "%{User-Name}"
+    &NETISP-LookupKey := "%{User-Name}"
 }
 
 # HotSpot realm stripping. Kept before the character filter so "user@radius"
 # becomes "user" and the filter below sees a clean value.
-if ("%{NETISP-LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
+if ("%{control:NETISP-LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
     update control {
         &NETISP-LookupKey := "%{1}"
     }
@@ -68,7 +76,7 @@ if ("%{NETISP-LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
 # `authorize` section early. The symptom is a parse error far below this line,
 # on the next statement: "Parse error after sql_load_accounts: unexpected
 # token '('". Length is therefore bounded with a separate comparison.
-if (!"%{NETISP-LookupKey}" =~ /^[A-Za-z0-9._-]+$/) {
+if (!"%{control:NETISP-LookupKey}" =~ /^[A-Za-z0-9._-]+$/) {
     update control {
         &Auth-Type := Reject
         &Reply-Message := "NETISP: malformed username"
@@ -76,7 +84,7 @@ if (!"%{NETISP-LookupKey}" =~ /^[A-Za-z0-9._-]+$/) {
     reject
 }
 
-if (("%{NETISP-LookupKey}" =~ /^................................................................./)) {
+if (("%{control:NETISP-LookupKey}" =~ /^................................................................./)) {
     update control {
         &Auth-Type := Reject
         &Reply-Message := "NETISP: username too long"
@@ -146,6 +154,20 @@ if (&reply:Cleartext-Password) {
     update control {
         &Cleartext-Password := "%{reply:Cleartext-Password}"
     }
+}
+
+# Force the PAP comparison to actually run.
+#
+# The check query sets Auth-Type := Accept, which sends the request down the
+# stock "Accept" path. That path does NOT verify the password before answering,
+# so a WRONG PASSWORD was being ACCEPTED:
+#     2. WRONG PASSWORD on the correct tenant   Access-Accept   FAIL
+#
+# Naming the type explicitly means the pap module runs and compares
+# request:User-Password against control:Cleartext-Password. An unknown or empty
+# stored password falls through to the reject below rather than through the door.
+update control {
+    &Auth-Type := PAP
 }
 
 # A subscriber with no provisioned password must never be admitted. Letting an
