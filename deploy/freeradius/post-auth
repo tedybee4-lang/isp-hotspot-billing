@@ -1,58 +1,44 @@
 # =============================================================================
-#  ISPFlow — FreeRADIUS `post-auth` and accounting policy.
+#  ISPFlow - FreeRADIUS accounting policy (Acct-Start / Interim / Stop).
 #
-#  ⚠ INLINED into the site's `post-auth { }` and `acct { }` sections by
-#  install-vps.sh, for the same reason as authorize: FreeRADIUS 3.2.5 rejects a
-#  top-level `if` in a module file, a policy.d file or an $INCLUDEd file.
+#  INLINED into the site's `accounting { }` section by install-vps.sh, for the
+#  same reason as authorize: FreeRADIUS 3.2.5 rejects a top-level `if` in a
+#  module file, a policy.d file or an $INCLUDEd file.
 #
-#  post-auth opens the session; accounting closes and updates it. Keeping both
-#  here means they agree on one definition of "which tenant sent this", which is
-#  resolved from the NAS rather than from the username.
+#  Accounting keeps post-auth honest. post-auth opens the session when the login
+#  succeeds; these packets carry the byte counters, the running time and the
+#  termination reason, and they are what the bill is built from.
 #
-#  ── Deliberately NOT done in post-auth ───────────────────────────────────────
-#  * Deactivation. An acct_stop written here would cut every live customer
-#    whenever FreeRADIUS restarted or lost its database. Sessions are closed by
-#    the router's Acct-Stop and by the worker for a deliberate disconnect.
-#  * Rewriting the rate limit. MikroTik has already applied it by the time
-#    post-auth runs; changing it would have no effect and would make the log
-#    disagree with the router.
+#  Tenant safety: the statements are keyed on acct_session_id AND nas_identifier,
+#  and isp_id is taken from radius_nas. A router cannot write accounting against
+#  another router's session even if it guesses the session id.
+#
+#  Deliberately NOT done here:
+#
+#    * Deactivation. Writing an acct_stop on shutdown would cut every live
+#      customer whenever FreeRADIUS restarted or lost its database. Sessions are
+#      closed by the router's Acct-Stop and by the worker for a deliberate
+#      disconnect. A RADIUS restart must not be an outage.
+#
+#  ------------------------------------------------------------------
+#  Why this section contains no `if`
+#  ------------------------------------------------------------------
+#  The accounting section does not accept one:
+#
+#      sites-enabled/default[873]: Invalid location for 'if'
+#
+#  Unlike authorize and post-auth, `accounting { }` is not a full unlang section
+#  in FreeRADIUS 3.2.5, so a conditional here is a startup failure, not a
+#  runtime one. Any decision that would have been made by a conditional has to be
+#  made in SQL instead, which is where it belongs anyway: the statements use
+#  NULLIF and COALESCE so an absent attribute degrades to the last known value.
 # =============================================================================
 
-# ── Acct-Session-Id normalisation ─────────────────────────────────────────────
-update control {
-    &NETISP::SessionStart := "%{Acct-Session-Id}"
-}
-
-# HotSpot and PPPoE both send an Acct-Session-Id, but HotSpot's can be empty on
-# some firmware. The fallback is composed from attributes already present, never
-# from a timestamp alone, so a retry of the same login reuses the same id and the
-# ON CONFLICT clause in the query folds it into one row instead of creating a
-# second session and double-counting the customer's time.
-if ("%{NETISP::SessionStart}" == "") {
-    update control {
-        &NETISP::SessionStart := "%{User-Name}-%{Called-Station-Id}-%{Framed-IP-Address}"
-    }
-}
-
-# ── accounting: Start, Interim-Update, Stop ───────────────────────────────────
+# Invoking the module IS the call: in the accounting section rlm_sql picks the
+# statement for this packet's Acct-Status-Type out of the `accounting { }` block
+# in queries.conf and runs it. There is no sql_query() function in FreeRADIUS 3.
 #
-# One update handles all three. It is keyed on acct_session_id AND nas_identifier,
-# so a router cannot write against another router's session even if it guesses
-# the session id; and it only ever touches a row that post-auth already opened
-# from a registered NAS.
-update control {
-    &NETISP::AcctUpdated := "no"
-}
-
-if (sql_query("%{sql_escape:%{NETISP::SessionStart}}", "ISPFlow/Accounting/Record") == ok) {
-    update control {
-        &NETISP::AcctUpdated := "yes"
-    }
-}
-
 # An accounting failure must never reject or drop the request. The router has
-# already billed itself; failing the packet would lose the session record. Log
-# it and move on — the next Interim-Update repairs the row.
-if ("%{NETISP::AcctUpdated}" == "no") {
-    radius_log("NETISP: could not record accounting for session %{NETISP::SessionStart} from %{Called-Station-Id}")
-}
+# already billed itself; failing the packet would lose the session record. A
+# later Interim-Update repairs anything missed.
+sql

@@ -46,14 +46,14 @@
 update control {
     # Capped well below FreeRADIUS's default so a hostile username cannot
     # become an expensive query.
-    &NETISP::LookupKey := "%{User-Name}"
+    &NETISP-LookupKey := "%{User-Name}"
 }
 
 # HotSpot realm stripping. Kept before the character filter so "user@radius"
 # becomes "user" and the filter below sees a clean value.
-if ("%{NETISP::LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
+if ("%{NETISP-LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
     update control {
-        &NETISP::LookupKey := "%{1}"
+        &NETISP-LookupKey := "%{1}"
     }
 }
 
@@ -68,18 +68,18 @@ if ("%{NETISP::LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
 # `authorize` section early. The symptom is a parse error far below this line,
 # on the next statement: "Parse error after sql_load_accounts: unexpected
 # token '('". Length is therefore bounded with a separate comparison.
-if (!"%{NETISP::LookupKey}" =~ /^[A-Za-z0-9._-]+$/) {
+if (!"%{NETISP-LookupKey}" =~ /^[A-Za-z0-9._-]+$/) {
     update control {
         &Auth-Type := Reject
-        &Auth-Error := "NETISP: malformed username"
+        &Reply-Message := "NETISP: malformed username"
     }
     reject
 }
 
-if (("%{NETISP::LookupKey}" =~ /^.{65,}$/)) {
+if (("%{NETISP-LookupKey}" =~ /^................................................................./)) {
     update control {
         &Auth-Type := Reject
-        &Auth-Error := "NETISP: username too long"
+        &Reply-Message := "NETISP: username too long"
     }
     reject
 }
@@ -89,125 +89,81 @@ if (("%{NETISP::LookupKey}" =~ /^.{65,}$/)) {
 if ("%{Called-Station-Id}" == "") {
     update control {
         &Auth-Type := Reject
-        &Auth-Error := "NETISP: no NAS identity"
+        &Reply-Message := "NETISP: no NAS identity"
     }
     reject
 }
-# ── Load the subscriber, scoped to the tenant that sent the packet ────────────
+# rlm_sql has no sql_query() function. In FreeRADIUS 3 the queries are bound to
+# the section they belong to, so invoking the module IS the call: it runs
+# authorize_check_query and, when that matched, authorize_reply_query, which
+# lands Cleartext-Password and the MikroTik-* attributes in the reply list.
 #
-# sql_query() is used explicitly rather than sql_load_accounts().
+# The previous code called sql_query("ISPFlow/Authorize/LoadAccount") and then
+# branched on %{NETISP::Loaded}. Neither existed. rlm_sql registers no policy
+# functions at all (`strings rlm_sql.so | grep ^sql_` returns nothing), so the
+# call could only ever fail to parse, and NETISP::Loaded was never declared in
+# the dictionary nor ever set, so a successful lookup would have been rejected as
+# a failure anyway.
 #
-# Three parser constraints, all found by running `freeradius -XC` against
-# 3.2.5, and each reported far from its actual cause:
-#
-#  1. sql_load_accounts() resolves as a SECTION name here, not a function:
-#       Parse error after "sql_load_accounts": unexpected token "("
-#
-#  2. sql_query() takes ONE argument in FreeRADIUS 3 -- the query name. The
-#     two-argument sql_query(session-key, query-name) form is FreeRADIUS 2:
-#       Parse error in condition ... "^ Unexpected start of string"
-#
-#  3. A module function's RETURN VALUE cannot be compared with `==` inside the
-#     parentheses of an `if`:
-#       if (sql_query("name") == ok) { }   ->  "Parse error in condition"
-#                                            "^" pointing at the `==`
-#     unlang exposes the result through the `ok` variable instead, so the call
-#     is made as a statement and `ok` is read afterwards. This is the classic
-#     FreeRADIUS idiom and is what the code below does.
-#
-# Every returned column is loaded into the control list, which is what the
-# policy reads back as %{NETISP::...}.
-sql_query("ISPFlow/Authorize/LoadAccount")
+# The tenant gate is NOT here and must not be added here. It is in the SQL, which
+# joins radius_nas before service_accounts, so it cannot return a row for a
+# router that is not registered or for a subscriber belonging to another tenant.
+# Calling `sql` is therefore already tenant-safe: no username-only path is left.
+sql
 
-if ("%{NETISP::Loaded}" != "yes") {
-    # The single most common failure for a new customer whose provisioning job
-    # has not run yet, so the error says exactly that.
+# rlm_sql sets Auth-Type := Accept only when authorize_check_query returned a
+# row. No row means no such subscriber on this router, which covers both "this
+# customer does not exist" and "this customer belongs to a different ISP"
+# without telling the caller which. That indistinguishability is deliberate: it
+# is what stops a router being used to probe for another tenant's customers.
+#
+# It is also the most common failure for a new customer whose provisioning job
+# has not run yet, so the message says exactly that.
+# Reply-Message, not Auth-Error.
+#
+# Auth-Error is not defined anywhere in this FreeRADIUS 3.2.5 installation:
+#
+#     sites-enabled/default[360]: Unknown attribute 'Auth-Error'
+#
+# Reply-Message (RFC 2865) always is, and it is what MikroTik actually shows
+# the customer on HotSpot, which is the behaviour these messages were written for.
+if (!&control:Auth-Type) {
     update control {
         &Auth-Type := Reject
-        &Auth-Error := "NETISP: no service account for this username on this router"
+        &Reply-Message := "NETISP: no active service account for this username on this router"
     }
     reject
 }
 
-# A subscriber with no provisioned password must never be admitted. The query
-# returns an empty Cleartext-Password in that case, and letting an empty password
-# through would be an authentication bypass, not a failure.
-if ("%{NETISP::CleartextPassword}" == "") {
+# Cleartext-Password arrives in the REPLY list because authorize_reply_query
+# returns it there. It is copied into control explicitly rather than relying on
+# the stock site's pap/chap/mschap sections to find it, because that reliance
+# worked until an unrelated site edit moved the assignment.
+#
+# It is never written to a reply attribute and never logged: radiusd.conf sets
+# auth, badpass and goodpass to no.
+if (&reply:Cleartext-Password) {
+    update control {
+        &Cleartext-Password := "%{reply:Cleartext-Password}"
+    }
+}
+
+# A subscriber with no provisioned password must never be admitted. Letting an
+# empty password through would be an authentication bypass, not a failure.
+if (!&control:Cleartext-Password) {
     update control {
         &Auth-Type := Reject
-        &Auth-Error := "NETISP: account has no password provisioned"
+        &Reply-Message := "NETISP: account has no password provisioned"
     }
     reject
 }
 
-# ── Status gate ──────────────────────────────────────────────────────────────
+# Status and expiry are gated in authorize_check_query, in the same WHERE clause
+# as the tenant resolution, so they are enforced in the database against the row
+# that was actually matched rather than against a value carried back separately
+# and possibly re-read. A suspended, pending or expired account returns no row
+# and takes the reject branch above.
 #
-# Checked here rather than only at provisioning, so a suspension takes effect on
-# the next login even if the router was never told.
-#
-#   active     normal service
-#   pending    account created but never activated (e.g. unpaid)
-#   suspended  deliberately cut off by the ISP
-#   expired    the subscription period has run out
-#
-# `pending` and `expired` get distinct messages, because telling a customer
-# "unauthorised" when the real answer is "your subscription expired" wastes an
-# entire support call.
-if ("%{NETISP::AccountStatus}" != "active") {
-    if ("%{NETISP::AccountStatus}" == "expired") {
-        update control {
-            &Auth-Type := Reject
-            &Auth-Error := "NETISP: subscription expired. Please renew."
-        }
-    } elsif ("%{NETISP::AccountStatus}" == "suspended") {
-        update control {
-            &Auth-Type := Reject
-            &Auth-Error := "NETISP: account suspended. Please contact your ISP."
-        }
-    } else {
-        update control {
-            &Auth-Type := Reject
-            &Auth-Error := "NETISP: account not activated yet."
-        }
-    }
-    reject
-}
-
-# Expiry is enforced from the row as well as from `status`. The two can disagree
-# for a few minutes while a renewal propagates, and the row is the newer of the
-# two, so it wins.
-if ("%{NETISP::ExpiresAt}" != "" && "%{NETISP::ExpiresAt}" < "%{NOW}") {
-    update control {
-        &Auth-Type := Reject
-        &Auth-Error := "NETISP: subscription expired. Please renew."
-    }
-    reject
-}
-
-# ── Reply attributes ─────────────────────────────────────────────────────────
-#
-# The query's `cleartextPassword` column lands in control as Cleartext-Password,
-# which is what lets FreeRADIUS verify CHAP and MS-CHAP against the stored
-# ciphertext. It is never copied into a reply attribute and never logged: the
-# radiusd.conf log block sets auth, badpass and goodpass to no.
-#
-# MikroTik applies the rate limit to the session from the reply. Only a hotspot
-# plan produces one; PPPoE and fibre carry their speed on the interface, and
-# sending a rate limit there would have the router shape its own WAN.
-if ("%{NETISP::RateLimit}" != "") {
-    update reply {
-        Mikrotik-Rate-Limit := "%{NETISP::RateLimit}"
-    }
-}
-
-if ("%{NETISP::SimultaneousUse}" != "") {
-    update reply {
-        Mikrotik-Simultaneous-Limit := "%{NETISP::SimultaneousUse}"
-    }
-}
-
-if ("%{NETISP::ExpiresAt}" != "") {
-    update reply {
-        Mikrotik-Expires := "%{NETISP::ExpiresAt}"
-    }
-}
+# Reply attributes (Mikrotik-Rate-Limit, Mikrotik-Simultaneous-Limit,
+# Mikrotik-Expires, Service-Type) are returned by authorize_reply_query and are
+# not copied out of the control list here: they were never in it.

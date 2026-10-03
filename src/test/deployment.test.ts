@@ -21,6 +21,22 @@ import { describe, expect, it } from 'vitest'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const read = (...parts: string[]) => readFileSync(join(ROOT, ...parts), 'utf8')
+
+/**
+ * The file with its comments removed.
+ *
+ * These configuration files carry a lot of prose explaining WHY a value is what
+ * it is, and several of those explanations quote the broken value verbatim:
+ * `driver = "postgresql"` appears in a comment precisely because it does not
+ * work. Asserting against the raw text therefore "finds" the bug it is meant to
+ * prove is absent, which is how a configuration file ends up shipped carrying
+ * the exact line its own comments warn against.
+ */
+const code = (...parts: string[]) =>
+  read(...parts)
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('#'))
+    .join('\n')
 const has = (...parts: string[]) => existsSync(join(ROOT, ...parts))
 
 /** Placeholders the shipped files are allowed to contain. */
@@ -283,34 +299,44 @@ describe('FreeRADIUS configuration', () => {
     }
   })
 
-  it('escapes every user-supplied value in its SQL', () => {
-    const queries = read('deploy', 'freeradius', 'queries.conf')
-    // FreeRADIUS interpolates %{...} into the query text. An unescaped username
-    // is SQL injection with a customer-facing trigger.
+  it('escapes every user-supplied value through the driver', () => {
+    const queries = code('deploy', 'freeradius', 'queries.conf')
+    const sql = code('deploy', 'freeradius', 'sql.conf')
+    // FreeRADIUS interpolates %{...} into the query text, so an unescaped
+    // username is SQL injection with a customer-facing trigger.
     //
-    // Only expansions that reach the database matter. Control attributes such as
-    // %{NETISP::LookupKey} are set by this same file after being filtered, and
-    // an expansion quoted inside %{sql_escape:...} is already safe — matching
-    // those again would flag the escaping itself as the problem.
-    const outsideEscape = queries
-      // Strip the escaped ones first, comments included.
-      .replace(/^#.*$/gm, '')
-      .replace(/%\{sql_escape:[^}]*(?:\{[^}]*\}[^}]*)*\}/g, '')
-    const unescaped = [...outsideEscape.matchAll(/%\{[^}]+\}/g)]
-    expect(
-      unescaped.map((m) => m[0]),
-      'every %{...} reaching the database must be inside %{sql_escape:...}',
-    ).toHaveLength(0)
-    expect(queries).toMatch(/sql_escape:/)
+    // The escaping is NOT done with %{sql_escape:...}. That function does not
+    // exist in FreeRADIUS 3: it is a FreeRADIUS 2 module function, and in 3 the
+    // parser rejects the file with "Unknown module" before the server can start.
+    // Escaping is the driver's job, selected with auto_escape, which routes
+    // every expansion through the postgresql driver's own PQescapeString.
+    expect(queries).not.toMatch(/sql_escape/)
+    expect(sql).toMatch(/auto_escape\s*=\s*yes/)
+  })
+
+  it('drives rlm_sql the way this build actually resolves it', () => {
+    const sql = code('deploy', 'freeradius', 'sql.conf')
+    // `driver` is resolved to BOTH <libdir>/<driver>.so AND the exported symbol
+    // <driver>, so both parts need the rlm_sql_ prefix that Ubuntu ships:
+    //   driver = "postgresql" -> Could not link driver postgresql:
+    //                          /usr/lib/freeradius/postgresql.so: cannot open
+    // "pgsql", which most examples online use, fails the same way.
+    expect(sql).toMatch(/driver\s*=\s*"rlm_sql_postgresql"/)
+    expect(sql).not.toMatch(/driver\s*=\s*"pgsql"/)
+    expect(sql).not.toMatch(/driver\s*=\s*"postgresql"/)
+    // rlm_sql calls the database radius_db. `database` is silently ignored and
+    // the server falls back to the compiled-in default "radius".
+    expect(sql).toMatch(/radius_db\s*=\s*"postgres"/)
+    expect(sql).not.toMatch(/^\s*database\s*=/m)
   })
 
   it('reads only tables and columns that exist in the schema', () => {
     const queries = read('deploy', 'freeradius', 'queries.conf')
     // Verified against the live schema: service_accounts has no `ips` column
     // and no rate_limit; simultaneous_use lives on radius_accounts.
-    expect(queries).toMatch(/from\s+public\.service_accounts\s+sa/i)
+    expect(queries).toMatch(/join\s+public\.service_accounts\s+sa/i)
     expect(queries).toMatch(/left\s+join\s+public\.plans\s+pl/i)
-    expect(queries).toMatch(/from\s+public\.radius_accounts\s+ra/i)
+    expect(queries).toMatch(/public\.radius_accounts\s+ra/i)
     // These were the two real mistakes found while wiring this up.
     expect(queries).not.toMatch(/sa\.ips\b/i)
     expect(queries).not.toMatch(/pl\.speed_up\s*\|\|\s*'M'\//i)
@@ -324,36 +350,72 @@ describe('FreeRADIUS configuration', () => {
     expect(queries).toMatch(/regexp_replace\(pl\.speed_down::text/)
   })
 
-  it('takes no tenant parameter in the SQL', () => {
-    const queries = read('deploy', 'freeradius', 'queries.conf')
-    // The tenant comes from the service account row the unique constraint
-    // already selected, so there is no way to ask for another ISP's customers.
-    expect(queries).not.toMatch(/isp_id\s*=\s*'%\{/)
+  it('resolves the tenant from the NAS before touching any subscriber', () => {
+    const queries = code('deploy', 'freeradius', 'queries.conf')
+    // Username is unique per (isp_id, username), not globally, so a lookup by
+    // username alone can return another tenant's customer. Every statement must
+    // join radius_nas and scope the subscriber by the tenant that came back, so
+    // no path reaches service_accounts without passing the NAS check.
+    const joins =
+      queries.match(/join\s+public\.service_accounts\s+sa\s+on\s+sa\.isp_id\s*=/gi) || []
+    expect(joins.length).toBeGreaterThan(0)
+    expect(queries).toMatch(/from\s+public\.radius_nas\s+nas/i)
+    const nasFilters = queries.match(/nas\.nas_identifier\s*=\s*'%\{/gi) || []
+    expect(nasFilters.length).toBeGreaterThan(0)
+    // And there is still no bare "WHERE username = ..." lookup anywhere.
+    expect(queries).not.toMatch(/where\s+sa\.username\s*=\s*'%\{[^}]*'\s+limit/i)
   })
 
-  it('gates on account status before granting service', () => {
-    const authorize = read('deploy', 'freeradius', 'authorize')
+  it('gates on account status and expiry before granting service', () => {
+    const queries = code('deploy', 'freeradius', 'queries.conf')
     // A suspension has to take effect on the next login even if the router was
-    // never told, so the check lives in authorize and not only in provisioning.
-    expect(authorize).toMatch(/NETISP::AccountStatus\}"\s*!=\s*"active"/)
-    expect(authorize).toMatch(/"expired"/)
-    expect(authorize).toMatch(/"suspended"/)
+    // never told. The gate lives in the query, in the same WHERE clause as the
+    // tenant resolution, so it is enforced against the row actually matched
+    // rather than against a value carried back and possibly re-read.
+    expect(queries).toMatch(/sa\.status\s*=\s*'active'/)
+    expect(queries).toMatch(
+      /sa\.expires_at\s+is\s+null\s+or\s+sa\.expires_at\s*>\s*now\(\)/i,
+    )
   })
 
   it('rejects an implausible username before querying the database', () => {
-    const authorize = read('deploy', 'freeradius', 'authorize')
+    const authorize = code('deploy', 'freeradius', 'authorize')
     // HotSpot allows arbitrary characters in the login field. A permissive LIKE
     // would let a crafted username read another subscriber's rate limit, so the
-    // allow-list filter runs before sql_load_accounts() is ever reached.
+    // allow-list filter runs before the sql module is ever invoked.
     //
     // The filter is a negated match against an allow-list, not a deny-list: a
     // deny-list only protects against the characters someone thought of.
-    expect(authorize).toMatch(/!\s*"%\{NETISP::LookupKey\}"\s*=~\s*\/\^\[A-Za-z0-9\._-\]\{1,64\}\$\//)
+    expect(authorize).toMatch(/!"%\{NETISP-LookupKey\}"\s*=~/)
+    expect(authorize).toMatch(/\/\^\[A-Za-z0-9\._-\]\+\$\//)
     // Ordering is the security property, not the regex: the check must precede
     // the query or it is decorative.
-    expect(authorize.indexOf('LookupKey}" =~')).toBeLessThan(
-      authorize.indexOf('sql_load_accounts'),
+    expect(authorize.indexOf('NETISP-LookupKey}" =~')).toBeLessThan(
+      authorize.indexOf('sql'),
     )
+  })
+
+  it('rejects a packet with no NAS identity at all', () => {
+    const authorize = code('deploy', 'freeradius', 'authorize')
+    // The tenant comes from Called-Station-Id. A packet without one has no
+    // tenant, so it must never reach the query.
+    expect(authorize).toMatch(/Called-Station-Id\}"\s*==\s*""/)
+    expect(authorize.indexOf('Called-Station-Id}" == ""')).toBeLessThan(
+      authorize.indexOf('sql'),
+    )
+  })
+
+  it('calls no sql_query(), which FreeRADIUS 3 does not have', () => {
+    for (const f of ['authorize', 'session-open', 'post-auth']) {
+      const body = code('deploy', 'freeradius', f)
+      // rlm_sql registers no policy functions at all, so a call to sql_query()
+      // cannot parse: "Parse error after sql_query: unexpected token "(".
+      // Invoking the module IS the call in FreeRADIUS 3.
+      expect(body, `${f} still calls sql_query()`).not.toMatch(/sql_query\s*\(/)
+      // and no reference to the undeclared NETISP:: namespace, which the parser
+      // resolves as a module name and refuses: "Unknown module".
+      expect(body, `${f} still uses NETISP::`).not.toMatch(/NETISP::/)
+    }
   })
 
   it('strips the HotSpot realm so PPPoE and HotSpot share one lookup', () => {
@@ -373,17 +435,33 @@ describe('FreeRADIUS configuration', () => {
 
   it('keeps database credentials out of the world-readable config', () => {
     const sql = read('deploy', 'freeradius', 'sql.conf')
-    // The install script writes this file 0640; radiusd.conf stays readable.
-    expect(sql).toMatch(/PASTE_THE_GENERATED_PASSWORD_HERE/)
-    const radiusd = read('deploy', 'freeradius', 'radiusd.conf')
-    expect(radiusd).toMatch(/sqlconf = \$\{confdir\}\/sql\.conf/)
+    // sql.conf IS the module configuration and is installed 0640 root:freerad,
+    // because rlm_sql has no "sqlconf" directive: a separate file pointed at by
+    // a module file is never read, and every value silently falls back to the
+    // defaults compiled into rlm_sql (driver="rlm_sql_null", radius_db="radius").
+    expect(sql).toMatch(/POOLER_PASSWORD/)
+    expect(code('deploy', 'freeradius', 'radiusd.conf')).not.toMatch(/sqlconf\s*=/)
   })
 
   it('recommends a least-privilege role rather than the service key', () => {
-    const sql = read('deploy', 'freeradius', 'sql.conf')
+    const sql = code('deploy', 'freeradius', 'sql.conf')
+    const migration = code('supabase', 'migrations', '20260101100300_radius_auth.sql')
     // A RADIUS lookup has no JWT, so it bypasses RLS. Reusing the service_role
-    // key there would hand out full cross-tenant read access.
-    expect(sql).toMatch(/create role radius_reader/)
-    expect(sql).toMatch(/grant select on public\.service_accounts to radius_reader/)
+    // key there would hand out full cross-tenant read access. The role is created
+    // and granted by the migration, not by the FreeRADIUS configuration: the
+    // server must never be the thing that decides what it is allowed to read.
+    expect(sql).toMatch(/login\s*=\s*"POOLER_USER"/)
+    expect(sql).not.toMatch(/service_role|service-role|sb_secret_/)
+    expect(migration).toMatch(/grant select on public\.radius_nas to radius_reader/)
+    expect(migration).toMatch(
+      /grant select on public\.service_accounts to radius_reader/,
+    )
+    // The role must not be able to read the encryption key, the router secrets
+    // or the money.
+    expect(migration).not.toMatch(
+      /grant[^;]*netisp_internal_keys\s+to\s+radius_reader/,
+    )
+    expect(migration).not.toMatch(/grant[^;]*router_credentials\s+to\s+radius_reader/)
+    expect(migration).not.toMatch(/grant[^;]*payments\s+to\s+radius_reader/)
   })
 })

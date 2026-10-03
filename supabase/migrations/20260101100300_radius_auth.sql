@@ -216,4 +216,24 @@ grant execute on function public.radius_key_fingerprint() to service_role;
 -- ── radius_reader: what RADIUS may read ───────────────────────────────────────
 grant select on public.radius_nas to radius_reader;
 
+-- The rest of what the queries read. These grants were applied directly to the
+-- database when the module was brought up but were never written down here, so
+-- the migration did not reproduce the permissions the server actually depends
+-- on: a database rebuilt from migrations would have had radius_reader able to
+-- resolve a router and then fail to find the subscriber.
+grant select on public.service_accounts to radius_reader;
+grant select on public.plans to radius_reader;
+grant select on public.radius_accounts to radius_reader;
+
+-- Accounting writes. The session table is the only thing RADIUS may modify, and
+-- only through the statements in queries.conf.
+grant insert, update on public.radius_sessions to radius_reader;
+
+-- pgp_sym_decrypt runs as SECURITY DEFINER (see set_service_account_password),
+-- so radius_reader can use it without holding any grant on netisp_internal_keys.
+-- Deliberately NOT granted:
+--   netisp_internal_keys   the RADIUS host key
+--   router_credentials     every router's admin password
+--   payments               customer money
+
 commit;

@@ -1,0 +1,12 @@
+# FreeRADIUS configuration must use LF endings.
+#
+# With CRLF, a line continuation becomes a backslash followed by CR, which the
+# FreeRADIUS 3 parser reads as an escaped space rather than a continuation. The
+# query string then silently runs on and the next statement is swallowed:
+#
+#     queries.conf[72]: Unterminated string
+#
+# Unlang is affected the same way, and a `}` at the end of a CRLF line is not
+# matched reliably, which produced "Too many closing braces".
+deploy/freeradius/** text eol=lf
+deploy/install-vps.sh text eol=lf

@@ -3,7 +3,7 @@
 #
 #  Two groups of attributes:
 #
-#    1. NETISP:: control attributes. These carry values between the SQL queries
+#    1. NETISP-* internal attributes. These carry values between the inline
 #       and the unlang policy inside a single request. They are internal and are
 #       never placed in a reply, so they are declared as internal rather than
 #       with vendor numbers that would collide on the wire.
@@ -26,7 +26,10 @@
 # (64496-64511), so it cannot collide with a real vendor.
 #
 # The name must also match the attribute prefix, because unlang references these
-# as `NETISP::LookupKey`. FreeRADIUS resolves `::` against the vendor that owns
+# as %{NETISP-LookupKey}. NOTE: `::` is NOT the vendor separator here, it is
+# the FreeRADIUS MODULE namespace separator: %{NETISP::LookupKey} refuses to start
+# the server with "Unknown module". A vendor attribute is referenced by its full
+# declared name, hyphenated, exactly as above.
 # the attribute, so the vendor is `Netisp` and the attributes are `NETISP-*`.
 VENDOR        Netisp               64500
 
