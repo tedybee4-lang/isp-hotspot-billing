@@ -1,21 +1,63 @@
 # =============================================================================
 #  ISPFlow — FreeRADIUS dictionary.
 #
-#  The reply attributes MikroTik understands. Defining them explicitly is what
-#  stops FreeRADIUS from silently dropping a value it has no dictionary entry
-#  for — which is the usual reason "Mikrotik-Rate-Limit works in the lab but not
-#  in production".
+#  Two groups of attributes:
+#
+#    1. NETISP:: control attributes. These carry values between the SQL queries
+#       and the unlang policy inside a single request. They are internal and are
+#       never placed in a reply, so they are declared as internal rather than
+#       with vendor numbers that would collide on the wire.
+#
+#    2. Mikrotik vendor attributes. These DO go on the wire. Defining them
+#       explicitly is what stops FreeRADIUS from silently dropping a value it has
+#       no dictionary entry for — the usual reason "Mikrotik-Rate-Limit works in
+#       the lab but not in production".
+#
+#  This file must be referenced from /etc/freeradius/3.0/dictionary with
+#  $INCLUDE dictionary.netisp. On a stock install it is present on disk but NOT
+#  referenced, so every Mikrotik-* attribute is treated as unknown and silently
+#  dropped. install-vps.sh adds the reference.
 # =============================================================================
 
-VENDOR        Mikrotik
+# A VENDOR line needs BOTH a name and an enterprise number, and FreeRADIUS
+# rejects `VENDOR Netisp` on its own as `invalid VENDOR entry`.
+#
+# 64500 is inside the IANA range reserved for documentation and examples
+# (64496-64511), so it cannot collide with a real vendor.
+#
+# The name must also match the attribute prefix, because unlang references these
+# as `NETISP::LookupKey`. FreeRADIUS resolves `::` against the vendor that owns
+# the attribute, so the vendor is `Netisp` and the attributes are `NETISP-*`.
+VENDOR        Netisp               64500
 
-BEGIN-VENDOR    Mikrotik
+BEGIN-VENDOR    Netisp
 
-# Applied to the subscriber's session by the router.
-ATTRIBUTE   Mikrotik-Rate-Limit         1   string
-ATTRIBUTE   Mikrotik-Expires            2   string
-ATTRIBUTE   Mikrotik-Simultaneous-Limit  4   integer
-ATTRIBUTE   Mikrotik-Group              5   string
-ATTRIBUTE   Mikrotik-Wireless-Forward   6   integer
+# Values returned by queries.conf and consumed by the inline policy.
+ATTRIBUTE   NETISP-LookupKey        1  string
+ATTRIBUTE   NETISP-AccountStatus    2  string
+ATTRIBUTE   NETISP-ExpiresAt        3  string
+ATTRIBUTE   NETISP-RateLimit        4  string
+ATTRIBUTE   NETISP-SimultaneousUse  5  string
+ATTRIBUTE   NETISP-ClientId         6  string
+ATTRIBUTE   NETISP-PlanName         7  string
+ATTRIBUTE   NETISP-IspId            8  string
+ATTRIBUTE   NETISP-SessionStart     9  string
+ATTRIBUTE   NETISP-SessionRowId    10  string
+ATTRIBUTE   NETISP-AcctUpdated     11  string
 
-END-VENDOR      Mikrotik
+END-VENDOR      Netisp
+
+# ── Mikrotik attributes ───────────────────────────────────────────────────────
+#
+# NOT redefined here. FreeRADIUS ships dictionary.mikrotik with
+# Mikrotik-Rate-Limit, Mikrotik-Expires, Mikrotik-Simultaneous-Limit,
+# Mikrotik-Group and Mikrotik-Wireless-Forward already defined. Redeclaring them
+# aborts startup with
+#   dict_addattr: Duplicate attribute name Mikrotik-Rate-Limit
+#
+# The shipped dictionary is pulled in by install-vps.sh with
+#   $INCLUDE dictionary.mikrotik
+# from /etc/freeradius/3.0/dictionary, which on a stock install it is not: the
+# file exists on disk but nothing references it, so every Mikrotik-* attribute is
+# treated as unknown and silently dropped from the Access-Accept. That is the
+# usual reason "Mikrotik-Rate-Limit works in the lab but not in production".

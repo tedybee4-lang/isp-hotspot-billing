@@ -1,53 +1,58 @@
 # =============================================================================
-#  ISPFlow — FreeRADIUS `post-auth` module.
+#  ISPFlow — FreeRADIUS `post-auth` and accounting policy.
 #
-#  Runs after a successful authentication and does the two things that turn a
-#  login into a usable, billable session:
+#  ⚠ INLINED into the site's `post-auth { }` and `acct { }` sections by
+#  install-vps.sh, for the same reason as authorize: FreeRADIUS 3.2.5 rejects a
+#  top-level `if` in a module file, a policy.d file or an $INCLUDEd file.
 #
-#    1. Opens an accounting session in ISPFlow (acct_session_id, start time,
-#       framed address, called station) so the panel can show who is online and
-#       for how long.
-#    2. Records the router that accepted the login, so an operator can tell which
-#       site a customer is connected through.
+#  post-auth opens the session; accounting closes and updates it. Keeping both
+#  here means they agree on one definition of "which tenant sent this", which is
+#  resolved from the NAS rather than from the username.
 #
-#  Deliberately NOT done here:
-#
-#    * Deactivation. If FreeRADIUS is restarted or loses its database, an
-#      acct_stop written in this module would cut every live customer. Sessions
-#      are closed by the router's Acct-Stop/Interim-Update, and by the worker for
-#      a deliberate disconnect. Closing them from here would make a RADIUS
-#      restart an outage.
-#    * Rewriting the rate limit. MikroTik has already applied it by the time
-#      post-auth runs; changing it here would have no effect and would make the
-#      log disagree with the router.
-#
-#  The SQL queries use the same prepared statements as authorize, so a database
-#  outage fails authentication closed rather than open.
+#  ── Deliberately NOT done in post-auth ───────────────────────────────────────
+#  * Deactivation. An acct_stop written here would cut every live customer
+#    whenever FreeRADIUS restarted or lost its database. Sessions are closed by
+#    the router's Acct-Stop and by the worker for a deliberate disconnect.
+#  * Rewriting the rate limit. MikroTik has already applied it by the time
+#    post-auth runs; changing it would have no effect and would make the log
+#    disagree with the router.
 # =============================================================================
 
+# ── Acct-Session-Id normalisation ─────────────────────────────────────────────
 update control {
     &NETISP::SessionStart := "%{Acct-Session-Id}"
 }
 
 # HotSpot and PPPoE both send an Acct-Session-Id, but HotSpot's can be empty on
-# some firmware. Falling back to a composed value keeps accounting rows
-# joinable; the fallback is derived from attributes already present, never from a
-# timestamp alone, so a retry of the same login reuses the same id.
-if ("%{Acct-Session-Id}" == "") {
+# some firmware. The fallback is composed from attributes already present, never
+# from a timestamp alone, so a retry of the same login reuses the same id and the
+# ON CONFLICT clause in the query folds it into one row instead of creating a
+# second session and double-counting the customer's time.
+if ("%{NETISP::SessionStart}" == "") {
     update control {
-        &NETISP::SessionStart := "%{User-Name}-%{Called-Station-Id}"
+        &NETISP::SessionStart := "%{User-Name}-%{Called-Station-Id}-%{Framed-IP-Address}"
     }
 }
 
-sql_start_session()
-
-# A failure here must not reject a customer who has already been authenticated.
-# Logging it and continuing is the right trade: the router has admitted them, and
-# the panel will show the session once the next Interim-Update arrives.
-if (!ok) {
-    radius_log("%{NETISP::SessionStart}: could not open the ISPFlow session")
+# ── accounting: Start, Interim-Update, Stop ───────────────────────────────────
+#
+# One update handles all three. It is keyed on acct_session_id AND nas_identifier,
+# so a router cannot write against another router's session even if it guesses
+# the session id; and it only ever touches a row that post-auth already opened
+# from a registered NAS.
+update control {
+    &NETISP::AcctUpdated := "no"
 }
 
-update control {
-    &Auth-Type := Accept
+if (sql_query("%{sql_escape:%{NETISP::SessionStart}}", "ISPFlow/Accounting/Record") == ok) {
+    update control {
+        &NETISP::AcctUpdated := "yes"
+    }
+}
+
+# An accounting failure must never reject or drop the request. The router has
+# already billed itself; failing the packet would lose the session record. Log
+# it and move on — the next Interim-Update repairs the row.
+if ("%{NETISP::AcctUpdated}" == "no") {
+    radius_log("NETISP: could not record accounting for session %{NETISP::SessionStart} from %{Called-Station-Id}")
 }

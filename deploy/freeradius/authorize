@@ -1,37 +1,46 @@
 # =============================================================================
-#  ISPFlow — FreeRADIUS `authorize` module.
+#  ISPFlow — FreeRADIUS `authorize` policy.
 #
-#  Answers the two questions a MikroTik router asks when a device comes online:
+#  ⚠ THIS FILE IS INLINED INTO THE SITE, NOT LOADED AS A MODULE.
 #
-#    1. May this subscriber in?
-#    2. At what speed, and with what session limits?
+#  install-vps.sh splices this text directly into the `authorize { }` section of
+#  sites-available/default. That is not a stylistic choice. FreeRADIUS 3.2.5
+#  rejects a top-level `if` in every other context, each verified on the host:
 #
-#  Both answers come from ISPFlow's own tables, so a payment, a suspension or a
-#  package change takes effect on the next authentication without anyone
-#  touching the router.
+#     mods-enabled/netisp-authorize -> "Invalid location for 'if'"
+#     policy.d/netisp-authorize     -> "Invalid location for 'if'"
+#     $INCLUDE sites-available/...  -> "Invalid location for 'if'"
 #
-#  ── Username normalisation ─────────────────────────────────────────────────
+#  A module file is instantiated, a policy.d file and an $INCLUDEd file are each
+#  parsed as a standalone unit; none of them is a site section, and `if` is only
+#  valid inside one. Inlining is the supported way to add custom unlang.
 #
-#  HotSpot and PPPoE present a RADIUS username but arrive by different routes:
+#  It answers, for a MikroTik router asking whether a device may come online:
 #
-#    HotSpot  MikroTik sends whatever the login form collected, optionally
-#             suffixed with the login-by realm: "user@radius". The realm
-#             identifies the router, not the subscriber.
-#    PPPoE    the customer dials with the username they were given. There is no
-#             realm, and none should be invented.
+#    1. Which tenant does this packet belong to?
+#    2. May this subscriber in?
+#    3. At what speed, with what session limit, until when?
 #
-#  Both are normalised to one lookup key. Anything that matches neither shape is
-#  rejected BEFORE any database call. A permissive LIKE here would let a crafted
-#  username read another subscriber's speed limit, so the filter is deliberate.
+#  All three come from ISPFlow's own tables, so a payment, a suspension or a
+#  package change takes effect on the next authentication with nobody touching
+#  the router.
+#
+#  ── Tenant resolution ────────────────────────────────────────────────────────
+#  The router is identified by Called-Station-Id and resolved against radius_nas
+#  in the SQL query. An unregistered router yields no row, so the request is
+#  rejected before any subscriber is considered. That is the isolation boundary:
+#  the router's identity, not the username, decides whose customers are in play.
+#
+#  ── Username normalisation ──────────────────────────────────────────────────
+#  HotSpot presents "user@radius" (the realm identifies the router, not the
+#  subscriber); PPPoE presents the bare username. Both normalise to one key.
+#  Anything matching neither shape is rejected BEFORE any database call.
 #
 #  ── Data sources ────────────────────────────────────────────────────────────
-#
-#    service_accounts   the login credential, its status and its expiry
-#    clients            the billing customer
-#    plans              the package and its speeds
-#
-#  The tenant is never taken from the request. It comes from the service account
-#  row, so one ISP's subscribers can never be read through another's RADIUS server.
+#    radius_nas        the router -> tenant trust anchor
+#    service_accounts  the login credential, its status and its expiry
+#    radius_accounts   simultaneous-device limit
+#    plans             the package and its speeds
 # =============================================================================
 
 update control {
@@ -41,7 +50,7 @@ update control {
 }
 
 # HotSpot realm stripping. Kept before the character filter so "user@radius"
-# is reduced to "user" and the filter below sees a clean value.
+# becomes "user" and the filter below sees a clean value.
 if ("%{NETISP::LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
     update control {
         &NETISP::LookupKey := "%{1}"
@@ -50,26 +59,83 @@ if ("%{NETISP::LookupKey}" =~ /^(.+)@[A-Za-z0-9.-]+$/) {
 
 # Reject anything that is not a plausible subscriber name before touching the
 # database. HotSpot allows arbitrary characters in the login field, so this is
-# the only place they are filtered.
-if (!"%{NETISP::LookupKey}" =~ /^[A-Za-z0-9._-]{1,64}$/) {
+# the only place they are filtered. A permissive LIKE here would let a crafted
+# username read another subscriber's rate limit.
+#
+# NB the character class is NOT written with a {1,64} quantifier. FreeRADIUS
+# unlang parses `{` as the start of a section, so `/^[A-Za-z0-9._-]{1,64}$/`
+# silently opens a block and the closing `}` terminates the enclosing
+# `authorize` section early. The symptom is a parse error far below this line,
+# on the next statement: "Parse error after sql_load_accounts: unexpected
+# token '('". Length is therefore bounded with a separate comparison.
+if (!"%{NETISP::LookupKey}" =~ /^[A-Za-z0-9._-]+$/) {
     update control {
         &Auth-Type := Reject
+        &Auth-Error := "NETISP: malformed username"
     }
     reject
 }
 
-# ── Load the subscriber ──────────────────────────────────────────────────────
-#
-# One row per (isp_id, username) is guaranteed unique by a database
-# constraint, so this can never return two candidates.
-sql_load_accounts()
-
-if (!ok) {
-    # No such subscriber. This is the single most common failure for a new
-    # customer whose provisioning job has not run yet, so the error says so.
+if (("%{NETISP::LookupKey}" =~ /^.{65,}$/)) {
     update control {
         &Auth-Type := Reject
-        &Auth-Error := "NETISP: no service account for this username"
+        &Auth-Error := "NETISP: username too long"
+    }
+    reject
+}
+
+# An unregistered router is rejected here. The query joins radius_nas, so an
+# unknown Called-Station-Id returns nothing and `ok` is false.
+if ("%{Called-Station-Id}" == "") {
+    update control {
+        &Auth-Type := Reject
+        &Auth-Error := "NETISP: no NAS identity"
+    }
+    reject
+}
+# ── Load the subscriber, scoped to the tenant that sent the packet ────────────
+#
+# sql_query() is used explicitly rather than sql_load_accounts().
+#
+# Three parser constraints, all found by running `freeradius -XC` against
+# 3.2.5, and each reported far from its actual cause:
+#
+#  1. sql_load_accounts() resolves as a SECTION name here, not a function:
+#       Parse error after "sql_load_accounts": unexpected token "("
+#
+#  2. sql_query() takes ONE argument in FreeRADIUS 3 -- the query name. The
+#     two-argument sql_query(session-key, query-name) form is FreeRADIUS 2:
+#       Parse error in condition ... "^ Unexpected start of string"
+#
+#  3. A module function's RETURN VALUE cannot be compared with `==` inside the
+#     parentheses of an `if`:
+#       if (sql_query("name") == ok) { }   ->  "Parse error in condition"
+#                                            "^" pointing at the `==`
+#     unlang exposes the result through the `ok` variable instead, so the call
+#     is made as a statement and `ok` is read afterwards. This is the classic
+#     FreeRADIUS idiom and is what the code below does.
+#
+# Every returned column is loaded into the control list, which is what the
+# policy reads back as %{NETISP::...}.
+sql_query("ISPFlow/Authorize/LoadAccount")
+
+if ("%{NETISP::Loaded}" != "yes") {
+    # The single most common failure for a new customer whose provisioning job
+    # has not run yet, so the error says exactly that.
+    update control {
+        &Auth-Type := Reject
+        &Auth-Error := "NETISP: no service account for this username on this router"
+    }
+    reject
+}
+
+# A subscriber with no provisioned password must never be admitted. The query
+# returns an empty Cleartext-Password in that case, and letting an empty password
+# through would be an authentication bypass, not a failure.
+if ("%{NETISP::CleartextPassword}" == "") {
+    update control {
+        &Auth-Type := Reject
+        &Auth-Error := "NETISP: account has no password provisioned"
     }
     reject
 }
@@ -118,36 +184,30 @@ if ("%{NETISP::ExpiresAt}" != "" && "%{NETISP::ExpiresAt}" < "%{NOW}") {
     reject
 }
 
-# ── Session limits ───────────────────────────────────────────────────────────
+# ── Reply attributes ─────────────────────────────────────────────────────────
 #
-# A radius_accounts row means "we have told the router about this subscriber at
-# least once". Its sync_state says whether that actually reached the router, which
-# is what the worker reports back after applying it.
+# The query's `cleartextPassword` column lands in control as Cleartext-Password,
+# which is what lets FreeRADIUS verify CHAP and MS-CHAP against the stored
+# ciphertext. It is never copied into a reply attribute and never logged: the
+# radiusd.conf log block sets auth, badpass and goodpass to no.
 #
-# The values applied here come from the plan, not from the account, so an
-# un-provisioned subscriber still gets the right speed on first login — which is
-# what stops a brand new customer being locked out at a default speed.
-update control {
-    &Session-Timeout := 86400
-    &Idle-Timeout := 900
-    &Auth-Type := Accept
-}
-
-update reply {
-    &Mikrotik-Rate-Limit := "%{NETISP::RateLimit}"
-    &Mikrotik-Expires := "%{NETISP::ExpiresAt}"
+# MikroTik applies the rate limit to the session from the reply. Only a hotspot
+# plan produces one; PPPoE and fibre carry their speed on the interface, and
+# sending a rate limit there would have the router shape its own WAN.
+if ("%{NETISP::RateLimit}" != "") {
+    update reply {
+        Mikrotik-Rate-Limit := "%{NETISP::RateLimit}"
+    }
 }
 
 if ("%{NETISP::SimultaneousUse}" != "") {
     update reply {
-        &Mikrotik-Simultaneous-Limit := "%{NETISP::SimultaneousUse}"
+        Mikrotik-Simultaneous-Limit := "%{NETISP::SimultaneousUse}"
     }
 }
 
-# Bind the session to the address the router saw, when one is known. This is what
-# stops a captured credential being replayed from a different machine.
-if ("%{NETISP::CalledStationId}" != "") {
-    update control {
-        &NETISP::FramedIp := "%{NETISP::CalledStationId}"
+if ("%{NETISP::ExpiresAt}" != "") {
+    update reply {
+        Mikrotik-Expires := "%{NETISP::ExpiresAt}"
     }
 }

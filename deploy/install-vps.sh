@@ -85,7 +85,16 @@ install_packages() {
   apt-get install -y --no-install-recommends \
     ca-certificates curl gnupg \
     freeradius freeradius-common \
+    freeradius-postgresql \
     wireguard-tools iproute2 logrotate
+  # freeradius-postgresql is NOT optional and NOT included in `freeradius`.
+  # It ships rlm_sql_pgsql.so, the driver this deployment uses. Without it
+  # `driver = "pgsql"` cannot be loaded, the sql module silently fails to
+  # instantiate, and NONE of its functions are registered -- so every
+  # sql_query()/sql_load_accounts() in the policy becomes an unknown symbol and
+  # FreeRADIUS refuses to start with, misleadingly:
+  #   Parse error after "sql_query": unexpected token "("
+  # which reads like a policy syntax error and is not one.
   log "FreeRADIUS $(dpkg-query -W -f='${Version}' freeradius 2>/dev/null || echo unknown)"
 }
 
@@ -204,41 +213,163 @@ install_freeradius() {
   log "Installing FreeRADIUS configuration"
   install -d -m 0755 "$dir/mods-available/netisp"
 
-  # Two small modules rather than a rewrite of FreeRADIUS: authorize answers
-  # "may this subscriber in, and at what speed", post-auth closes the accounting
-  # loop back to the platform. Both read the platform's own tables.
-  install -m 0644 "$SCRIPT_DIR/freeradius/authorize" "$dir/mods-available/netisp/authorize"
-  install -m 0644 "$SCRIPT_DIR/freeradius/post-auth"   "$dir/mods-available/netisp/post-auth"
-  # The prepared statements the modules call. Installed under modconfdir rather
-  # than next to sql.conf, because sql.conf references it by that path.
-  install -m 0644 "$SCRIPT_DIR/freeradius/queries.conf" "$dir/mods-available/netisp/queries.conf"
-
-  # symlink -f so a re-run replaces a stale copy rather than failing.
-  ln -sfn ../mods-available/netisp/authorize "$dir/mods-enabled/netisp-authorize"
-  ln -sfn ../mods-available/netisp/post-auth   "$dir/mods-enabled/netisp-post-auth"
+  # The prepared statements the policy calls.
+  install -m 0644 "$SCRIPT_DIR/freeradius/queries.conf" \
+    "$dir/mods-available/netisp/queries.conf"
 
   install -m 0644 "$SCRIPT_DIR/freeradius/clients.conf" "$dir/clients.conf"
   install -m 0640 "$SCRIPT_DIR/freeradius/sql.conf"    "$dir/sql.conf"
-  install -m 0644 "$SCRIPT_DIR/freeradius/radiusd.conf" "$dir/radiusd.conf"
-  install -m 0644 "$SCRIPT_DIR/freeradius/dictionary.netisp" \
-    /usr/share/freeradius/dictionary.netisp
 
-  # Enable both in the default virtual server, once. grep guards the re-run.
-  if ! grep -q 'netisp-authorize' "$dir/sites-available/default"; then
-    sed -i '1i netisp-authorize\nnetisp-post-auth' "$dir/sites-available/default"
+  # The dictionary goes in the confdir itself, NOT /usr/share/freeradius.
+  # `$INCLUDE dictionary.netisp` in $dir/dictionary resolves relative to $dir, so
+  # a copy under /usr/share is never found and FreeRADIUS aborts at startup with
+  #   Couldn't open dictionary ".../3.0/dictionary.netisp": No such file
+  install -m 0644 -o root -g freerad "$SCRIPT_DIR/freeradius/dictionary.netisp" \
+    "$dir/dictionary.netisp"
+
+  # radiusd.conf is NOT replaced.
+  #
+  # An earlier version installed the repository's radiusd.conf over the
+  # packaged one. That file is a partial config: it has no `modules { }`
+  # section, no `$INCLUDE sites-enabled/`, and it references modules as
+  # ${modconfdir}/name, which FreeRADIUS 3.2.5 does not expand ("Parse error
+  # after modconfdir"). The result was a server that started, bound UDP 1812,
+  # and looked healthy while running no authorize section, no accounting
+  # listener and no modules at all.
+  #
+  # The packaged radiusd.conf is correct and complete. Only targeted edits are
+  # applied, and only the ones that matter for an ISP deployment. Anything the
+  # repo genuinely needs to change goes in a drop-in, not in a wholesale
+  # replacement.
+  log "Applying ISPFlow settings to the packaged radiusd.conf"
+  if [[ ! -f "$dir/radiusd.conf" ]]; then
+    die "radiusd.conf missing; is the freeradius package installed?"
   fi
+  # Passwords must never be logged, whatever the default is.
+  sed -i 's/^\([[:space:]]*\)auth_goodpass[[:space:]]*=.*/\1auth_goodpass = no/' \
+    "$dir/radiusd.conf"
+  sed -i 's/^\([[:space:]]*\)auth_badpass[[:space:]]*=.*/\1auth_badpass = no/' \
+    "$dir/radiusd.conf"
+  # RouterOS 6 on some hardware advertises IPv6 without a usable WAN address,
+  # which produces accepts that silently drop their replies.
+  sed -i 's/^\([[:space:]]*\)ipv6[[:space:]]*=.*/\1ipv6 = no/' "$dir/radiusd.conf"
+
+  # The dictionaries must be referenced or the attributes are silently dropped.
+  #
+  # On a stock install both files exist on disk and NOTHING references them, so
+  # every Mikrotik-* attribute is treated as unknown and never appears in an
+  # Access-Accept -- the usual reason "Mikrotik-Rate-Limit works in the lab but
+  # not in production".
+  #
+  # dictionary.mikrotik is FreeRADIUS's own, shipped in /usr/share/freeradius.
+  # `$INCLUDE` resolves relative to the file that contains it, so the bare name
+  # is looked for in /etc/freeradius/3.0/ where it does not exist. The absolute
+  # path is required. It must not be copied or extended: redeclaring
+  # Mikrotik-Rate-Limit aborts startup with "Duplicate attribute name".
+  # Normalise the dictionary's INCLUDE lines with Python rather than chained
+  # `sed`. Chained sed with nested quoting is how a stray line containing just
+  # `d` ended up in this file, which FreeRADIUS then rejected with
+  # "dictionary[2]: invalid entry".
+  log "Referencing dictionary.mikrotik and dictionary.netisp"
+  install -m 0644 -o root -g freerad /usr/share/freeradius/dictionary.mikrotik \
+    "$dir/dictionary.mikrotik"
+  python3 - "$dir" <<'PYEOF'
+import os, re, sys
+confdir = sys.argv[1]
+p = os.path.join(confdir, 'dictionary')
+lines = open(p, encoding='utf-8', errors='replace').read().split('\n')
+
+wanted = ['$INCLUDE dictionary.mikrotik', '$INCLUDE dictionary.netisp']
+out = []
+for line in lines:
+    st = line.strip()
+    # Drop any previous attempt at these includes, in any form, plus debris
+    # from an earlier failed edit.
+    if st in wanted:
+        continue
+    if 'dictionary.mikrotik' in st or 'dictionary.netisp' in st:
+        continue
+    if st == 'd':
+        continue
+    out.append(line)
+
+out = wanted + out
+open(p, 'w', encoding='utf-8').write('\n'.join(out))
+print('  dictionary includes normalised')
+PYEOF
+  if ! grep -q 'dictionary.netisp' "$dir/dictionary"; then
+    log "Referencing dictionary.netisp"
+    sed -i '1i $INCLUDE dictionary.netisp' "$dir/dictionary"
+  fi
+
+  # ── Inline the policy ───────────────────────────────────────────────────────
+  #
+  # The netisp policy is spliced INTO the site's own sections, not loaded as a
+  # module. FreeRADIUS 3.2.5 rejects a top-level `if` in every other context,
+  # each verified on the host:
+  #
+  #     mods-enabled/netisp-authorize -> "Invalid location for 'if'"
+  #     policy.d/netisp-authorize     -> "Invalid location for 'if'"
+  #     $INCLUDE sites-available/...  -> "Invalid location for 'if'"
+  #
+  # A module file is instantiated, and a policy.d or $INCLUDEd file is parsed as
+  # a standalone unit; none of them is a site section, and `if` is only valid
+  # inside one.
+  log "Inlining ISPFlow policy into the site"
+  python3 - "$dir" "$SCRIPT_DIR" <<'PYEOF'
+import os, re, sys
+confdir, srcdir = sys.argv[1], sys.argv[2]
+site = os.path.join(confdir, 'sites-available', 'default')
+
+BEGIN = '# >>> netisp inline policy'
+END = '# <<< netisp inline policy'
+
+def strip_blocks(text):
+    """Remove every previously-inserted block, whole, before inserting again.
+
+    Stripping only the BEGIN marker is not enough: the body survives and the next
+    insert duplicates it. On a re-run that produced a dozen copies of the same
+    policy in one section and every subsequent statement failed to parse.
+    """
+    while BEGIN in text:
+        i = text.index(BEGIN)
+        j = text.index(END, i) + len(END)
+        text = (text[:i] + text[j:]).strip('\n')
+    # Debris from earlier failed edits.
+    text = '\n'.join(l for l in text.split('\n') if l.strip() != 'd')
+    return text
+
+def insert(text, section, policy):
+    marker = '\n%s {' % section
+    idx = text.find(marker)
+    if idx < 0:
+        raise SystemExit('site has no %s section' % section)
+    brace = text.find('{', idx) + 1
+    block = '\n\t%s\n%s\n\t%s\n' % (BEGIN, policy.rstrip(), END)
+    return text[:brace] + block + text[brace:]
+
+text = strip_blocks(open(site, encoding='utf-8', errors='replace').read())
+
+for section, fname in (('authorize', 'authorize'),
+                       ('post-auth', 'session-open'),
+                       ('accounting', 'post-auth')):
+    policy = open(os.path.join(srcdir, 'freeradius', fname),
+                  encoding='utf-8', errors='replace').read()
+    text = insert(text, section, policy)
+
+open(site, 'w', encoding='utf-8').write(text)
+n = text.count(BEGIN)
+print('  netisp policy inlined into %d sections (authorize, post-auth, accounting)'
+      % n)
+if n != 3:
+    raise SystemExit('expected exactly 3 inlined blocks, found %d' % n)
+PYEOF
 
   # Link every module radiusd.conf references.
   #
-  # radiusd.conf names them as ${modconfdir}/<name>, and ${modconfdir} is
-  # mods-enabled, so a name that exists in mods-available but not in
-  # mods-enabled is a dangling reference. FreeRADIUS treats that as a hard
-  # parse error and refuses to start at all:
-  #
-  #   radiusd.conf[146]: Parse error after "modconfdir": unexpected token "}"
-  #
-  # Ubuntu enables most modules by default but NOT cache, so an install that
-  # only links sql/pap/chap/mschap leaves the service permanently down.
+  # A name present in mods-available but missing from mods-enabled is a dangling
+  # reference, and FreeRADIUS treats that as a hard parse error that stops the
+  # service starting. Ubuntu enables most by default but NOT cache.
   log "Linking RADIUS modules"
   local m
   for m in cache pap chap mschap sql files; do
@@ -249,8 +380,54 @@ install_freeradius() {
     fi
   done
 
-  warn "Edit $dir/sql.conf: set readall_group_file and the database"
-  warn "connection to match your Supabase Postgres instance."
+  # The sql module config is REPLACED with the minimal form that defers to
+  # sql.conf.
+  #
+  # The packaged mods-available/sql is a fully populated sample carrying
+  #   driver = "rlm_sql_null"
+  #   sqlite { ... }
+  # and it never reads sql.conf at all. The database credentials therefore never
+  # reach the module: it runs on the null driver, and the sql functions the
+  # authorize policy calls are not registered, which is what produced
+  #   Parse error after "sql_load_accounts": unexpected token "("
+  # The two-line form below is the documented way to point the module at the
+  # real configuration.
+  log "Pointing the sql module at sql.conf"
+  # Written with python rather than a heredoc so this function contains no line
+  # beginning with `}`, which breaks tools that extract it by brace matching.
+  #
+  # The path is LITERAL. FreeRADIUS 3.2.5 does not expand ${confdir} in a module
+  # reference -- the same limitation that makes ${modconfdir}/name unusable in
+  # radiusd.conf -- and an unexpanded variable silently leaves the module with no
+  # configuration, so it never instantiates and none of its functions are
+  # registered.
+  python3 - "$dir" <<'PYEOF'
+import os, sys
+confdir = sys.argv[1]
+body = """# NETPID: minimal sql module configuration.
+#
+# Everything real lives in sql.conf, installed mode 0640 because it holds the
+# database password and the RADIUS host key. This file itself carries no
+# credentials and can stay world-readable.
+#
+# The path below is deliberately literal rather than ${confdir}/sql.conf.
+# FreeRADIUS 3.2.5 does not expand variables in a module reference; an
+# unexpanded path leaves the module unconfigured, it never instantiates, and
+# every sql function the policy calls becomes an unknown symbol.
+sql {
+    sqlconf = %s/sql.conf
+}
+""" % confdir
+d = os.path.join(confdir, 'mods-available', 'netisp')
+os.makedirs(d, exist_ok=True)
+open(os.path.join(d, 'sql-module'), 'w', encoding='utf-8').write(body)
+PYEOF
+  # Replace the symlink with this file so `$INCLUDE mods-enabled/` picks it up.
+  rm -f "$dir/mods-enabled/sql"
+  install -m 0644 -o root -g freerad "$dir/mods-available/netisp/sql-module" \
+    "$dir/mods-enabled/sql"
+
+  warn "Edit $dir/sql.conf: set the database connection and the RADIUS host key."
 }
 
 configure_firewall() {
