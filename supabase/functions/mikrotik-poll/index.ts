@@ -9,20 +9,54 @@
 //  "No data". A router that cannot be reached is marked offline with the
 //  failure reason recorded - it is never silently left looking healthy.
 //
-//  Requires the service role. It is invoked by pg_cron, not from the browser.
+//  Requires the service role. It is invoked by pg_cron, not from the browser,
+//  and it authenticates the caller itself against the service-role key before
+//  reading or writing anything - see isAuthorised() below for why.
 //
 //  Deploy:  supabase functions deploy mikrotik-poll --no-verify-jwt
+//           (--no-verify-jwt is required for pg_cron, which has no user JWT;
+//            the function then enforces the service-role bearer token itself)
 // =============================================================================
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
   listHotspotUsers, readTelemetry, RouterError, type RouterCredentials,
 } from '../_shared/mikrotik.ts'
 import { decryptSecret } from '../_shared/secrets.ts'
+import { isAuthorised } from '../_shared/bearer-auth.ts'
 
 /** One bad router must not abort the sweep. */
 async function settle<T>(p: Promise<T>, fallback: T): Promise<T> {
   try { return await p } catch { return fallback }
+}
+
+/**
+ * The tokens this function will accept.
+ *
+ * Sources, in order:
+ *   1. the service credentials Supabase injected into this function
+ *   2. the token stored in public.poller_config, which is what the pg_cron
+ *      job actually sends
+ *
+ * (2) matters because the injected key and the scheduled caller's key are not
+ * guaranteed to be the same VALUE. Supabase exposes a legacy JWT on some
+ * projects and an sb_secret_... on others, and poller_config holds whichever
+ * one was stored when the schedule was set up. Comparing only against the
+ * environment fails closed but invisibly: the poller returns 401 forever,
+ * nobody notices, and every router slowly appears offline.
+ *
+ * poller_config has RLS enabled with no policies, so it is readable only by
+ * the service role - which is this function.
+ */
+async function authorised(req: Request, admin: SupabaseClient): Promise<boolean> {
+  const header = req.headers.get('authorization')
+  if (isAuthorised(header, [
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+    Deno.env.get('SUPABASE_SECRET_KEY'),
+  ])) return true
+  const { data } = await admin
+    .from('poller_config').select('service_key').limit(1).maybeSingle()
+  return isAuthorised(header, [data?.service_key])
 }
 
 Deno.serve(async (req) => {
@@ -31,6 +65,20 @@ Deno.serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     { auth: { persistSession: false } },
   )
+
+  // Authenticate BEFORE reading or writing anything. This function is deployed
+  // with --no-verify-jwt because pg_cron has no user session to present, so the
+  // gateway check is unavailable and the caller is authenticated here instead.
+  //
+  // Without this an anonymous GET swept every router in the platform, decrypting
+  // each stored router password, and wrote to nodes, sessions and
+  // router_poll_runs. There is no legitimate unauthenticated caller.
+  if (!(await authorised(req, admin))) {
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized' }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
 
   const summary: Array<{ node: string; ok: boolean; error?: string }> = []
 

@@ -720,6 +720,128 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     }
   })
 
+  it('exposes no secret to the browser, by construction', () => {
+    const config = code('src', 'lib', 'config.ts')
+    // The browser bundle may carry the anon key and nothing else. Vite inlines
+    // every VITE_* value verbatim, so a secret smuggled into one of these names
+    // would be published to every visitor.
+    const used = [...config.matchAll(/import\.meta\.env\.([A-Z_0-9]+)/g)]
+      .map((m) => m[1])
+    expect(used.length).toBeGreaterThan(0)
+    for (const name of used) {
+      expect(
+        /^VITE_(SUPABASE_URL|SUPABASE_ANON_KEY|APP_NAME|APP_URL|SUPER_ADMIN_EMAILS)$/.test(name),
+        `${name} is inlined into the public bundle and must not be a secret`,
+      ).toBe(true)
+    }
+    // Explicitly: nothing server-only may be read from import.meta.env.
+    for (const secret of [
+      'SUPABASE_SERVICE_ROLE_KEY', 'ROUTER_CREDENTIALS_KEY',
+      'APP_ENCRYPTION_KEY', 'HASHBACK',
+    ]) {
+      expect(config).not.toMatch(new RegExp(`import\\.meta\\.env\\.[A-Z_]*${secret}`))
+    }
+    // The only credentials the client ever holds are the anon key, and the
+    // project decides what that may do through RLS.
+    expect(config).toMatch(/VITE_SUPABASE_ANON_KEY/)
+    expect(config).not.toMatch(/service[_-]?role/i)
+  })
+
+  it('never names a server-only secret in application code', () => {
+    // These may appear in tests that assert they are ABSENT, never in the
+    // application itself. A stray read in src/ would be a real leak.
+    const appFiles = [...new Set(
+      (code('src', 'lib', 'config.ts') ? ['src/lib/config.ts'] : []),
+    )]
+    expect(appFiles).toEqual(['src/lib/config.ts'])
+    const client = read('src', 'lib', 'config.ts')
+    expect(client).not.toMatch(/SERVICE_ROLE|ROUTER_CREDENTIALS_KEY|APP_ENCRYPTION_KEY/)
+  })
+
+  it('never leaves an Edge Function that bypasses the JWT gateway unauthenticated',
+    async () => {
+      const { readdirSync, readFileSync } = await import('node:fs')
+      const { join } = await import('node:path')
+      const dir = join(ROOT, 'supabase', 'functions')
+      const offenders: string[] = []
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        if (!name.isDirectory()) continue
+        const entry = join(dir, name.name, 'index.ts')
+        if (!existsSync(entry)) continue
+        const src = readFileSync(entry, 'utf8')
+        // --no-verify-jwt is legitimate for pg_cron (no user session) and for
+        // the provider webhook (HMAC, not a session). The function must then
+        // authenticate the caller ITSELF, in one of the shapes this codebase
+        // actually uses: a bearer-token check, the HMAC verifier, or being a
+        // retired stub that does no work at all.
+        const noJwt = /deploy[^`]*--no-verify-jwt/.test(src)
+        const guard = [
+          /isAuthorised\(/,                                  // bearer vs secret
+          /auth\.getUser\(/,                                // validate the JWT
+          /verifyWebhookRequest\(|verifyWebhookSignature\(/,  // provider HMAC
+          /410,/,                                            // inert cutover stub
+        ].some((re) => re.test(src))
+        if (noJwt && !guard) offenders.push(name.name)
+      }
+      expect(offenders, 'no-verify-jwt without an in-function auth check')
+        .toEqual([])
+    })
+
+  it('authenticates the telemetry poller, which was open to the internet', () => {
+    const poll = code('supabase', 'functions', 'mikrotik-poll', 'index.ts')
+    // Verified before the fix: an anonymous GET returned HTTP 200 and a summary
+    // of every router in the platform, having decrypted each stored password.
+    expect(poll).toMatch(/isAuthorised/)
+    // The check must run inside the handler, before any read or write.
+    const serve = poll.slice(poll.indexOf('Deno.serve'))
+    const guardAt = serve.search(/if \(!\(await authorised\(req, admin\)\)\)/)
+    const readsAt = serve.search(/from\('nodes'\)/)
+    expect(guardAt, 'the poller must authenticate the caller').toBeGreaterThan(-1)
+    expect(readsAt).toBeGreaterThan(-1)
+    expect(guardAt, 'the guard must precede the first read')
+      .toBeLessThan(readsAt)
+    // 401, never a 200 with a sweep summary.
+    expect(poll).toMatch(/status:\s*401/)
+    // Compared in constant time, because it is a secret. The compare now lives
+    // in the shared module so it can be unit tested under Node.
+    expect(read('supabase', 'functions', '_shared', 'bearer-auth.ts'))
+      .toMatch(/timingSafeEqual/)
+    expect(code('supabase', 'functions', '_shared', 'bearer-auth.ts'))
+      .not.toMatch(/\?\.find|indexOf|=== expected/i)
+    // The scheduled caller must still be accepted. Comparing only against the
+    // injected service key broke pg_cron silently: the poller returned 401
+    // forever and every router slowly appeared offline.
+    expect(poll).toMatch(/poller_config/)
+  })
+
+  it('never puts a server-only secret into the browser bundle', () => {
+    const config = read('src', 'lib', 'config.ts')
+    expect(config).not.toMatch(/SERVICE_ROLE|ROUTER_CREDENTIALS_KEY|APP_ENCRYPTION_KEY/)
+    // The only credential the client holds is the anon key, and RLS decides what
+    // that may do - which is why the RLS tests above are not optional.
+    expect(config).toMatch(/VITE_SUPABASE_ANON_KEY/)
+  })
+
+  it('ships a working production build', () => {
+    // Vercel builds `npm run build`, which is tsc --noEmit && vite build. A
+    // broken build is a deployment failure, so the contract is asserted here.
+    const pkg = JSON.parse(read('package.json'))
+    expect(pkg.scripts.build).toBe('tsc --noEmit && vite build')
+    // The framework is Vite, not Next: the Vercel output must match.
+    const vercel = JSON.parse(read('vercel.json'))
+    expect(vercel.outputDirectory).toBe('dist')
+    expect(vercel.buildCommand).toBe('npm run build')
+    // SPA rewrites, so a deep link like /app/settings/payments resolves.
+    expect(JSON.stringify(vercel.rewrites)).toMatch(/index\.html/)
+  })
+
+  it('does not commit a filled-in environment file', () => {
+    // .env.local holds the real anon key and must never be tracked.
+    const ignored = read('.gitignore')
+    expect(ignored).toMatch(/^\.env\.local/m)
+    expect(ignored).toMatch(/^\.env\*?\.local/m)
+  })
+
   it('still serialises concurrent deliveries of the same webhook', () => {
     const sql = code(...GRANT.split('/'))
     expect(sql).toMatch(/for\s+update/i)
