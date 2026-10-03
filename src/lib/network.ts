@@ -333,61 +333,69 @@ export async function retryRouterJob(jobId: string): Promise<void> {
  * never received the request is worse than saying nothing at all.
  */
 export async function disconnectLiveSession(
-  sessionId: string,
+  acctSessionId: string,
 ): Promise<{ confirmed: boolean; status: string; detail: string }> {
   if (!IS_LIVE) {
     throw new NetworkError(
       'Disconnecting a session needs the network worker. Configure Supabase first.')
   }
   const sb = requireSupabase()
-  const { data: sessionRow } = await sb
-    .from('sessions')
-    .select('id, isp_id, node_id, mac_address, ip_address')
-    .eq('id', sessionId)
-    .single()
-  const session = sessionRow as {
-    id: string; isp_id: string; node_id: string | null
-    mac_address: string | null; ip_address: string | null
-  } | null
-  if (!session) throw new NetworkError('That session no longer exists.')
-  if (!session.node_id) {
-    throw new NetworkError(
-      'That session is not attached to a router, so there is nothing to ask.')
+
+  // Everything security-relevant happens server-side in
+  // request_session_disconnect(): it resolves the ISP from the caller's own
+  // session, refuses a session belonging to another tenant, refuses one that is
+  // already closed, resolves the router itself through radius_nas, and only then
+  // enqueues the worker's disconnect job.
+  //
+  // The browser therefore supplies exactly one value - the RADIUS session id it
+  // was shown - and cannot name an isp_id, a node_id or a router. None of that
+  // is re-implemented here, because re-implementing it in the client is how it
+  // drifts out of step with the rules the database actually enforces.
+  const { data, error } = await sb.rpc('request_session_disconnect', {
+    p_acct_session_id: acctSessionId,
+  })
+  if (error) throw new NetworkError(error.message)
+
+  const result = (data ?? {}) as {
+    ok?: boolean
+    already_closed?: boolean
+    command_id?: string | null
+    router_notified?: boolean
+    detail?: string
   }
 
-  const { data: commandRow, error } = await sb
-    .from('router_session_commands')
-    .insert({
-      isp_id: session.isp_id,
-      node_id: session.node_id,
-      session_id: sessionId,
-      command: 'disconnect',
-      mac_address: session.mac_address,
-      ip_address: session.ip_address,
-      status: 'pending',
-    })
-    .select('id')
-    .single()
-  if (error) throw new NetworkError(error.message)
-  const commandId = (commandRow as { id: string }).id
+  // Already closed: idempotent, and not an error. A repeated disconnect must
+  // never queue a second job or tell the customer they were cut off twice.
+  if (result.already_closed) {
+    return {
+      confirmed: false,
+      status: 'already_closed',
+      detail: 'That session had already ended.',
+    }
+  }
 
-  const { error: jobError } = await sb.rpc('enqueue_router_job', {
-    p_node_id: session.node_id,
-    p_kind: 'disconnect',
-    p_payload: { command_id: commandId, mac_address: session.mac_address },
-    p_priority: 1,
-    p_max_attempts: 3,
-  })
-  if (jobError) throw new NetworkError(jobError.message)
+  // The database is closed either way. Whether the ROUTER has been told is a
+  // separate fact and the UI must never conflate the two.
+  if (result.router_notified !== true || !result.command_id) {
+    return {
+      confirmed: false,
+      status: 'closed_without_router',
+      detail: result.detail
+        ?? 'Closed in the system, but no router is attached to this session, '
+        + 'so nothing was queued.',
+    }
+  }
 
+  // Poll the command row the worker completes, so the panel shows the real
+  // outcome rather than assuming success at queue time.
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((r) => setTimeout(r, 1500))
-    const { data } = await sb
+    const { data: cmd } = await sb
       .from('router_session_commands')
       .select('status, error')
-      .eq('id', commandId)
-      .single()
-    const row = data as { status: string; error: string | null } | null
+      .eq('id', result.command_id)
+      .maybeSingle()
+    const row = cmd as { status: string; error: string | null } | null
     if (row && row.status !== 'pending') {
       return {
         confirmed: row.status === 'confirmed',

@@ -868,9 +868,54 @@ export const fetchNodes = (): Promise<Node[]> =>
   tenantTable('nodes', { column: 'created_at', ascending: true },
     (ispId) => demo.loadDb().nodes.filter((n) => n.isp_id === ispId))
 
-export const fetchSessions = (): Promise<NetSession[]> =>
-  tenantTable('sessions', { column: 'started_at', ascending: false },
-    (ispId) => demo.loadDb().sessions.filter((s) => s.isp_id === ispId))
+/**
+ * Live network sessions, from radius_sessions.
+ *
+ * This used to read the `sessions` table. That table is Supabase's OAuth session
+ * store - browser refresh tokens - so the live-users panel was rendering rows
+ * that RADIUS never wrote, and a real customer session could never appear.
+ *
+ * radius_sessions is the only store of who is online. It is read through
+ * my_radius_sessions(), which resolves the ISP from the caller's session rather
+ * than from a parameter, so there is no isp_id a browser could supply to widen
+ * the query, and no second table is introduced.
+ */
+export async function fetchSessions(): Promise<NetSession[]> {
+  if (!IS_LIVE) {
+    const ispId = await tenantId()
+    return demo.loadDb().sessions.filter((s) => s.isp_id === ispId)
+  }
+  const sb = requireSupabase()
+  const { data, error } = await sb.rpc('my_radius_sessions', {
+    p_open_only: false, limit_rows: 200,
+  })
+  if (error) throw new DataError(error.message)
+
+  return ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    id: String(r.id),
+    isp_id: '',
+    node_id: (r.node_id as string | null) ?? null,
+    // radius_sessions has no MAC: RADIUS accounting does not carry one, and a
+    // guessed value would be a fabricated identifier for a live customer.
+    mac_address: null,
+    voucher_code: null,
+    ip_address: (r.ip_address as string | null) ?? null,
+    device_type: (r.service_type as string | null) ?? null,
+    // Bytes are reported by RADIUS in octets; the panel has always shown MiB.
+    downloaded_mb: Math.round(Number(r.output_octets ?? 0) / 1048576),
+    uploaded_mb: Math.round(Number(r.input_octets ?? 0) / 1048576),
+    started_at: String(r.started_at),
+    ended_at: (r.ended_at as string | null) ?? null,
+    username: (r.username as string | null) ?? null,
+    acct_session_id: (r.acct_session_id as string | null) ?? null,
+    router_name: (r.router_name as string | null) ?? null,
+    nas_identifier: (r.nas_identifier as string | null) ?? null,
+    duration_secs: (r.duration_secs as number | null) ?? null,
+    end_reason: (r.end_reason as string | null) ?? null,
+    is_active: Boolean(r.is_active),
+    can_disconnect: Boolean(r.can_disconnect),
+  }))
+}
 
 export const fetchTickets = (): Promise<Ticket[]> =>
   tenantTable('tickets', { column: 'created_at', ascending: false },

@@ -68,6 +68,13 @@ export interface SupportTicket {
 
 export interface ActiveSession {
   id: string;
+  /**
+   * The RADIUS account the session authenticated as. This is the identifier an
+   * ISP actually recognises; the MAC address is not carried by RADIUS accounting
+   * and is therefore null rather than invented.
+   */
+  username: string;
+  acctSessionId?: string | null;
   macAddress: string;
   ipAddress: string;
   voucherCode?: string;
@@ -76,6 +83,11 @@ export interface ActiveSession {
   uploadedMb: number;
   uptime: string;
   node: string;
+  /** True only when RADIUS says the session has not ended. */
+  isActive: boolean;
+  /** False for an ended session, so the UI can disable a pointless Kick. */
+  canDisconnect: boolean;
+  endReason?: string | null;
 }
 
 export interface NetworkNode {
@@ -153,11 +165,13 @@ export const INITIAL_TICKETS: SupportTicket[] = [
   }
 ];
 
+// Demo rows only. Live rows come from radius_sessions via my_radius_sessions(),
+// and a real RADIUS session carries no MAC address.
 export const INITIAL_SESSIONS: ActiveSession[] = [
-  { id: 's1', macAddress: 'A4:C3:F0:11:92:AA', ipAddress: '10.150.1.42', voucherCode: 'FAIBA-994X', deviceType: 'Apple iPhone 15 Pro', downloadedMb: 1420, uploadedMb: 245, uptime: '04h 22m', node: 'Node Bravo' },
-  { id: 's2', macAddress: '3C:D0:F8:74:B3:2E', ipAddress: '10.150.2.109', voucherCode: 'Simulated-MAC-Auth', deviceType: 'Samsung Galaxy S24 Ultra', downloadedMb: 850, uploadedMb: 90, uptime: '02h 11m', node: 'Node Alpha' },
-  { id: 's3', macAddress: 'E0:33:8E:A1:BC:05', ipAddress: '10.150.1.75', voucherCode: 'FAIBA-Temporary', deviceType: 'Dell XPS Laptop Windows 11', downloadedMb: 4500, uploadedMb: 1120, uptime: '08h 45m', node: 'Node Charlie' },
-  { id: 's4', macAddress: '48:2C:6A:FF:D2:88', ipAddress: '10.150.3.18', voucherCode: 'Direct-Promo', deviceType: 'Xiaomi Redmi Note 13', downloadedMb: 180, uploadedMb: 25, uptime: '00h 35m', node: 'Ultrafaiba Main Hub' }
+  { id: 's1', username: 'amina', macAddress: 'A4:C3:F0:11:92:AA', ipAddress: '10.150.1.42', voucherCode: 'FAIBA-994X', deviceType: 'Apple iPhone 15 Pro', downloadedMb: 1420, uploadedMb: 245, uptime: '04h 22m', node: 'Node Bravo', isActive: true, canDisconnect: true },
+  { id: 's2', username: 'kevinho', macAddress: '3C:D0:F8:74:B3:2E', ipAddress: '10.150.2.109', voucherCode: 'Simulated-MAC-Auth', deviceType: 'Samsung Galaxy S24 Ultra', downloadedMb: 850, uploadedMb: 90, uptime: '02h 11m', node: 'Node Alpha', isActive: true, canDisconnect: true },
+  { id: 's3', username: 'grace_m', macAddress: 'E0:33:8E:A1:BC:05', ipAddress: '10.150.1.75', voucherCode: 'FAIBA-Temporary', deviceType: 'Dell XPS Laptop Windows 11', downloadedMb: 4500, uploadedMb: 1120, uptime: '08h 45m', node: 'Node Charlie', isActive: true, canDisconnect: true },
+  { id: 's4', username: 'davidk', macAddress: '48:2C:6A:FF:D2:88', ipAddress: '10.150.3.18', voucherCode: 'Direct-Promo', deviceType: 'Xiaomi Redmi Note 13', downloadedMb: 180, uploadedMb: 25, uptime: '00h 35m', node: 'Ultrafaiba Main Hub', isActive: false, canDisconnect: false, endReason: 'acct-stop' }
 ];
 
 export const INITIAL_NODES: NetworkNode[] = [

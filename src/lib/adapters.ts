@@ -59,14 +59,26 @@ function fmtUptime(startIso: string, now = Date.now()): string {
 
 export const toSession = (s: PSession, nodes: PNode[]): ActiveSession => ({
   id: s.id,
-  macAddress: s.mac_address ?? '—',
+  // RADIUS accounting does not carry a MAC address. Showing a placeholder beats
+  // showing a fabricated hardware address for a real customer's session.
+  macAddress: s.mac_address ?? 'Not reported by RADIUS',
+  username: s.username ?? 'unknown',
+  acctSessionId: s.acct_session_id ?? null,
   ipAddress: s.ip_address ?? '—',
   voucherCode: s.voucher_code ?? undefined,
   deviceType: s.device_type ?? 'Unknown device',
   downloadedMb: Number(s.downloaded_mb),
   uploadedMb: Number(s.uploaded_mb),
   uptime: fmtUptime(s.started_at),
-  node: nodes.find((n) => n.id === s.node_id)?.name ?? 'Unknown node',
+  node: s.router_name
+    ?? nodes.find((n) => n.id === s.node_id)?.name
+    ?? s.nas_identifier
+    ?? 'Unknown router',
+  // Never inferred from the row existing: a router that died without sending
+  // Acct-Stop leaves an open row for a customer who is long gone.
+  isActive: s.is_active ?? s.ended_at === null,
+  canDisconnect: s.can_disconnect ?? s.ended_at === null,
+  endReason: s.end_reason ?? null,
 })
 
 const NODE_STATUS: Record<PNode['status'], NetworkNode['status']> = {

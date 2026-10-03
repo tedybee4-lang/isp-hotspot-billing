@@ -254,35 +254,57 @@ export default function AdminDashboard({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase tracking-wider text-[10px]">
-                <th className="p-3">MAC Lease Address</th>
+                <th className="p-3">Customer</th>
                 <th className="p-3">IP Address</th>
-                <th className="p-3">Authenticated Via</th>
-                <th className="p-3">Client Hardware OS</th>
-                <th className="p-3">Assigned Node</th>
+                <th className="p-3">Service</th>
+                <th className="p-3">Router</th>
+                <th className="p-3">Duration</th>
+                <th className="p-3">State</th>
                 <th className="p-3 text-right">Data Exchanged</th>
                 <th className="p-3 text-right">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-slate-700 font-mono text-[11px]">
               {sessions.map((s) => (
-                <tr key={s.id} className="hover:bg-slate-50/60">
-                  <td className="p-3 font-bold text-slate-900">{s.macAddress}</td>
+                <tr
+                key={s.id}
+                className={s.isActive ? 'hover:bg-slate-50/60' : 'opacity-50'}
+              >
+                  <td className="p-3 font-bold text-slate-900">{s.username}</td>
                   <td className="p-3 text-indigo-600">{s.ipAddress}</td>
-                  <td className="p-3 font-sans">
-                    <span className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[10px]">
-                      {s.voucherCode || 'Static IP Binding'}
-                    </span>
-                  </td>
                   <td className="p-3 font-sans text-slate-600 text-xs">{s.deviceType}</td>
                   <td className="p-3 font-sans text-xs text-slate-600">{s.node}</td>
+                  <td className="p-3 font-sans text-xs text-slate-600">{s.uptime}</td>
+                  <td className="p-3 font-sans text-xs">
+                    <span
+                      className={
+                        s.isActive
+                          ? 'bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded text-[10px] font-bold'
+                          : 'bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded text-[10px]'
+                      }
+                    >
+                      {s.isActive ? 'ONLINE' : (s.endReason ?? 'ENDED').toUpperCase()}
+                    </span>
+                  </td>
                   <td className="p-3 text-right text-slate-900 font-bold">
                     ⬇ {(s.downloadedMb / 1024).toFixed(2)} GB / ⬆ {(s.uploadedMb / 1024).toFixed(2)} GB
                   </td>
                   <td className="p-3 text-right font-sans">
+                    {/* Disabled for an ended session: the database already
+                        closed it, so there is nothing left to cut off. */}
                     <button
                       onClick={() => onKickSession(s.id)}
-                      className="text-rose-600 hover:text-white hover:bg-rose-600 p-1 rounded border border-rose-200 transition-all text-[11px] font-bold"
-                      title="Kick client instantly"
+                      disabled={!s.canDisconnect}
+                      className={
+                        s.canDisconnect
+                          ? 'text-rose-600 hover:text-white hover:bg-rose-600 p-1 rounded border border-rose-200 transition-all text-[11px] font-bold'
+                          : 'text-slate-300 p-1 rounded border border-slate-200 text-[11px] font-bold cursor-not-allowed'
+                      }
+                      title={
+                        s.canDisconnect
+                          ? 'Disconnect this customer'
+                          : 'This session has already ended'
+                      }
                     >
                       <LogOut className="w-3 h-3 inline mr-0.5" /> Kick
                     </button>

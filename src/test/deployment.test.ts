@@ -725,4 +725,169 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     expect(sql).toMatch(/for\s+update/i)
   })
 })
+
+/**
+ * The live-users panel used to read the `sessions` table, which is Supabase's
+ * OAuth session store. It therefore rendered rows RADIUS never wrote, and a real
+ * customer session could not appear at all. radius_sessions is the only store of
+ * who is online; these assert the read model and the tenant boundary around it.
+ */
+describe('live network sessions come from radius_sessions', () => {
+  const MODEL = 'supabase/migrations/20260101180000_my_radius_sessions.sql'
+  const RLS = 'supabase/migrations/20260101190000_enable_rls_on_network_tables.sql'
+
+  it('reads radius_sessions, never the OAuth sessions table', () => {
+    const sql = code(...MODEL.split('/'))
+    expect(sql).toMatch(/from\s+public\.radius_sessions\s+s/)
+    // No second store, and no fallback to the OAuth table.
+    expect(sql).not.toMatch(/from\s+public\.sessions\b/)
+  })
+
+  it('takes no isp_id a browser could supply to widen the query', () => {
+    const sql = code(...MODEL.split('/'))
+    // The ISP comes from auth.uid(). A parameter would be a tenant selector.
+    // Asserted on the signature and the body, not the whole file: the comment on
+    // the function deliberately says it "takes no isp_id".
+    const sig = sql.slice(sql.indexOf('create or replace function public.my_radius_sessions'))
+    const params = sig.slice(0, sig.indexOf('returns table'))
+    expect(params).not.toMatch(/p_isp_id/)
+    expect(sql).toMatch(/v_isp\s+uuid\s*:=\s*public\.current_isp_id\(\)/)
+  })
+
+  it('filters on the caller tenant', () => {
+    const sql = code(...MODEL.split('/'))
+    expect(sql).toMatch(/where\s+s\.isp_id\s*=\s*v_isp/)
+  })
+
+  it('reports a session active only when RADIUS says it has not ended', () => {
+    const sql = code(...MODEL.split('/'))
+    expect(sql).toMatch(/\(\s*s\.ended_at\s+is\s+null\s*\)\s+as\s+is_active/)
+    // The row existing is not evidence of presence: a router that dies without
+    // sending Acct-Stop leaves exactly such a row behind.
+    expect(sql).not.toMatch(/as\s+is_active[\s\S]{0,80}started_at\s*>\s*now\(\)/i)
+  })
+
+  it('computes duration from the session clock, so a closed one stops growing', () => {
+    const sql = code(...MODEL.split('/'))
+    expect(sql).toMatch(/now\(\)\s*-\s*s\.started_at/i)
+  })
+
+  it('never exposes a router credential', () => {
+    const sql = code(...MODEL.split('/'))
+    // Asserted against the function body: the migration's own prose documents
+    // that these columns exist and are deliberately not selected, so matching
+    // the comment would fail the test for the wrong reason.
+    const open = sql.indexOf('$$')
+    const body = sql.slice(open, sql.indexOf('$$', open + 2))
+    expect(body).not.toMatch(/password|secret|credential|api_key|encrypted/i)
+    // The router name comes from a join, never from a credential column.
+    expect(body).toMatch(/left join public\.nodes n on n\.id\s*=\s*s\.node_id/)
+  })
+
+  it('refuses rather than guessing when there is no ISP in scope', () => {
+    const sql = code(...MODEL.split('/'))
+    expect(sql).toMatch(/if\s+v_isp\s+is\s+null\s+then\s+raise\s+exception/)
+  })
+
+  it('is SECURITY DEFINER so the panel still reads it under RLS', () => {
+    const sql = code(...MODEL.split('/'))
+    expect(sql).toMatch(/security\s+definer/i)
+    expect(sql).toMatch(/grant\s+execute[\s\S]{0,200}to\s+authenticated/i)
+  })
+
+  it('has RLS enabled on the tables that were readable by everyone', () => {
+    const sql = code(...RLS.split('/'))
+    for (const t of ['radius_sessions', 'radius_nas', 'platform_admins', 'platform_settings']) {
+      expect(sql, `${t} not covered`).toContain(`alter table public.${t} enable row level security`)
+    }
+  })
+
+  it('scopes session and router reads to the owning tenant', () => {
+    const sql = code(...RLS.split('/'))
+    expect(sql).toMatch(/using\s*\(\s*isp_id\s*=\s*public\.current_isp_id\(\)/)
+  })
+
+  it('reserves platform tables for super admins only', () => {
+    const sql = code(...RLS.split('/'))
+    const admins = sql.slice(sql.indexOf('platform_admins enable'))
+    expect(admins).toMatch(/using\s*\(\s*public\.is_super_admin\(\)\s*\)/)
+    const settings = sql.slice(sql.indexOf('platform_settings enable'))
+    expect(settings).toMatch(/using\s*\(\s*public\.is_super_admin\(\)\s*\)/)
+  })
+
+  it('adds no browser write path to the session record', () => {
+    const sql = code(...RLS.split('/'))
+    // A policy for insert/update would let an ISP fabricate usage evidence.
+    expect(sql).not.toMatch(/for\s+(insert|update|delete)/)
+  })
+
+  it('is reflected in the live database, not only in the migration', async () => {
+    // The migration above proves the intent; this proves the posture is real.
+    // Local and CI runs have no project to ask, so they skip rather than lie.
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) return
+    const { createClient } = await import('@supabase/supabase-js')
+    const sb = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY,
+      { auth: { persistSession: false } })
+    const { data, error } = await sb.rpc('unprotected_selectable_tables')
+    expect(error, error?.message).toBeNull()
+    expect(data ?? []).toEqual([])
+  })
+
+  it('never reads network sessions from the OAuth sessions table', () => {
+    // `sessions` is Supabase's browser-token store. Using it for ISP network
+    // sessions is the defect this whole path existed to correct.
+    expect(code('src', 'lib', 'data.ts')).not.toMatch(/tenantTable\('sessions'/)
+    expect(code('src', 'lib', 'network.ts')).not.toMatch(/from\('sessions'\)/)
+  })
+})
+})
+
+describe('the live-users panel never invents session data', () => {
+  it('takes live sessions from the RADIUS read model, not the OAuth table', () => {
+    const data = code('src', 'lib', 'data.ts')
+    expect(data).toMatch(/rpc\('my_radius_sessions'/)
+    const block = data.slice(data.indexOf('export async function fetchSessions'))
+    expect(block).not.toMatch(/tenantTable\('sessions'/)
+  })
+
+  it('reports no MAC address rather than fabricating one', () => {
+    const data = code('src', 'lib', 'data.ts')
+    const block = data.slice(data.indexOf('export async function fetchSessions'))
+    expect(block).toMatch(/mac_address:\s*null/)
+    expect(code('src', 'lib', 'adapters.ts')).toMatch(/Not reported by RADIUS/)
+  })
+
+  it('marks a session inactive only on ended_at, never on row existence', () => {
+    expect(code('src', 'lib', 'adapters.ts'))
+      .toMatch(/is_active\s*\?\?\s*s\.ended_at\s*===\s*null/)
+  })
+
+  it('disconnects through the tenant-scoped RPC, never a direct router call', () => {
+    const network = code('src', 'lib', 'network.ts')
+    // Sliced to the function's own body, up to the next top-level declaration.
+    // etchRouterJobs legitimately reads router_jobs; this one must not.
+    const start = network.indexOf('export async function disconnectLiveSession')
+    const fn = network.slice(start, network.indexOf('/** Recent jobs', start))
+    expect(fn).toMatch(/rpc\('request_session_disconnect'/)
+    // The browser must not be able to name a router or a tenant.
+    expect(fn).not.toMatch(/enqueue_router_job/)
+    expect(fn).not.toMatch(/from\('router_jobs'\)/)
+  })
+
+  it('does not report a router-confirmed disconnect it was not told about', () => {
+    const network = code('src', 'lib', 'network.ts')
+    // Sliced to the function's own body, up to the next top-level declaration.
+    // etchRouterJobs legitimately reads router_jobs; this one must not.
+    const start = network.indexOf('export async function disconnectLiveSession')
+    const fn = network.slice(start, network.indexOf('/** Recent jobs', start))
+    // confirmed may only become true from the worker's own command row.
+    expect(fn).toMatch(/confirmed:\s*row\.status\s*===\s*'confirmed'/)
+    expect(fn).toMatch(/ROUTER CONFIRMATION UNAVAILABLE/)
+  })
+
+  it('disables the Kick action for an ended session', () => {
+    const panel = code('src', 'components', 'AdminDashboard.tsx')
+    expect(panel).toMatch(/disabled=\{!s\.canDisconnect\}/)
+    expect(panel).toMatch(/s\.username/)
+  })
 })

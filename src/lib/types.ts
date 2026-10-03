@@ -176,6 +176,25 @@ export interface Session {
   uploaded_mb: number
   started_at: string
   ended_at: string | null
+  /**
+   * RADIUS identity. The authoritative fields for a network session.
+   *
+   * The fields above predate FreeRADIUS and are what the older OAuth-era
+   * `sessions` table carried. A live network session is recorded in
+   * radius_sessions, which has no mac_address and does have a username, so
+   * these are what the live-users panel should actually show. Optional because
+   * the demo store still produces rows in the old shape.
+   */
+  username?: string | null
+  acct_session_id?: string | null
+  router_name?: string | null
+  nas_identifier?: string | null
+  duration_secs?: number | null
+  end_reason?: string | null
+  /** True only when RADIUS says the session has not ended. */
+  is_active?: boolean
+  /** False for a closed session, so the UI need not offer a pointless action. */
+  can_disconnect?: boolean
 }
 
 export interface Ticket {
