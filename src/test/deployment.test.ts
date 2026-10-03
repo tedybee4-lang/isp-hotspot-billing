@@ -383,6 +383,49 @@ describe('FreeRADIUS configuration', () => {
     )
   })
 
+  it('casts the enumerated Acct-Terminate-Cause to a number, not a name', () => {
+    const queries = code('deploy', 'freeradius', 'queries.conf')
+    // dictionary.rfc2866 declares Acct-Terminate-Cause as an integer WITH VALUE
+    // names, so a bare %{...} expands to the NAME ("User-Request"). Casting that
+    // straight to integer is
+    //     rlm_sql_postgresql: 22P02: invalid input syntax for type integer
+    // and it sits inside the ON CONFLICT DO UPDATE, so the error aborts the
+    // whole statement: a Stop changed no column at all, leaving a session that
+    // is opened and updated but never closed. %{integer:...} is the cast that
+    // yields the number, and it expands to empty - not 0 - for a value it
+    // cannot convert, so an absent attribute still degrades to NULL through the
+    // surrounding NULLIF.
+    expect(queries).toMatch(
+      /NULLIF\('%\{integer:Acct-Terminate-Cause\}',''\)::integer/,
+    )
+    expect(queries).not.toMatch(
+      /NULLIF\('%\{Acct-Terminate-Cause\}',''\)::integer/,
+    )
+  })
+
+  it('derives end_reason from a closed vocabulary, not from the raw cause', () => {
+    const queries = code('deploy', 'freeradius', 'queries.conf')
+    // end_reason carries its own CHECK (radius_sessions_end_reason_ck). The
+    // router's name for the cause is not in that vocabulary, and a CHECK
+    // violation fails the whole statement, so the name is mapped onto a value
+    // the column allows rather than copied into it.
+    const allowed = [
+      'acct-stop', 'acct-interim', 'timeout', 'admin',
+      'expired', 'superseded', 'radius-restart',
+    ]
+    const written = (queries.match(/THEN\s+'[a-z-]+'/g) || []).map((m) =>
+      m.replace(/^THEN\s+'|'$/g, ''),
+    )
+    expect(written.length).toBeGreaterThan(0)
+    for (const value of written) expect(allowed).toContain(value)
+    // Total: an unrecognised cause still gets a valid reason instead of a
+    // rejected row.
+    expect(queries).toMatch(/ELSE\s+'acct-stop'/)
+    // Both branches map, so a session first seen as a Start is closed the same
+    // way as one that only ever arrives as a Stop.
+    expect((queries.match(/WHEN 'Idle-Timeout'/g) || []).length).toBe(2)
+  })
+
   it('rejects an implausible username before querying the database', () => {
     const authorize = code('deploy', 'freeradius', 'authorize')
     // HotSpot allows arbitrary characters in the login field. A permissive LIKE
