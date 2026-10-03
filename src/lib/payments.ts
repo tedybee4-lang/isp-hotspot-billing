@@ -70,9 +70,6 @@ export interface MyPaymentChannel {
   provider_status: string | null
   customer_notice: string | null
   has_channel_secret: boolean
-  has_daraja_key: boolean
-  has_daraja_secret: boolean
-  has_daraja_passkey: boolean
   updated_at: string
 }
 

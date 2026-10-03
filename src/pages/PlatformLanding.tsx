@@ -10,7 +10,7 @@ import { Button } from '../components/ui'
 const FEATURES = [
   [Building2, 'Tenant management', 'Provision, tier, suspend or remove any ISP from one panel.'],
   [Database, 'Row-level security', 'Postgres-enforced isolation between tenants.'],
-  [CreditCard, 'M-Pesa billing', 'STK Push with server-side Daraja secrets.'],
+  [CreditCard, 'M-Pesa billing', 'STK Push through HashBack, settled by webhook.'],
   [Radio, 'MikroTik operations', 'Voucher engine, sessions and RouterOS scripts.'],
   [Users, 'Per-ISP teams', 'Owners, admins and agents with scoped permissions.'],
   [Lock, 'Full audit trail', 'Every privileged action recorded with actor and tenant.'],

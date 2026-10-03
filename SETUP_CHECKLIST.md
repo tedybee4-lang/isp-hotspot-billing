@@ -46,22 +46,24 @@ values ('YOUR-EMAIL@yourcompany.com', 'Platform Operator');
 
 ---
 
-## 🟡 3. Safaricom Daraja credentials (required for M-Pesa)
+## 3. HashBack (required for automated M-Pesa)
 
-From **<https://developer.safaricom.co.ke>** → your app:
+HashBack is the only M-Pesa provider. The former Safaricom Daraja setup is gone.
 
 | # | Credential | Where it goes |
 | --- | --- | --- |
-| 5 | Consumer Key | Super admin → tenant → **M-Pesa config** |
-| 6 | Consumer Secret | Super admin → tenant → **M-Pesa config** |
-| 7 | Lipa na M-Pesa Online **Passkey** | Super admin → tenant → **M-Pesa config** |
-| 8 | Paybill / Till **shortcode** | Super admin → tenant → **M-Pesa config** |
+| 5 | HashBack **API key** | Super admin -> **Platform -> Payment gateway -> HashBack** |
+| 6 | HashBack **webhook secret** | Super admin -> **Platform -> Payment gateway -> HashBack** |
+| 7 | HashBack **webhook URL** | Registered with HashBack via `/registerwebhook` |
 
-**This is per ISP.** Each ISP that collects M-Pesa needs its own Daraja app.
-Start with the **sandbox** environment to test — sandbox does not move real money.
+**This is platform-wide, not per ISP.** The key and secret are encrypted at rest
+and never returned to the browser; the screen shows only configured / not
+configured plus connection and webhook status.
 
-The passkey is the easiest to get wrong. It comes from the
-**"Lipa na M-Pesa Online"** product page, *not* the main Daraja credentials page.
+Each ISP then links its **own** HashBack channel (merchant name, channel type and
+Till/PayBill shortcode) under **Settings -> Payments**. The service calls the
+HashBack Partner API and stores the returned AccountID for that tenant. There is
+no per-ISP API credential and there is nothing to paste into a tenant form.
 
 ---
 
@@ -83,9 +85,9 @@ Then I run `vercel --prod` and add the env vars. No server to maintain.
 | --- | --- | --- |
 | 10 | Server IP / hostname | |
 | 11 | SSH access (user + key) | For `docker compose up -d --build` |
-| 12 | A domain with an A record pointing at it | For HTTPS (needed by Safaricom's callback) |
+| 12 | A domain with an A record pointing at it | For HTTPS (needed by the HashBack webhook) |
 
-**If you choose M-Pesa you need HTTPS.** Safaricom will not POST to a plain-HTTP
+**If you choose M-Pesa you need HTTPS.** HashBack will not POST to a plain-HTTP
 address, so a domain + TLS is effectively mandatory.
 
 ---
@@ -102,7 +104,7 @@ want them pre-provisioned, give me per ISP:
 | 15 | Owner email + name + phone | `owner@riftvalley.co.ke` |
 | 16 | County / city | `Nakuru / Nakuru` |
 | 17 | Plan tier | starter (100 customers) · growth (500) · enterprise (5,000) |
-| 18 | Their Daraja credentials (if they collect M-Pesa) | see §3 |
+| 18 | Their HashBack channel (if they automate M-Pesa) | see §3 |
 
 ---
 
@@ -111,15 +113,15 @@ want them pre-provisioned, give me per ISP:
 This depends on your Supabase project. Once the project exists it is:
 
 ```
-https://<your-project-ref>.supabase.co/functions/v1/stk-callback
+https://<your-project-ref>.supabase.co/functions/v1/hashback-webhook
 ```
 
 You must enter this in **two** places:
 
 1. Super admin → tenant → **M-Pesa config** → *Callback URL*
-2. The **Daraja portal** → *Initiator URL* and *Confirmation URL*
+2. The **HashBack dashboard** -> registered callback URL
 
-If it is not configured in the Daraja portal, the customer's money moves but the
+If it is not configured in HashBack, the customer's money moves but the
 invoice never gets marked paid.
 
 ---
@@ -148,7 +150,7 @@ These are handled by the system:
 5. Deploy the 3 Edge Functions
 6. Test the whole platform with your email  ← you can log in now
 7. Add your first ISP from /admin/isps    → §5
-8. Enter its Daraja credentials           → §3
+8. Link its HashBack channel               → §3
 9. Deploy to Vercel or the VPS            → §4
 10. Move M-Pesa from sandbox to production once tested
 ```

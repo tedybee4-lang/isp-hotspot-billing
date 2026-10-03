@@ -11,7 +11,7 @@ React 19 + Vite 7 + TypeScript 5.9 + Tailwind 4
         ↓
 Supabase (Postgres · Auth · RLS · Edge Functions)
         ↓
-Safaricom Daraja (M-Pesa STK Push)
+HashBack (M-Pesa STK Push, webhooks, reconciliation)
 ```
 
 ---
@@ -101,12 +101,20 @@ create policy plans_read on public.plans for select using (
 | `isp_agent` | Own tenant; support access only |
 | `client` | Read-only access to their own account, invoices and tickets |
 
-### M-Pesa credentials never reach the browser
+### M-Pesa is HashBack, and no credential reaches the browser
 
-Daraja consumer keys and passkeys live in `isp_payment_configs`, readable only
-by the service role. The `stk-push` Edge Function reads them server-side and
-performs the API call. The old build had them hardcoded in client code, which
-published them to anyone who opened DevTools — that is fixed.
+HashBack is the only M-Pesa payment provider. Automated collection runs through
+the `hashback-stk` Edge Function; the platform API key and webhook secret live in
+the Edge Function environment and in the encrypted store, and are never returned
+by any API. Each ISP links its own HashBack channel (AccountID) under
+**Settings > Payments**, with the tenant resolved server-side from the caller's
+own profile - there is no `ispId` parameter to point at somebody else's channel.
+
+The earlier Safaricom Daraja integration (consumer key, consumer secret,
+passkey) has been removed: the credential forms, the `stk-push` implementation
+and the `stk-callback` function are gone. `stk-push` remains only as an
+unconditional `410 Gone` so an old integration gets an explicit "this is
+finished" rather than a 404.
 
 > The Supabase **anon key** *is* meant to be public. RLS is what protects your
 > data, not key secrecy.
@@ -132,7 +140,7 @@ src/
   components/ui/       shared primitives
 supabase/
   migrations/          schema, RLS policies, RPC functions
-  functions/           stk-push · stk-callback · admin-invite
+  functions/           hashback-stk / hashback-webhook / hashback-admin / mikrotik
 deploy/                nginx config for the VPS image
 e2e/                   Playwright smoke tests
 ```

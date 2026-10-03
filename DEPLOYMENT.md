@@ -117,83 +117,88 @@ Restart `npm run dev`. The sidebar badge switches from **Demo mode** to
 
 ---
 
-## 3. M-Pesa (Safaricom Daraja)
+## 3. M-Pesa (HashBack)
 
-> **Never** put Daraja credentials in a `VITE_*` variable. Vite inlines those
-> into the public bundle. They belong in Postgres, read only by the Edge
-> Function using the service role.
+> **Never** put a HashBack credential in a `VITE_*` variable. Vite inlines those
+> into the public bundle. The API key and webhook secret belong in the Edge
+> Function environment and in the encrypted store, read only with the service role.
 
-### Three payment modes
+HashBack is the only M-Pesa provider. The Safaricom Daraja integration (consumer
+key, consumer secret, passkey, `stk-push`, `stk-callback`) has been removed; the
+credential forms and the STK implementation are gone from the codebase.
 
-Not every ISP has Safaricom Daraja API access — most only hold a Till or
-Paybill number. Each tenant picks one mode on its detail screen.
+### Payment modes
 
 | Mode | ISP needs | API keys? | How it works |
 | --- | --- | --- | --- |
-| **Manual Till / Paybill** | Till or Paybill number | ❌ None | Customer pays via the M-Pesa app or `*334#`, staff confirm the payment. Works for every ISP, immediately. |
-| **Platform Daraja** | Paybill shortcode | ❌ None per ISP | The operator owns one Daraja app. Configure it once under **Platform → Payments**, then any ISP only supplies their shortcode. |
-| **Own Daraja** | Shortcode + consumer key + secret + passkey | ✅ Their own | Full automated STK Push using that ISP's credentials. |
+| **Manual Till / Paybill** | Till or Paybill number | None | Customer pays via the M-Pesa app or `*334#`, staff confirm. Works for every ISP, immediately. |
+| **HashBack** | Merchant name, channel type, Till/PayBill shortcode | Platform key only | Automated STK Push, webhook settlement and reconciliation. The ISP links its own HashBack channel. |
 
-**Manual Till** is the default because it needs nothing. The flow:
+**Manual Till** needs nothing and remains the default. Its flow:
 
-1. Staff pick an unpaid invoice in **Billing → Till / Paybill**
+1. Staff pick an unpaid invoice in **Billing -> Till / Paybill**
 2. The system issues instructions: amount, unique reference, Till number, steps
 3. The customer pays from their phone
 4. Staff confirm once it appears on the Till statement (`confirm_manual_payment`)
 5. The invoice is marked paid and the customer's expiry extends 30 days
 
-### 3.1 Per-ISP credentials
+### 3.1 Platform HashBack credential
 
-In the Super Admin panel: **ISPs → open a tenant → Payment collection**.
+In the Super Admin panel: **Platform -> Payment gateway -> HashBack**. Enter the
+API key and webhook secret there; they are encrypted with the same AES-GCM store
+used for router credentials and are never returned by any API. The screen shows
+only *configured / not configured*, connection status and webhook status.
 
-Or directly in SQL:
+### 3.2 Per-ISP HashBack channel
 
-```sql
-update public.isp_payment_configs
-set payment_mode    = 'manual_till',
-    till_number     = '522533',
-    paybill_number  = '174379',
-    customer_notice = 'Pay the exact amount so your account is credited.'
-where isp_id = (select id from public.isps where slug = 'your-slug');
-```
+Each ISP registers its own channel under **Settings -> Payments** with:
 
-The secret columns are **write-only from the browser's perspective**: the UI
-never reads them back, and `payment_config_status` returns only booleans.
+- Merchant / company name
+- Channel type (`CustomerBuyGoodsOnline`, `CustomerPayBillOnline`)
+- Till / shortcode / PayBill number
 
-### 3.1b Shared platform credentials (optional)
+The Edge Function calls the HashBack Partner API (`/linkaccount`) and stores the
+returned **AccountID** against that tenant. The tenant is resolved from the
+authenticated caller's profile server-side; there is no `ispId` parameter, so a
+browser cannot ask for another ISP's channel.
 
-Set these once under **Platform → Payments**, or:
+`/linkaccount` mints a *fresh* AccountID for an already-linked shortcode, so the
+service refuses to call it twice for the same channel and an ISP never ends up
+with two live accounts.
 
-```sql
-update public.platform_payment_config
-set mpesa_passkey = '<passkey>',
-    mpesa_consumer_key = '<key>',
-    mpesa_consumer_secret = '<secret>'
-where id = true;
-```
-
-Tenants set to `platform_daraja` then use these automatically.
-
-### 3.2 Deploy the Edge Functions
+### 3.3 Deploy the Edge Functions
 
 ```bash
-supabase functions deploy stk-push    --no-verify-jwt
-supabase functions deploy stk-callback --no-verify-jwt
-supabase functions deploy admin-invite --no-verify-jwt
+supabase functions deploy hashback-stk     # authenticated: starts a payment
+supabase functions deploy hashback-webhook --no-verify-jwt
+supabase functions deploy hashback-admin   # authenticated: super admin only
+supabase functions deploy admin-invite     --no-verify-jwt
 ```
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
 
-### 3.3 Callback URL
+`hashback-webhook` is the only one deployed `--no-verify-jwt`: it is called by
+HashBack, not by a browser. It reads the raw request body, verifies the
+`X-Hashpay-Signature` HMAC-SHA256 over those exact bytes, and only then parses
+the JSON. An invalid signature is a 401 and nothing is applied.
 
-Safaricom requires a public HTTPS URL:
+`stk-push` is retained solely as an unconditional `410 Gone`.
+
+### 3.4 Callback URL
+
+Register the public HTTPS URL with HashBack (`/registerwebhook`):
 
 ```
-https://<project-ref>.supabase.co/functions/v1/stk-callback
+https://<project-ref>.supabase.co/functions/v1/hashback-webhook
 ```
 
-Enter it in the Daraja portal (Initiator URL & Confirmation URL) **and** in
-`isp_payment_configs.callback_url`.
+### 3.5 What settlement actually does
+
+A successful `/initiatestk` means **pending**, never paid. Nothing is activated
+on initiation. The payment is settled when the webhook (or `/v1/pullapi`
+reconciliation) proves the money moved, and only then does
+`complete_hashback_settlement` activate the subscription, queue the RADIUS sync
+job and queue the payment SMS. A duplicate webhook is a no-op.
 
 **Local sandbox testing** needs a tunnel:
 
@@ -289,8 +294,8 @@ Then confirm in a browser:
 | Badge says *Demo mode* after setting env vars | `.env.local` missing or not reloaded | Restart the dev server; confirm it is `.env.local`, not `.env` |
 | `Invalid or expired session` | Anon key wrong, or RLS policies missing | Re-apply migrations §2.3 |
 | Super admin sees nothing | Email not in `platform_admins` | Insert it (§2.4) and sign up again |
-| STK push returns *M-Pesa is not configured* | Tenant has no Daraja credentials | Populate `isp_payment_configs` §3.1 |
-| Callback never arrives | Safaricom cannot reach the URL | Confirm the URL is public HTTPS and set in the Daraja portal |
+| STK push returns *M-Pesa is not configured* | Tenant has no HashBack channel | The ISP links one under Settings -> Payments |
+| Callback never arrives | HashBack cannot reach the URL | Confirm the URL is public HTTPS and registered with HashBack |
 | Direct URL load gives 404 | SPA rewrite missing | `vercel.json` handles Vercel; `nginx.conf` handles Docker |
 | Tenant cannot see their data | Profile has no `isp_id` | Re-run `signup_isp`, or set `profiles.isp_id` manually |
 ## MikroTik routers

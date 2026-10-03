@@ -93,9 +93,9 @@ export default function ClientBilling({
     setApiError(null);
 
     try {
-      // The STK push runs server-side (stk-push Edge Function) so the Daraja
-      // secrets never reach the browser. Confirmation arrives via the
-      // stk-callback function, which settles the invoice for us.
+      // The STK push runs server-side (the hashback-stk Edge Function) so the HashBack
+      // credentials never reach the browser. Confirmation arrives via the
+      // hashback-webhook function, which settles the invoice.
       await onPayInvoice(unpaidInvoice?.id ?? '');
 
       setAutopayStage('awaiting-pin');
@@ -681,7 +681,7 @@ export default function ClientBilling({
               {autopayStage === 'sending' && (
                 <div className="flex items-center gap-3 text-sm">
                   <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
-                  <span className={darkMode ? 'text-slate-300' : 'text-slate-700'}>Sending STK push via Safaricom Daraja API...</span>
+                  <span className={darkMode ? 'text-slate-300' : 'text-slate-700'}>Sending the M-Pesa payment request via HashBack...</span>
                 </div>
               )}
               {autopayStage === 'awaiting-pin' && (
@@ -711,7 +711,7 @@ export default function ClientBilling({
             </div>
 
             <p className={`mt-4 text-[11px] leading-relaxed ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-              Connected to Safaricom Daraja API. The STK push is sent directly to the customer's phone.
+              The STK prompt goes to the customer's phone through HashBack. Service is activated once the payment is confirmed.
             </p>
           </div>
         </div>

@@ -7,9 +7,8 @@ import {
 import {
   deleteIsp, fetchIspStats, fetchTenantStaff, inviteStaff,
   setIspPlan, setIspStatus, fetchPaymentConfig, updatePaymentConfig,
-  PAYMENT_MODES,
 } from '../../lib/data'
-import type { PaymentConfigStatus, PaymentMode } from '../../lib/data'
+import type { PaymentConfigStatus } from '../../lib/data'
 import type { IspPlan, IspStats, Profile } from '../../lib/types'
 import { Modal } from './IspsManager'
 import { cn } from '../../utils/cn'
@@ -291,17 +290,16 @@ return (
 }
 
 /**
- * Per-tenant Safaricom Daraja credentials.
+ * Per-tenant payment collection.
  *
- * The secret fields are write-only: once saved they are never returned to the
- * browser, so the form shows "saved" state and leaves blanks untouched.
- */
-/**
- * Per-tenant payment configuration.
+ * This card collects the Till / PayBill numbers a customer pays to by hand, and
+ * the message shown on the payment instruction screen.
  *
- * Three modes, because most ISPs hold a Till/Paybill number but no Safaricom
- * Daraja API access. Secret fields are write-only: once saved they are never
- * returned to the browser, so the form shows a "saved" state.
+ * It deliberately holds no provider credentials. Automated M-Pesa is HashBack,
+ * and each tenant links its own HashBack channel under /app/settings/payments;
+ * the platform's API key and webhook secret live only in the Edge Function
+ * environment and the encrypted store. The Safaricom consumer key / secret /
+ * passkey form that used to live here was removed with the Daraja cutover.
  */
 function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
   const [cfg, setCfg] = useState<PaymentConfigStatus | null>(null)
@@ -309,16 +307,9 @@ function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [mode, setMode] = useState<PaymentMode>('manual_till')
   const [till, setTill] = useState('')
   const [paybill, setPaybill] = useState('')
   const [notice, setNotice] = useState('')
-  const [shortcode, setShortcode] = useState('')
-  const [callbackUrl, setCallbackUrl] = useState('')
-  const [env, setEnv] = useState<'sandbox' | 'production'>('sandbox')
-  const [passkey, setPasskey] = useState('')
-  const [consumerKey, setConsumerKey] = useState('')
-  const [consumerSecret, setConsumerSecret] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -327,13 +318,9 @@ function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
         const next = await fetchPaymentConfig(ispId)
         if (cancelled) return
         setCfg(next)
-        setMode(next.payment_mode)
         setTill(next.till_number ?? '')
         setPaybill(next.paybill_number ?? '')
         setNotice(next.customer_notice ?? '')
-        setShortcode(next.mpesa_shortcode ?? '')
-        setCallbackUrl(next.callback_url ?? '')
-        setEnv(next.mpesa_env)
       } catch (err) {
         if (!cancelled) setLoadError((err as Error).message)
       }
@@ -345,20 +332,12 @@ function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
     setSaving(true)
     setError(null)
     try {
-      const isManual = mode === 'manual_till'
       await updatePaymentConfig(ispId, {
-        payment_mode: mode,
-        mpesa_env: env,
+        payment_mode: 'manual_till',
         till_number: till,
         paybill_number: paybill,
         customer_notice: notice,
-        mpesa_shortcode: isManual ? undefined : shortcode,
-        callback_url: isManual ? undefined : callbackUrl,
-        mpesa_passkey: mode === 'own_daraja' ? passkey : undefined,
-        mpesa_consumer_key: mode === 'own_daraja' ? consumerKey : undefined,
-        mpesa_consumer_secret: mode === 'own_daraja' ? consumerSecret : undefined,
       })
-      setPasskey(''); setConsumerKey(''); setConsumerSecret('')
       setCfg(await fetchPaymentConfig(ispId))
       onSaved()
     } catch (err) {
@@ -377,200 +356,57 @@ function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
     )
   }
 
-  const info = PAYMENT_MODES.find((m) => m.value === mode)
-
-return (
+  return (
     <Card>
       <CardHeader
         title="Payment collection"
-        subtitle="How this ISP takes money from customers. Credentials stay server-side."
+        subtitle="The Till / PayBill numbers this ISP collects on by hand."
         icon={<CreditCard className="w-4 h-4" />}
-        action={cfg ? <Badge value={cfg.ready ? 'ready' : 'not_configured'} /> : null}
+        action={<Badge value={cfg?.ready ? 'ready' : 'not_configured'} />}
       />
-
       <div className="p-5 space-y-4">
         {error && <Alert kind="error">{error}</Alert>}
-        {!cfg && <p className="text-xs text-slate-400">Loading configuration…</p>}
 
-        {cfg && (
-          <>
-            <Field group label="Payment mode">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                {PAYMENT_MODES.map((m) => (
-                  <button
-                    key={m.value}
-                    type="button"
-                    onClick={() => setMode(m.value)}
-                    aria-pressed={mode === m.value}
-                    className={cn(
-                      'rounded-xl border px-3 py-3 text-left transition',
-                      mode === m.value
-                        ? 'border-violet-500 bg-violet-50 dark:bg-violet-500/10'
-                        : 'border-slate-300 dark:border-slate-700 hover:border-slate-400',
-                    )}
-                  >
-                    <span className={cn(
-                      'block text-[11px] font-bold',
-                      mode === m.value
-                        ? 'text-violet-700 dark:text-violet-300'
-                        : 'text-slate-700 dark:text-slate-300',
-                    )}>
-                      {m.label}
-                    </span>
-                    <span className="block text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                      {m.needsKeys ? 'Needs Daraja keys' : 'No API keys needed'}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </Field>
-
-            {info && (
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed -mt-2">
-                {info.blurb}
-              </p>
-            )}
-
-            {mode === 'manual_till' ? (
-              <>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Till number" hint="The number customers send money to.">
-                    <input value={till} onChange={(e) => setTill(e.target.value)}
-                      className={`${inputClass} font-mono`} placeholder="522533" />
-                  </Field>
-                  <Field label="Paybill number" hint="Optional alternative.">
-                    <input value={paybill} onChange={(e) => setPaybill(e.target.value)}
-                      className={`${inputClass} font-mono`} placeholder="174379" />
-                  </Field>
-                </div>
-                <Field label="Message to customers" hint="Shown on the payment instruction screen.">
-                  <textarea value={notice} rows={2} onChange={(e) => setNotice(e.target.value)}
-                    className={`${inputClass} resize-none`}
-                    placeholder="Pay the exact amount so your account is credited automatically." />
-                </Field>
-                {!cfg.ready && (
-                  <Alert kind="success">
-                    Add at least a Till or Paybill number. Customers then pay from the M-Pesa
-                    app or *334#, and staff confirm the payment to settle the invoice.
-                  </Alert>
-                )}
-              </>
-            ) : (
-              <DarajaFields
-                env={env} setEnv={setEnv}
-                shortcode={shortcode} setShortcode={setShortcode}
-                callbackUrl={callbackUrl} setCallbackUrl={setCallbackUrl}
-                mode={mode} cfg={cfg}
-                passkey={passkey} setPasskey={setPasskey}
-                consumerKey={consumerKey} setConsumerKey={setConsumerKey}
-                consumerSecret={consumerSecret} setConsumerSecret={setConsumerSecret}
-              />
-            )}
-
-            <div className="flex flex-wrap items-center gap-2 pt-1">
-              <Button loading={saving} onClick={save} icon={<CreditCard className="w-4 h-4" />}>
-                Save payment settings
-              </Button>
-              <span className="text-[10px] text-slate-400 font-mono">
-                stored in isp_payment_configs · service-role only
-              </span>
-            </div>
-          </>
+        {!cfg?.ready && (
+          <Alert kind="success">
+            Add at least a Till or Paybill number. Customers then pay from the M-Pesa
+            app or *334#, and staff confirm the payment to settle the invoice.
+          </Alert>
         )}
+
+        <Alert kind="info">
+          Automated M-Pesa payments run through <strong>HashBack</strong>. The ISP links
+          its own HashBack channel under <strong>Settings &rarr; Payments</strong>. There is
+          no Safaricom Daraja account to configure: that path was removed.
+        </Alert>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Till number" hint="The number customers send money to.">
+            <input value={till} onChange={(e) => setTill(e.target.value)}
+              className={`${inputClass} font-mono`} placeholder="522533" />
+          </Field>
+          <Field label="Paybill number" hint="Optional alternative.">
+            <input value={paybill} onChange={(e) => setPaybill(e.target.value)}
+              className={`${inputClass} font-mono`} placeholder="174379" />
+          </Field>
+        </div>
+
+        <Field label="Message to customers" hint="Shown on the payment instruction screen.">
+          <textarea value={notice} rows={2} onChange={(e) => setNotice(e.target.value)}
+            className={`${inputClass} resize-none`}
+            placeholder="Pay the exact amount so your account is credited automatically." />
+        </Field>
+
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <Button loading={saving} onClick={save} icon={<CreditCard className="w-4 h-4" />}>
+            Save payment settings
+          </Button>
+          <span className="text-[10px] text-slate-400 font-mono">
+            stored in isp_payment_configs
+          </span>
+        </div>
       </div>
     </Card>
-  )
-}
-
-/** Shared fields for the two Daraja-backed modes. */
-function DarajaFields(props: {
-  env: 'sandbox' | 'production'; setEnv: (v: 'sandbox' | 'production') => void
-  shortcode: string; setShortcode: (v: string) => void
-  callbackUrl: string; setCallbackUrl: (v: string) => void
-  mode: PaymentMode; cfg: PaymentConfigStatus
-  passkey: string; setPasskey: (v: string) => void
-  consumerKey: string; setConsumerKey: (v: string) => void
-  consumerSecret: string; setConsumerSecret: (v: string) => void
-}) {
-  const { env, setEnv, shortcode, setShortcode, callbackUrl, setCallbackUrl,
-    mode, cfg, passkey, setPasskey, consumerKey, setConsumerKey,
-    consumerSecret, setConsumerSecret } = props
-
-  return (
-    <div className="space-y-4">
-      <Field group label="Environment">
-        <div className="grid grid-cols-2 gap-2">
-          {(['sandbox', 'production'] as const).map((e) => (
-            <button
-              key={e}
-              type="button"
-              onClick={() => setEnv(e)}
-              className={cn(
-                'rounded-xl border px-3 py-2.5 text-[11px] font-bold capitalize transition',
-                env === e
-                  ? 'border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-500/10 dark:text-violet-300'
-                  : 'border-slate-300 dark:border-slate-700 text-slate-500 dark:text-slate-400',
-              )}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      </Field>
-
-      {env === 'production' && (
-        <Alert kind="error">
-          Production mode sends real STK pushes that charge real money.
-          Only switch this on once Safaricom has approved go-live.
-        </Alert>
-      )}
-
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Paybill shortcode">
-          <input value={shortcode} onChange={(e) => setShortcode(e.target.value)}
-            className={`${inputClass} font-mono`} placeholder="174379" />
-        </Field>
-        <Field label="Callback URL" hint="Public HTTPS — Safaricom posts here.">
-          <input value={callbackUrl} onChange={(e) => setCallbackUrl(e.target.value)}
-            className={`${inputClass} font-mono text-[11px]`}
-            placeholder="https://<ref>.supabase.co/functions/v1/stk-callback" />
-        </Field>
-      </div>
-
-      {mode === 'platform_daraja' ? (
-        <Alert kind={cfg.platform_ready ? 'success' : 'error'}>
-          {cfg.platform_ready
-            ? 'Shared platform Daraja credentials are configured. This ISP only needs its shortcode above — no API keys of its own.'
-            : 'The operator has not set up shared Daraja credentials yet. Do that under Platform → Payments, or give this ISP its own Daraja keys.'}
-        </Alert>
-      ) : (
-        <>
-          <SecretField label="Lipa na M-Pesa Online passkey"
-            value={passkey} onChange={setPasskey} saved={cfg.has_passkey} />
-          <SecretField label="Daraja consumer key"
-            value={consumerKey} onChange={setConsumerKey} saved={cfg.has_consumer_key} />
-          <SecretField label="Daraja consumer secret"
-            value={consumerSecret} onChange={setConsumerSecret} saved={cfg.has_consumer_secret} />
-        </>
-      )}
-    </div>
-  )
-}
-  /** Write-only secret input: once saved, the value is never shown again. */
-function SecretField({
-  label, value, onChange, saved,
-}: { label: string; value: string; onChange: (v: string) => void; saved: boolean }) {
-  return (
-    <Field label={label} hint={saved ? 'Already saved — leave blank to keep it.' : undefined}>
-      <input
-        type="password"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={`${inputClass} font-mono text-[11px]`}
-        placeholder={saved ? '•••••••• (saved)' : 'from the Daraja portal'}
-        autoComplete="off"
-      />
-    </Field>
   )
 }
 

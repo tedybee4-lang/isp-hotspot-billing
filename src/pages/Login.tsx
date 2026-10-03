@@ -80,7 +80,7 @@ return (
             {[
               ['Super admin dashboard', 'Full tenant lifecycle control'],
               ['Row-level security', 'Postgres-enforced tenant isolation'],
-              ['M-Pesa STK Push', 'Server-side Daraja integration'],
+              ['M-Pesa STK Push', 'Server-side HashBack integration'],
             ].map(([t, d]) => (
               <li key={t} className="flex gap-3">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-px" />
