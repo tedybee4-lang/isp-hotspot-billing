@@ -68,12 +68,15 @@ declare
   v_ref    text;
   v_automated boolean;
 begin
-  select i.id, p.* into v_isp, v_plan
-    from public.isps i
-    join public.plans p on p.isp_id = i.id
-   where lower(trim(i.slug)) = lower(trim(p_slug))
-     and p.id = p_plan_id
-     and p.is_active;
+  -- Resolved in two steps rather than `select i.id, p.*`, because a row
+  -- expansion cannot be assigned to a composite variable that way.
+  select id into v_isp from public.isps
+   where lower(trim(slug)) = lower(trim(p_slug));
+
+  select * into v_plan from public.plans
+   where isp_id = v_isp
+     and id = p_plan_id
+     and is_active;
 
   if v_isp is null or v_plan.id is null then
     raise exception 'Package not found' using errcode = 'no_data_found';

@@ -3,8 +3,8 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Wifi, ShieldCheck, LogOut, Moon, Sun, Menu, X, Globe, AlertTriangle,
   LayoutDashboard, Users, Package, Ticket as TicketIcon, Radio as RadioIcon,
-  CreditCard, Receipt, RefreshCw, ArrowLeftRight, MessageSquare, Percent,
-  Wallet, Boxes, BarChart3, Settings, Plug, ScrollText,
+  CreditCard, Receipt, RefreshCw, ArrowLeftRight, MessageSquare,
+  Wallet, BarChart3, Settings, Plug, ScrollText,
 } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { usePanel } from '../../context/PanelContext'
@@ -45,13 +45,18 @@ const GROUPS: Array<{ label: string; items: Array<{ to: string; label: string; i
   { label: 'Communication', items: [
     { to: '/app/sms', label: 'SMS', icon: MessageSquare, badge: 'sms' },
   ] },
-  { label: 'Sales', items: [
-    { to: '/app/resellers', label: 'Resellers', icon: Percent, badge: 'resellers' },
-    { to: '/app/commissions', label: 'Commissions', icon: Percent },
-  ] },
+  // Resellers, Commissions and Inventory are no longer offered in the sidebar.
+  //
+  // They are NOT deleted. The pages, the RPCs and the tables all still work, and
+  // any ISP that has historical data in them can still reach it by URL and export
+  // what they need. What was removed is only the permanent navigation entry, which
+  // put three business features most ISPs do not use into the sidebar of a product
+  // whose core job is connectivity billing.
+  //
+  // If one of these is ever wanted back, restore the single line here; nothing
+  // else has to change.
   { label: 'Business', items: [
     { to: '/app/expenses', label: 'Expenses', icon: Wallet },
-    { to: '/app/inventory', label: 'Inventory', icon: Boxes, badge: 'inventory' },
     { to: '/app/reports', label: 'Reports', icon: BarChart3 },
   ] },
   { label: 'Team', items: [

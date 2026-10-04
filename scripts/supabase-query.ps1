@@ -24,10 +24,25 @@ if (-not $token) {
   throw 'SUPABASE_ACCESS_TOKEN is not set in the environment.'
 }
 
-$sql = (Get-Content $File -Raw) -replace "\r?\n", ' '
+# Line breaks are normalised to \n but PRESERVED. They must never be flattened to
+# spaces: a migration carrying SQL line comments turns
+#
+#     -- a comment about the statement below
+#     create table foo ...
+#
+# into one long line where the `--` comments out everything after it. The whole
+# file then runs as a single comment, the API still answers 201, and the migration
+# looks applied while having changed nothing.
+#
+# That is not hypothetical. The PayHero portal routing migration was deployed this
+# way, reported success, and left the production function untouched — which was
+# only caught by calling the function afterwards and reading what it actually
+# returned. Never trust this script's exit code alone; assert the effect.
+$sql = (Get-Content $File -Raw) -replace "`r`n", "`n"
 
 # Manual JSON assembly: ConvertTo-Json mangles multi-line SQL and embedded quotes.
-$escaped = $sql.Replace('\', '\\').Replace('"', '\"')
+# A literal newline is not valid inside a JSON string, so it must be escaped.
+$escaped = $sql.Replace('\', '\\').Replace('"', '\"').Replace("`n", '\n')
 $payload = '{' + '"query":"' + $escaped + '"' + '}'
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
 

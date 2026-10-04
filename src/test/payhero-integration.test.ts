@@ -265,6 +265,123 @@ describe('admin and ISP surfaces name PayHero as the active provider', () => {
     expect(page).toMatch(/useState<'stk' \| 'manual_till'>\('stk'\)/)
   })
 })
+describe('ISP navigation offers only what an ISP bills with', () => {
+  const layout = code('src/pages/isp/IspLayout.tsx')
+
+  it('no longer offers Resellers, Commissions or Inventory', () => {
+    // These are business features most connectivity ISPs never use, and they sat
+    // in the permanent sidebar of a product whose core job is billing bandwidth.
+    for (const gone of [
+      "/app/resellers", "/app/commissions", "/app/inventory",
+    ]) {
+      expect(layout, gone).not.toMatch(new RegExp(`to: '${gone}'`))
+    }
+  })
+
+  it('keeps the routes mounted so existing links and data still resolve', () => {
+    // Navigation was removed, not the feature. Deleting the routes would 404 a
+    // bookmark and strand an ISP that has historical rows in those tables.
+    const app = code('src/App.tsx')
+    for (const kept of ['resellers', 'commissions', 'inventory']) {
+      expect(app, kept).toMatch(new RegExp(`path="${kept}"`))
+    }
+    for (const page of ['ResellersPage', 'CommissionsPage', 'InventoryPage']) {
+      expect(app, page).toMatch(new RegExp(page))
+    }
+  })
+
+  it('deletes no table or data to achieve the above', () => {
+    // The requirement is a navigation change only.
+    expect(layout).not.toMatch(/drop\s+table/i)
+    expect(layout).not.toMatch(/delete\s+from/i)
+  })
+
+  it('still offers the core billing and network destinations', () => {
+    // Removing three tabs must not quietly remove connectivity billing.
+    for (const kept of [
+      '/app/customers', '/app/invoices', '/app/payments', '/app/vouchers',
+      '/app/sessions', '/app/sms', '/app/settings/portal', '/app/settings/payment',
+      '/app/settings/network',
+    ]) {
+      expect(layout, kept).toMatch(new RegExp(`to: '${kept}'`))
+    }
+  })
+})
+
+describe('the captive portal routes a PayHero tenant to STK, not to a Till', () => {
+  const sql = code('supabase/migrations/20260101300000_portal_payhero_route.sql')
+
+  it('treats PayHero as an automated provider', () => {
+    // The single defect that made the portal show a Till for a PayHero tenant.
+    expect(sql).toMatch(/v_automated := v_cfg\.payment_provider::text in \('hashback', 'payhero'\)/)
+  })
+
+  it('requires a connected PayHero channel before it will prompt', () => {
+    expect(sql).toMatch(/payment_provider::text = 'payhero' and v_cfg\.payhero_channel_id is null/)
+  })
+
+  it('reports the provider and its channel so the browser can branch correctly', () => {
+    expect(sql).toMatch(/'provider', v_cfg\.payment_provider::text/)
+    expect(sql).toMatch(/'payhero_channel_id', v_cfg\.payhero_channel_id/)
+  })
+
+  it('still routes a manual tenant to the instruction sheet', () => {
+    // Not every ISP has an automated channel, and silently pretending otherwise
+    // would send a customer to pay a Till that does not exist.
+    expect(sql).toMatch(/elsif nullif\(btrim\(coalesce\(v_cfg\.till_number/)
+  })
+
+  it('resolves the tenant in two steps, because a row expansion cannot fill a composite', () => {
+    // `select i.id, p.* into v_isp, v_plan` fails at runtime with
+    // "v_plan is not a scalar variable", which leaves the OLD function in place and
+    // the portal quietly still returning manual_till. This asserts the shape that
+    // actually works.
+    expect(sql).not.toMatch(/select i\.id, p\.\* into/)
+    expect(sql).toMatch(/select \* into v_plan from public\.plans/)
+  })
+})
+
+describe('portal settings are genuinely editable', () => {
+  it('reads and writes through tenant-scoped paths, not local state', () => {
+    const data = code('src/lib/data.ts')
+    // A settings screen whose save only touched React state would look complete
+    // and lose everything on reload. The write is an RPC; the read is a table
+    // select already narrowed to this caller's tenant.
+    expect(data).toMatch(/rpc\('save_portal_settings'/)
+    expect(data).toMatch(/rpc\('reset_portal_settings'/)
+    expect(data).toMatch(/from\('portal_settings'\)[\s\S]{0,80}tenantId\(\)/)
+  })
+
+  it('never names an ISP id when reading portal settings', () => {
+    // tenantId() comes from the caller's own session. A page-supplied ispId is
+    // how one tenant edits another's branding.
+    const data = code('src/lib/data.ts')
+    expect(data).not.toMatch(/fetchPortalSettings\s*\(\s*\w*\s*:\s*string/)
+    expect(data).not.toMatch(/savePortalSettings\s*\(\s*\w*\s*:\s*string\s*,\s*\w*\s*:\s*string/)
+  })
+
+  it('exposes the branding and content fields the admin screen edits', () => {
+    // If a control exists, the value it writes must be a column that persists.
+    const screen = code('src/pages/isp/settings/CaptivePortal.tsx')
+    for (const field of [
+      'portal_name', 'primary_color', 'accent_color', 'logo_url', 'favicon_url',
+      'background_color', 'welcome_message', 'payment_instructions',
+      'support_phone', 'support_whatsapp', 'footer_text', 'packages_heading',
+      'connect_button_text', 'featured_plan_id',
+    ]) {
+      expect(screen, field).toMatch(new RegExp(field))
+    }
+  })
+
+  it('resolves public portal settings per ISP slug, never globally', () => {
+    // A single global config would let one ISP's branding appear on another's
+    // portal.
+    const portal = code('src/lib/portal.ts')
+    expect(portal).toMatch(/public_portal_settings/)
+    expect(portal).toMatch(/public_portal_packages/)
+  })
+})
+
 describe('no provider secret can reach the browser', () => {
   it('keeps the frontend payment modules free of credential handling', () => {
     for (const f of [
