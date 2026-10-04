@@ -30,6 +30,7 @@ import {
   HashBackClient,
   normaliseMsisdn,
 } from './hashback.ts'
+import { PayHeroClient } from './payhero.ts'
 import {
   readSettlementFields,
   isSuccessfulPayment,
@@ -40,6 +41,7 @@ import {
   recordVerificationResult,
   type AdminClient,
 } from './hashback-credentials.ts'
+import { resolvePayHeroCredentials } from './payhero-credentials.ts'
 
 /** What a caller is told after asking for a prompt. Never means "paid". */
 export interface StartPaymentResult {
@@ -131,6 +133,22 @@ export class PaymentGatewayService {
   }
 
   /**
+   * Builds a PayHero client from the stored platform credential.
+   *
+   * Same contract as client(): throws rather than returning null, so an absent
+   * credential surfaces as a clear "not configured" rather than as a confusing
+   * 401 from PayHero that looks like a provider outage.
+   */
+  private async payHeroClient(): Promise<PayHeroClient> {
+    const creds = await resolvePayHeroCredentials(this.admin)
+    return new PayHeroClient({
+      apiToken: creds.apiToken,
+      fetchImpl: this.fetchImpl,
+      timeoutMs: this.timeoutMs,
+    })
+  }
+
+  /**
    * Resolves the authenticated caller's ISP from their own profile row.
    *
    * This is the same resolution the RLS policies use, so the service cannot act
@@ -212,7 +230,184 @@ export class PaymentGatewayService {
     }
   }
 
-  // ── Payment initiation ───────────────────────────────────────────────────
+  /**
+   * Loads this tenant's PayHero payment channel.
+   *
+   * Scoped by the resolved ISP, and the channel id comes from here and nowhere
+   * else — which is what makes "the browser chooses the channel" impossible.
+   * Mirrors loadChannel() for HashBack so both providers enforce the same rule.
+   */
+  private async loadPayHeroChannel(ispId: string): Promise<{
+    channelId: number
+    connected: boolean
+  }> {
+    const { data, error } = await this.admin
+      .from('isp_payment_configs')
+      .select('payment_provider, payhero_channel_id, connection_status')
+      .eq('isp_id', ispId)
+      .maybeSingle()
+
+    if (error) {
+      throw new PaymentServiceError('not_configured', 'Could not read payment settings.')
+    }
+
+    const cfg = data as {
+      payment_provider?: string | null
+      payhero_channel_id?: number | null
+      connection_status?: string | null
+    } | null
+
+    if (cfg?.payment_provider !== 'payhero') {
+      throw new PaymentServiceError(
+        'not_connected',
+        'This ISP is not set up for PayHero payments.',
+      )
+    }
+    if (cfg.payhero_channel_id == null) {
+      throw new PaymentServiceError(
+        'not_connected',
+        'This ISP has no PayHero payment channel yet. Select one in Payment Settings.',
+      )
+    }
+
+    return {
+      channelId: Number(cfg.payhero_channel_id),
+      connected: cfg.connection_status === 'connected',
+    }
+  }
+
+  /**
+   * Starts a PayHero STK payment for an invoice or a package.
+   *
+   * This is the PayHero counterpart of startPayment(), and it upholds exactly the
+   * same four rules:
+   *
+   *   1. The tenant comes from the authenticated session, never a parameter.
+   *   2. The amount comes from create_payhero_payment(), which resolves it inside
+   *      the tenant's own plan or invoice row. The caller names a package; it
+   *      cannot name a price. Nothing here accepts an amount from the request.
+   *   3. Initiation never settles. The payment stays PENDING and the customer
+   *      stays unactivated until a PayHero-verified result arrives.
+   *   4. The provider reference is stored, so a callback or a later verification
+   *      can find this exact payment.
+   */
+  async startPayHeroPayment(
+    jwt: string,
+    input: {
+      phone: string
+      invoiceId?: string | null
+      clientId?: string | null
+      planId?: string | null
+      /** Our own callback endpoint. Optional; PayHero honours it per request. */
+      callbackUrl?: string | null
+    },
+  ): Promise<StartPaymentResult> {
+    // Authenticate BEFORE validating input, so every unauthenticated request
+    // fails identically with 401 and the endpoint's internals stay unmapped to
+    // anyone holding the public anon key.
+    const ispId = await this.requireTenant(jwt)
+
+    const msisdn = normaliseMsisdn(input.phone)
+    if (!msisdn) {
+      throw new PaymentServiceError(
+        'invalid_phone',
+        'Enter a valid Kenyan phone number, for example 0712345678.',
+      )
+    }
+
+    const channel = await this.loadPayHeroChannel(ispId)
+    if (!channel.connected) {
+      throw new PaymentServiceError(
+        'not_connected',
+        'This ISP payment channel is not connected yet.',
+      )
+    }
+    // The database creates the pending row and mints the reference in one
+    // transaction, which is what makes the reference unique and guaranteed to
+    // resolve to exactly one payment.
+    const { data: created, error: createErr } = await this.admin.rpc('create_payhero_payment', {
+      p_invoice_id: input.invoiceId ?? null,
+      p_client_id: input.clientId ?? null,
+      p_plan_id: input.planId ?? null,
+      p_msisdn: msisdn,
+    })
+
+    if (createErr) {
+      throw new PaymentServiceError('conflict', createErr.message)
+    }
+
+    const row = created as {
+      payment_id: string
+      reference: string
+      amount: number
+      currency: string
+      payhero_channel_id: number
+    }
+
+    // A second guard on the channel: it came from the database, but confirm it
+    // matches what we resolved, so a race on the config cannot send this tenant's
+    // payment through another's Till.
+    if (Number(row.payhero_channel_id) !== channel.channelId) {
+      throw new PaymentServiceError(
+        'unknown_account',
+        'The payment channel changed while this payment was starting. Try again.',
+      )
+    }
+
+    const client = await this.payHeroClient()
+    const init = await client.initiateStk({
+      channelId: channel.channelId,
+      // The authoritative amount, straight from the plan or invoice.
+      amount: Number(row.amount),
+      phoneNumber: msisdn,
+      externalReference: row.reference,
+      callbackUrl: input.callbackUrl ?? undefined,
+    })
+
+    if (!init.accepted || !init.reference) {
+      // The provider refused the prompt. The payment row stays pending with a
+      // reason so an operator can see what happened; it is not marked failed
+      // because the money may still be promptable later.
+      await this.admin
+        .from('payments')
+        .update({ failure_reason: init.message })
+        .eq('id', row.payment_id)
+
+      return {
+        ok: false,
+        paymentId: row.payment_id,
+        reference: row.reference,
+        amount: Number(row.amount),
+        currency: row.currency ?? 'KES',
+        message: init.message,
+        promptSent: false,
+        checkoutId: null,
+        merchantRequestId: null,
+      }
+    }
+
+    // Store the provider's transaction reference. Still pending — explicitly.
+    await this.admin.rpc('record_payhero_stk', {
+      p_payment_id: row.payment_id,
+      p_transaction_id: init.reference,
+    })
+
+    return {
+      ok: true,
+      paymentId: row.payment_id,
+      reference: row.reference,
+      amount: Number(row.amount),
+      currency: row.currency ?? 'KES',
+      message: init.message,
+      promptSent: true,
+      // PayHero's transaction id is returned as the checkout id so callers that
+      // already persist that field keep working unchanged.
+      checkoutId: init.reference,
+      merchantRequestId: null,
+    }
+  }
+
+  // ── HashBack payment initiation ──────────────────────────────────────────
 
   /**
    * Starts a payment for an invoice or a package.
@@ -343,6 +538,151 @@ export class PaymentGatewayService {
       promptSent: true,
       checkoutId: init.checkoutId,
       merchantRequestId: init.merchantRequestId,
+    }
+  }
+
+  // ── PayHero verification and settlement ───────────────────────────────────
+
+  /**
+   * Verifies a PayHero transaction with the provider and settles it if confirmed.
+   *
+   * This is the ONLY path that can settle a PayHero payment, and the ordering is
+   * the whole security argument:
+   *
+   *   1. Ask PayHero what actually happened (`/api/v2/transaction-status`).
+   *   2. Settle ONLY if PayHero says success.
+   *
+   * An inbound callback is explicitly NOT trusted. PayHero documents no webhook
+   * signature — no HMAC, no shared secret, nothing to verify a callback against —
+   * so a callback body is an unauthenticated assertion from the internet. This
+   * method ignores whatever the caller claims the status was and re-reads the
+   * truth from PayHero over the credentialed channel. A forged "paid" callback
+   * therefore activates nothing, because it is never believed.
+   *
+   * Idempotency comes from the shared settlement function: a second call for a
+   * reference already settled returns duplicate=true and writes nothing, so
+   * out-of-order or repeated callbacks cannot renew a customer twice.
+   */
+  async verifyPayHeroPayment(input: { reference: string }): Promise<ProcessResult> {
+    const reference = input.reference?.trim()
+    if (!reference) {
+      return {
+        ok: false, settled: false, duplicate: false, activated: false,
+        reason: 'unknown_reference',
+      }
+    }
+
+    // Load the payment first, so an unknown reference never spends an API call and
+    // never reaches PayHero with a reference we do not own.
+    const { data: payment } = await this.admin
+      .from('payments')
+      .select('id, isp_id, status, payhero_channel_id')
+      .eq('provider_reference', reference)
+      .maybeSingle()
+
+    const row = payment as {
+      id?: string
+      isp_id?: string | null
+      status?: string | null
+      payhero_channel_id?: number | null
+    } | null
+
+    if (!row?.isp_id) {
+      await this.recordPayHeroReconciliation(reference, 'no matching payment for this reference')
+      return {
+        ok: false, settled: false, duplicate: false, activated: false,
+        reason: 'unknown_reference',
+      }
+    }
+
+    // Already settled: stop here. Re-asking PayHero would spend a call to learn
+    // something already known, and settle_payhero_payment would return a duplicate.
+    if (row.status === 'success') {
+      return {
+        ok: true, settled: false, duplicate: true, activated: false, ispId: row.isp_id,
+      }
+    }
+
+    const client = await this.payHeroClient()
+    // PayHero accepts either our external reference or the M-Pesa code, so the
+    // reference we minted is sufficient and no extra id has to be threaded through.
+    const status = await client.getTransactionStatus(reference)
+
+    if (status.state === 'pending') {
+      // Genuinely still in flight. Nothing is written and nothing is activated; a
+      // later callback or a scheduled sweep will try again.
+      return {
+        ok: true, settled: false, duplicate: false, activated: false,
+        reason: 'pending', ispId: row.isp_id,
+      }
+    }
+
+    if (status.state === 'failed') {
+      await this.admin.rpc('fail_hashback_payment', {
+        p_reference: reference,
+        p_reason: 'PayHero reported the transaction as failed',
+      })
+      return {
+        ok: true, settled: false, duplicate: false, activated: false,
+        reason: 'failed', ispId: row.isp_id,
+      }
+    }
+
+    // ── Verified success ────────────────────────────────────────────────────
+    //
+    // Only now, and only because PayHero said so on a credentialed call, is the
+    // payment settled. Everything downstream (invoice, package activation, RADIUS,
+    // SMS) happens inside settle_hashback_payment, in one transaction, guarded
+    // against replays.
+    const { data: settled, error } = await this.admin.rpc('settle_payhero_payment', {
+      p_reference: reference,
+      p_transaction_id: String(status.raw.id ?? reference),
+      p_receipt: String(status.raw.receipt ?? status.raw.id ?? reference),
+      p_msisdn: typeof status.raw.phone_number === 'string' ? status.raw.phone_number : null,
+      p_amount: typeof status.raw.amount === 'number' ? status.raw.amount : null,
+      p_channel_id: row.payhero_channel_id ?? null,
+      // PayHero's own words, kept verbatim so a disputed payment can be audited.
+      p_provider_metadata: status.raw as Record<string, unknown>,
+    })
+
+    if (error) {
+      throw new PaymentServiceError('conflict', error.message)
+    }
+
+    const result = settled as {
+      settled?: boolean
+      duplicate?: boolean
+      activated?: boolean
+      reason?: string
+      isp_id?: string
+    } | null
+
+    return {
+      ok: result?.reason === undefined,
+      settled: result?.settled ?? false,
+      duplicate: result?.duplicate ?? false,
+      activated: result?.activated ?? false,
+      reason: result?.reason,
+      ispId: result?.isp_id ?? row.isp_id,
+    }
+  }
+
+  /**
+   * Queues an unmatched PayHero event for a human.
+   *
+   * Failures here are swallowed on purpose: a reconciliation write failing must
+   * not become a 500 that makes PayHero retry the same callback forever.
+   */
+  private async recordPayHeroReconciliation(reference: string, reason: string): Promise<void> {
+    try {
+      await this.admin.from('payment_reconciliation').insert({
+        provider: 'payhero',
+        provider_reference: reference,
+        reason,
+        status: 'unmatched',
+      })
+    } catch {
+      // Nothing further to escalate to from here.
     }
   }
 

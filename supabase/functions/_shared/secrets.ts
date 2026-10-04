@@ -7,10 +7,16 @@
 //
 //  Format:  v1.<base64(iv)>.<base64(ciphertext)>
 //
-//  Key names are namespaced per domain. ROUTER_CREDENTIALS_KEY and
-//  HASHBACK_CREDENTIALS_KEY derive different AES keys from the same scheme, so a
-//  compromise of one domain's environment cannot decrypt the other's secrets.
-//  The scheme is shared; the key material is not.
+//  Key names are namespaced per domain. ROUTER_CREDENTIALS_KEY,
+//  HASHBACK_CREDENTIALS_KEY and PAYHERO_CREDENTIALS_KEY derive different AES keys
+//  from the same scheme, so a compromise of one domain's environment cannot
+//  decrypt the other's secrets. The scheme is shared; the key material is not.
+//
+//  The per-provider separation is not theoretical tidiness. HashBack keys and
+//  PayHero Basic credentials are issued and rotated independently, and a support
+//  engineer debugging one provider should not be able to read the other. PayHero's
+//  credential is a long-lived account-wide password rather than a scoped key,
+//  which makes that isolation more valuable, not less.
 // =============================================================================
 
 const ALGO = 'AES-GCM'
@@ -21,6 +27,7 @@ const VERSION = 'v1'
 export const KEY_ENV_VARS = {
   router: 'ROUTER_CREDENTIALS_KEY',
   hashback: 'HASHBACK_CREDENTIALS_KEY',
+  payhero: 'PAYHERO_CREDENTIALS_KEY',
 } as const
 
 export type CredentialDomain = keyof typeof KEY_ENV_VARS

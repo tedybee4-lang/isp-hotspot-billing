@@ -1,0 +1,29 @@
+-- =============================================================================
+--  PayHero provider enum value.
+--
+--  WHY THIS FILE EXISTS ALONE
+--  -------------------------
+--  PostgreSQL cannot use a value added by `ALTER TYPE ... ADD VALUE` inside the
+--  same transaction that added it. Adding 'payhero' here and then writing a row
+--  that uses it in a later statement of the same file fails at runtime, which is
+--  the same reason 20260101000850_node_state_values.sql stands alone.
+--
+--  The management API runs each file as its own transaction, so splitting them is
+--  sufficient and leaves the rest of the PayHero migration free to depend on this
+--  value.
+--
+--  WHY 'payhero' IS AN ADDITION AND NOT A REPLACEMENT
+--  -----------------------------------------------
+--  'hashback' and 'daraja' both stay. Enum values are referenced by existing rows
+--  in `payments`; removing one means recreating the type and rewriting every
+--  historical payment, which would destroy the audit trail. HashBack is therefore
+--  removed from the ACTIVE path only — it stops being selectable, and its history
+--  stays readable and exportable.
+--
+--  Note this contradicts the comment on the type in 20260101120000_daraja_cutover.sql,
+--  which says hashback is "the only automated M-Pesa provider". That was true when
+--  written; PayHero is now the other one. 'daraja' remains RETIRED and stays
+--  unwritable via its existing CHECK constraint.
+-- =============================================================================
+
+alter type public.payment_provider add value if not exists 'payhero';

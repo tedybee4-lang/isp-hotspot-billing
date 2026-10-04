@@ -17,6 +17,7 @@ import IspDetail from './pages/admin/IspDetail'
 import AuditLogPage from './pages/admin/AuditLog'
 import PlatformPayments from './pages/admin/PlatformPayments'
 import PlatformHashBack from './pages/admin/PlatformHashBack'
+import PlatformPayHero from './pages/admin/PlatformPayHero'
 
 import IspLayout from './pages/isp/IspLayout'
 import { CaptivePortalSettingsPage } from './pages/isp/settings/CaptivePortal'
@@ -93,6 +94,7 @@ export default function App() {
                     AND re-checks the role server-side, so the route guard is a
                     convenience rather than the actual protection. */}
                 <Route path="payment-gateway/hashback" element={<PlatformHashBack />} />
+                <Route path="payment-gateway/payhero" element={<PlatformPayHero />} />
                 <Route path="audit" element={<AuditLogPage />} />
               </Route>
             </Route>
