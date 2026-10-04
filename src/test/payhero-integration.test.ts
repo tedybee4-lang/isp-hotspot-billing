@@ -11,6 +11,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { providerLabel } from '../lib/provider'
 
 const ROOT = join(import.meta.dirname, '..', '..')
 const read = (...parts: string[]) => readFileSync(join(ROOT, ...parts), 'utf8')
@@ -205,7 +206,105 @@ describe('PayHero endpoint security posture', () => {
   })
 })
 
-describe('HashBack history is preserved while PayHero becomes active', () => {
+describe('active customer UI uses PayHero, not HashBack', () => {
+  it('branches the portal on the resolved collection mode, not on a hard-coded provider', () => {
+    const portal = code('src/pages/CaptivePortal.tsx')
+    // The branch must go through the shared helper. Hard-coding 'payhero' here
+    // would break every manual tenant the moment this file was edited again.
+    expect(portal).toMatch(/collectionModeFor\(payment\.provider, payment\.mode\)/)
+    expect(portal).not.toMatch(/payment\.mode === 'manual_till'\s*\?/)
+  })
+
+  it('never shows success from anything but the shared gate', () => {
+    const portal = code('src/pages/CaptivePortal.tsx')
+    // A screen that decides success for itself can drift and start claiming
+    // payment on an STK acknowledgement.
+    expect(portal).toMatch(/const settled = canShowSuccess\(phase\)/)
+    expect(portal).not.toMatch(/status === 'success'\s*\?|res\.status === 'success'\s*\?/)
+  })
+
+  it('keeps the manual Till panel, and only as the manual path', () => {
+    const portal = code('src/pages/CaptivePortal.tsx')
+    // Manual collection is a real mode for tenants with no automated channel; it
+    // is not deleted, it is simply not the default and not the active provider.
+    expect(portal).toMatch(/function ManualTillPanel/)
+    expect(portal).toMatch(/collectionModeFor\(payment\.provider, payment\.mode\) === 'manual_till'/)
+  })
+})
+
+describe('admin and ISP surfaces name PayHero as the active provider', () => {
+  it('leads the platform payments page with PayHero', () => {
+    const page = code('src/pages/admin/PlatformPayments.tsx')
+    expect(page).toMatch(/PayHero is the active M-Pesa payment provider/)
+    expect(page).toMatch(/to="\/admin\/payment-gateway\/payhero"/)
+  })
+
+  it('marks HashBack as legacy rather than removing or promoting it', () => {
+    const page = code('src/pages/admin/PlatformPayments.tsx')
+    // Removing it would hide the provider five historical payments were settled
+    // through; promoting it would tell an operator to configure the wrong thing.
+    expect(page).toMatch(/Legacy — historical payments only/)
+    expect(page).toMatch(/no longer the active provider/)
+    expect(page).toMatch(/to="\/admin\/payment-gateway\/hashback"/)
+  })
+
+  it('shows the provider on the ISP payment settings page', () => {
+    const page = code('src/pages/isp/settings/Payment.tsx')
+    expect(page).toMatch(/function ProviderStatusCard/)
+    // The tenant is resolved server-side from the caller's own profile; the page
+    // must not take an ispId it could point somewhere else.
+    expect(page).toMatch(/fetchMyPaymentChannel\(\)/)
+    expect(page).not.toMatch(/fetchMyPaymentChannel\(\s*\w*[Ii]sp/)
+  })
+
+  it('labels the billing toggle so manual is not mistaken for the active path', () => {
+    const page = code('src/pages/isp/views.tsx')
+    // Online M-Pesa is the default; manual is labelled as an administrative act.
+    expect(page).toMatch(/Online \(M-Pesa\)/)
+    expect(page).toMatch(/Manual \/ admin/)
+    expect(page).toMatch(/useState<'stk' \| 'manual_till'>\('stk'\)/)
+  })
+})
+describe('no provider secret can reach the browser', () => {
+  it('keeps the frontend payment modules free of credential handling', () => {
+    for (const f of [
+      'src/lib/provider.ts',
+      'src/lib/payhero.ts',
+      'src/lib/portal.ts',
+      'src/pages/CaptivePortal.tsx',
+      'src/pages/admin/PlatformPayHero.tsx',
+    ]) {
+      const src = code(f)
+      expect(src, `${f} uses a public env var`).not.toMatch(/NEXT_PUBLIC_/)
+      expect(src, `${f} reads a service key`).not.toMatch(/SERVICE_ROLE/)
+      expect(src, `${f} names the encryption key`).not.toMatch(/PAYHERO_CREDENTIALS_KEY/)
+      expect(src, `${f} reads the token directly`).not.toMatch(/payhero_api_token_ciphertext/)
+    }
+  })
+
+  it('never calls a payment provider from browser code', () => {
+    // The browser talks to ISPFLOW. ISPFLOW talks to PayHero. A direct fetch to
+    // the provider would need the Basic token in the client, which is exactly the
+    // leak this rule prevents.
+    for (const f of [
+      'src/lib/provider.ts',
+      'src/lib/payhero.ts',
+      'src/lib/portal.ts',
+      'src/pages/CaptivePortal.tsx',
+    ]) {
+      expect(code(f), f).not.toMatch(/backend\.payhero\.co\.ke/)
+      expect(code(f), f).not.toMatch(/api\.hashback\.co\.ke/)
+    }
+  })
+})
+
+describe('HashBack history is preserved and labelled honestly', () => {
+  it('keeps the historical provider label intact', () => {
+    // A historical HashBack payment must still read "HashBack". Relabelling it to
+    // PayHero would corrupt the audit trail an operator reconciles against.
+    expect(providerLabel('hashback')).toBe('HashBack')
+  })
+
   it('keeps the HashBack enum value so old payments still typecheck', () => {
     // Adding a value is additive; the original enum definition is untouched.
     expect(code(ENUM)).not.toMatch(/hashback'::text\s*<>/)
@@ -213,18 +312,32 @@ describe('HashBack history is preserved while PayHero becomes active', () => {
     expect(cutover).toMatch(/labels remain/i)
   })
 
-  it('keeps every HashBack entry point callable', () => {
+  it('keeps the legacy HashBack admin route mounted', () => {
+    // The screen is retained for reconciliation. Deleting the route would strand
+    // an operator mid-investigation with no way to see the old configuration.
+    const app = code('src/App.tsx')
+    expect(app).toMatch(/payment-gateway\/hashback/)
+    expect(app).toMatch(/payment-gateway\/payhero/)
+  })
+
+  it('keeps every HashBack settlement entry point in the service', () => {
     const svc = code('supabase/functions/_shared/payment-service.ts')
     // Removing HashBack from the ACTIVE path must not remove its history or the
     // settlement function PayHero now also relies on.
     for (const fn of [
-      'startPayment',
-      'processWebhookEvent',
-      'reconcilePayment',
-      'verifyPlatformConnection',
+      'startPayment', 'processWebhookEvent', 'reconcilePayment', 'verifyPlatformConnection',
     ]) {
-      expect(svc, `${fn} was removed`).toMatch(new RegExp(fn))
+      expect(svc, fn).toMatch(new RegExp(fn))
     }
+  })
+
+  it('does not auto-assign a PayHero channel to any ISP', () => {
+    // Three ISPs and one Till: which tenant collects through it is a business
+    // decision, and the migration must not make it.
+    const sql = code('supabase/migrations/20260101300000_portal_payhero_route.sql')
+    expect(sql).not.toMatch(/13137/)
+    // This migration only routes payments; it never writes a tenant's channel.
+    expect(sql).not.toMatch(/insert into public\.isp_payment_configs/)
   })
 
   it('keeps the HashBack credential column on isp_payment_configs', () => {

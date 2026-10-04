@@ -128,6 +128,19 @@ export function HotspotView() {
 }
 
 // ── Billing portal ───────────────────────────────────────────────────────────
+/**
+ * Collection-mode switch.
+ *
+ * The default is the ACTIVE PROVIDER (PayHero), because that is what an ISP with an
+ * automated channel configured wants and what a customer expects. The manual
+ * option is kept, not deprecated: confirming a Till payment by hand is a real
+ * administrative operation that no API replaces, and an ISP whose provider is not
+ * configured yet still needs it.
+ *
+ * The two are labelled so they cannot be confused. "Manual / admin" is deliberate
+ * wording: it tells the operator this is a human process, not a fallback that
+ * happens when the provider is broken.
+ */
 export function BillingView() {
   const { clients, invoices, tickets, plans, messagesFor, payInvoice, addTicket, upgradePlan, reload } = useTenant()
   const [mode, setMode] = useState<'stk' | 'manual_till'>('stk')
@@ -157,7 +170,7 @@ export function BillingView() {
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-800'
             }`}
           >
-            STK Push
+            Online (M-Pesa)
           </button>
           <button
             onClick={() => setMode('manual_till')}
@@ -167,7 +180,7 @@ export function BillingView() {
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-800'
             }`}
           >
-            Till / Paybill
+            Manual / admin
           </button>
         </div>
       </div>
@@ -246,13 +259,16 @@ return (
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-black text-slate-900 dark:text-white">
-                Collect via Till / Paybill
+                Manual / admin payment
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                No Daraja API needed — the customer pays your Till, staff confirms it.
+                The customer pays your Till by hand and staff confirm it. Use this for
+                cash and offline payments; online M-Pesa is the default above.
               </p>
             </div>
-            <Button size="sm" variant="secondary" onClick={() => setMode('stk')}>Use STK Push</Button>
+            <Button size="sm" variant="secondary" onClick={() => setMode('stk')}>
+              Use online M-Pesa
+            </Button>
           </div>
 
           {payError && <Alert kind="error">{payError}</Alert>}

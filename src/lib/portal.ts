@@ -131,9 +131,10 @@ export async function redeemPortalVoucher(
 /**
  * Starts a payment for a package.
  *
- * Deliberately has no amount, ISP or account parameter. The price, the
- * destination AND the collection mode are all resolved server-side from the
- * slug and the plan id.
+ * Deliberately has no amount, ISP, provider or account parameter. The price, the
+ * destination, the PROVIDER and the collection mode are all resolved server-side
+ * from the slug and the plan id. The browser cannot choose who collects its money,
+ * which is what keeps one ISP's portal from prompting another ISP's Till.
  *
  * The response is one of two shapes depending on how that ISP collects money:
  *  - `mode: 'stk'`        an M-Pesa prompt was sent; poll for settlement.
@@ -144,6 +145,8 @@ export interface PortalPaymentStart {
   ok: boolean
   status: string
   mode?: 'stk' | 'manual_till'
+  /** Which provider actually owns this payment, as resolved server-side. */
+  provider?: string
   message: string
   reference: string
   amount: number

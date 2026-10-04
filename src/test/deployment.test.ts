@@ -1047,30 +1047,67 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     expect(fn).toMatch(/payment_grant_hours\(v_pay\.isp_id/)
   })
 
-  it('lets a Till-configured ISP sell, not just a HashBack-linked one', () => {
-    // `manual_till` is the product's only supported collection mode: Daraja was
-    // retired, and HashBack is optional per tenant. Requiring a connected
-    // HashBack channel meant the portal refused every sale for every ISP that
+  it('lets a Till-configured ISP sell, not just an automated one', () => {
+    // `manual_till` is a supported collection mode: Daraja was retired, and an
+    // automated provider is optional per tenant. Requiring a connected
+    // automated channel meant the portal refused every sale for every ISP that
     // had configured the one thing it can actually collect.
-    const sql = read('supabase/migrations/20260101200000_portal_storefront.sql')
+    const sql = read('supabase/migrations/20260101300000_portal_payhero_route.sql')
     const fn = sql.slice(sql.indexOf('create or replace function public.portal_create_payment'))
 
-    // HashBack is still required to be complete before STK is attempted...
-    expect(fn).toMatch(/if v_cfg\.payment_provider::text = 'hashback' then/)
+    // One predicate decides "collects automatically", so the readiness check, the
+    // payment method and the collection mode cannot drift apart.
+    expect(fn).toMatch(/v_automated := v_cfg\.payment_provider::text in \('hashback', 'payhero'\)/)
+
+    // An automated provider is still required to be complete before STK...
+    expect(fn).toMatch(/if v_automated then/)
     expect(fn).toMatch(/connection_status::text <> 'connected'/)
+    // ...and each names its own destination column, so a misconfigured tenant is
+    // refused rather than prompted at an unknown Till.
+    expect(fn).toMatch(/payment_provider::text = 'payhero' and v_cfg\.payhero_channel_id is null/)
+    expect(fn).toMatch(/payment_provider::text = 'hashback' and v_cfg\.hashback_account_id is null/)
+
     // ...but a Till or Paybill is a legitimate alternative, not a refusal.
     expect(fn).toMatch(/elsif nullif\(btrim\(coalesce\(v_cfg\.till_number/)
 
     // The collection mode is decided server-side and told to the caller, so the
     // browser cannot request a path the ISP has not configured.
-    expect(fn).toMatch(/'collection_mode', case when v_cfg\.payment_provider::text = 'hashback'/)
+    expect(fn).toMatch(/'collection_mode', case when v_automated/)
 
     // The payment records HOW it will be settled, because the two modes settle
     // through different functions.
-    expect(fn).toMatch(/then 'mpesa' else 'till_manual'/)
+    expect(fn).toMatch(/case when v_automated then 'mpesa' else 'till_manual'/)
 
-    // And the Edge Function acts on it rather than always prompting M-Pesa.
+    // The provider is reported so the Edge Function prompts the right one, and the
+    // browser can label the screen without deciding this itself.
+    expect(fn).toMatch(/'provider', v_cfg\.payment_provider::text/)
+  })
+
+  it('prompts PayHero from the portal without a second provider implementation', () => {
+    // The captive portal must be able to REACH PayHero. It does so through the
+    // already-verified adapter, not a portal-specific copy of it.
     const edge = read('supabase/functions/portal-stk/index.ts')
+
+    expect(edge).toMatch(/if \(charge\.provider === 'payhero'\)/)
+    expect(edge).toMatch(/new PayHeroClient\(\{ apiToken: creds\.apiToken \}\)/)
+
+    // The amount and the channel both come from the resolved charge, never from
+    // the request, so a caller cannot redirect or re-price a payment.
+    expect(edge).toMatch(/channelId: charge\.payhero_channel_id/)
+    expect(edge).toMatch(/amount: Number\(charge\.amount\)/)
+
+    // The callback is pointed at the existing verification endpoint rather than a
+    // new one.
+    expect(edge).toMatch(/functions\/v1\/payhero-callback/)
+
+    // Initiation is explicitly not settlement.
+    expect(edge).toMatch(/status: 'pending'/)
+
+    // An absent reference means the prompt was NOT sent; saying otherwise would
+    // send a customer to a phone with no prompt on it.
+    expect(edge).toMatch(/if \(!result\.accepted \|\| !result\.reference\)/)
+
+    // The manual path still works and is still reachable.
     expect(edge).toMatch(/if \(charge\.collection_mode === 'manual_till'\)/)
     expect(edge).toMatch(/mode: 'manual_till'/)
   })

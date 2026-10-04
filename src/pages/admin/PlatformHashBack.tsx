@@ -1,12 +1,24 @@
 /**
- * Platform HashBack configuration — super admin only.
+ * Legacy HashBack configuration — super admin only.
  *
- * The one screen in the product where a payment credential is entered. Two rules
- * shape everything here:
+ * WHY THIS STILL EXISTS
+ * ---------------------
+ * HashBack is no longer the active provider; PayHero is. But historical payments
+ * were settled through it, and an operator reconciling one needs to see what was
+ * configured at the time. The screen is therefore kept, reachable, and clearly
+ * marked legacy — it is NOT the place to configure new collections, and it says so
+ * at the top rather than relying on the reader noticing the URL.
  *
- *   1. A stored secret is never sent back to the browser, so the fields cannot
- *      show a masked value pretending to be editable. They are write-only: blank
- *      means "leave unchanged", and the saved state is shown as a boolean.
+ * Nothing was removed. The credential store, the verification call and the
+ * settlement path all still work, because a historical callback can still arrive
+ * and has to settle correctly.
+ *
+ * It remains the one screen in the product where a payment credential is entered.
+ * Two rules shape everything here:
+ *
+ *   1. A stored secret is never sent back to the browser, so the fields cannot show
+ *      a masked value pretending to be editable. They are write-only: blank means
+ *      "leave unchanged", and the saved state is shown as a boolean.
  *   2. Nothing says Connected unless HashBack actually said so. "Configured" and
  *      "Verified" are separate states, because a key can be stored and still be
  *      wrong — and a platform owner who cannot tell those apart will enable
@@ -164,13 +176,22 @@ export default function PlatformHashBack() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
-          HashBack
+          HashBack <span className="text-sm text-slate-400">(legacy)</span>
         </h1>
         <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-          The platform's M-Pesa collection account. Every ISP pays through its own
-          channel; this credential is shared and never visible to a tenant.
+          The former M-Pesa collection account, kept so historical payments can be
+          reconciled. PayHero is the active provider.
         </p>
       </div>
+
+      {/* Stated on the screen, not only in the URL, so nobody configures new
+          collections here by mistake. */}
+      <Alert kind="warning">
+        HashBack is <strong>no longer the active payment provider</strong>. New
+        collections go through PayHero, which is configured under Platform &rarr;
+        Payment gateway &rarr; PayHero. Keep this screen available only for
+        reconciling payments that were already settled through HashBack.
+      </Alert>
 
       {error && <Alert kind="error">{error}</Alert>}
       {notice && <Alert kind="success">{notice}</Alert>}

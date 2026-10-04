@@ -375,9 +375,10 @@ function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
         )}
 
         <Alert kind="info">
-          Automated M-Pesa payments run through <strong>HashBack</strong>. The ISP links
-          its own HashBack channel under <strong>Settings &rarr; Payments</strong>. There is
-          no Safaricom Daraja account to configure: that path was removed.
+          Automated M-Pesa payments run through <strong>PayHero</strong>. The platform
+          owner connects PayHero once under <strong>Platform &rarr; Payment gateway
+          &rarr; PayHero</strong> and assigns this ISP a PayHero payment channel. There
+          is no Safaricom Daraja account to configure: that path was removed.
         </Alert>
 
         <div className="grid grid-cols-2 gap-3">

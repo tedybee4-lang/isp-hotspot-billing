@@ -22,7 +22,7 @@ import {
 } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import {
-  CheckCircle2, ChevronDown, LifeBuoy, Loader2, Phone, RefreshCw, ShieldCheck,
+  CheckCircle2, ChevronDown, CircleX, LifeBuoy, Loader2, Phone, RefreshCw, ShieldCheck,
   Smartphone, Ticket, User, Wifi,
 } from 'lucide-react'
 import {
@@ -31,6 +31,15 @@ import {
   startPortalPayment, PortalError,
   type PortalPackage, type PortalSettings, type PortalPaymentStart,
 } from '../lib/portal'
+import {
+  canShowSuccess,
+  collectionModeFor,
+  isTerminalPhase,
+  phaseFromStatus,
+  phaseMessage,
+  providerLabel,
+  type PaymentPhase,
+} from '../lib/provider'
 import { config } from '../lib/config'
 import { loadDb } from '../lib/demoStore'
 import type { Isp, Plan } from '../lib/types'
@@ -353,16 +362,23 @@ function Storefront({ slug, settings, packages }: { slug: string } & PortalState
             </p>
           )}
 
-        {/* Two collection paths, so two screens: an STK prompt is already on
-            the customer phone and only needs watching, while a Till payment has
-            not happened yet and needs telling them what to do. */}
+        {/* Two collection paths, so two screens: an automated provider has already put a
+            prompt on the customer's phone and only needs watching, while a manual
+            Till payment has not happened yet and needs telling them what to do.
+            The branch reads the mode the BACKEND resolved from this tenant's own
+            configuration — the browser does not get to choose. */}
         {payment &&
-          (payment.mode === 'manual_till' ? (
+          (collectionModeFor(payment.provider, payment.mode) === 'manual_till' ? (
             <ManualTillPanel payment={payment} currency={currency} />
           ) : (
             // `payment` carries its own currency; the storefront label goes last so it
             // wins rather than being silently overwritten.
-            <PaymentWaiting slug={slug} {...payment} currency={currency} />
+            <PaymentWaiting
+              slug={slug}
+              {...payment}
+              currency={currency}
+              provider={payment.provider}
+            />
           ))}
 
         {/* â”€â”€ Voucher: an additional option, not the whole portal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
@@ -784,38 +800,90 @@ function ManualTillPanel({ payment, currency }: { payment: PortalPaymentStart; c
 }
 
 /**
- * The waiting screen.
+ * The automated-payment screen: one component for every M-Pesa provider.
  *
- * Polls the server's view of the payment. It deliberately reports what the
- * platform has actually recorded: "pending" until a verified provider result
- * settles it. Nothing here activates anything, and nothing here claims the
- * customer is online before the backend says so.
+ * It exists instead of a per-provider screen because the FLOW is identical
+ * whichever provider is behind it — prompt, wait, verify, settle — and the provider
+ * only changes which endpoint accepted the STK. Writing one screen per provider
+ * would guarantee they drift apart on the states below, which is where the
+ * money-critical mistakes live.
+ *
+ * The rule this component exists to enforce:
+ *
+ *   AN STK PROMPT IS NOT A PAYMENT.
+ *
+ * `stk_sent` means PayHero (or HashBack) accepted a request to send a prompt. It
+ * says nothing about whether anyone entered their PIN. Only a status the BACKEND
+ * reports may advance this to success, and `canShowSuccess()` is the single place
+ * that decision is made. A customer seeing a receipt for money that never arrived
+ * is unrecoverable: the ISP has activated a package and has no receipt to reconcile
+ * against.
+ *
+ * Polling reuses the portal's existing `portal_payment_status` RPC. It stops on any
+ * terminal state, and it stops on a timeout so a phone that has walked out of range
+ * is not polled forever.
  */
 function PaymentWaiting({
-  slug, currency, reference, message,
-}: { slug: string; currency: string; reference: string; message: string }) {
-  const [status, setStatus] = useState<string>('pending')
-  const [note, setNote] = useState(message)
+  slug, currency, reference, message, provider,
+}: {
+  slug: string
+  currency: string
+  reference: string
+  message: string
+  provider?: string
+}) {
+  const [phase, setPhase] = useState<PaymentPhase>('awaiting')
+  const [note] = useState(message)
   const [amount, setAmount] = useState<number | null>(null)
   const stopped = useRef(false)
+  const attempts = useRef(0)
+
+  // Two minutes is well past any real M-Pesa confirmation and short enough that a
+  // customer is still looking at the page when they are told to check elsewhere.
+  const MAX_POLLS = 30
+  const POLL_MS = 4000
 
   const check = useCallback(async () => {
     if (stopped.current) return
+
+    attempts.current += 1
+    // Announced while asking, so the copy distinguishes "we are checking" from
+    // "we are still waiting for you to pay". Conflating them makes a customer who
+    // has already paid think something is broken.
+    setPhase((p) => (p === 'success' ? p : 'verifying'))
+
     try {
       const res = await fetchPortalPaymentStatus(slug, reference)
       if (res.found && res.status) {
-        setStatus(res.status)
-        if (res.message) setNote(res.message)
         if (res.amount != null) setAmount(Number(res.amount))
-        if (res.status !== 'pending') {
+
+        const next = phaseFromStatus(res.status, {
+          timedOut: attempts.current >= MAX_POLLS,
+        })
+        setPhase(next)
+        if (isTerminalPhase(next)) {
           stopped.current = true
           return
         }
+      } else if (attempts.current >= MAX_POLLS) {
+        // No readable row yet. Keep waiting until the budget runs out.
+        setPhase('timeout')
+        stopped.current = true
+        return
       }
     } catch {
-      // A transient failure keeps polling; the payment itself is unaffected.
+      // A transient failure must not end the flow: the payment is unaffected and
+      // the next poll may well succeed. Only the attempt count ends it, so a flaky
+      // connection cannot strand a customer who has genuinely paid.
+      if (attempts.current >= MAX_POLLS) {
+        setPhase('timeout')
+        stopped.current = true
+        return
+      }
+      setPhase('awaiting')
     }
-    if (!stopped.current) window.setTimeout(() => void check(), 4000)
+
+    if (!stopped.current) window.setTimeout(() => void check(), POLL_MS)
   }, [slug, reference])
 
   useEffect(() => {
@@ -823,16 +891,22 @@ function PaymentWaiting({
     return () => { stopped.current = true; window.clearTimeout(timer) }
   }, [check])
 
-  const settled = status === 'success'
-  const failed = status === 'failed' || status === 'reversed'
-
-  return (
+  // The single gate on claiming success.
+  const settled = canShowSuccess(phase)
+  const failed = phase === 'failed'
+  const timedOut = phase === 'timeout'
+  const waitingDetail = note || phaseMessage('awaiting')
+return (
     <Panel className="p-5 text-center">
       {settled ? (
         <>
           <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
-          <p className="mt-2 text-sm font-black text-slate-900 dark:text-white">Payment received</p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{note}</p>
+          <p className="mt-2 text-sm font-black text-slate-900 dark:text-white">
+            Payment successful ✓
+          </p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Your package has been activated.
+          </p>
           {amount != null && (
             <p className="mt-1 text-[11px] text-slate-400">
               {currency} {amount.toLocaleString()}
@@ -842,19 +916,53 @@ function PaymentWaiting({
             You can close this page and your device will connect.
           </p>
         </>
+      ) : failed ? (
+        <>
+          <CircleX className="mx-auto h-8 w-8 text-rose-500" />
+          <p className="mt-2 text-sm font-black text-slate-900 dark:text-white">
+            Payment not completed
+          </p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {phaseMessage('failed')}
+          </p>
+          <p className="mt-3 font-mono text-[10px] text-slate-400">Ref {reference}</p>
+        </>
+      ) : timedOut ? (
+        <>
+          <CircleX className="mx-auto h-8 w-8 text-amber-500" />
+          <p className="mt-2 text-sm font-black text-slate-900 dark:text-white">
+            Still confirming
+          </p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {phaseMessage('timeout')}
+          </p>
+          <p className="mt-3 font-mono text-[10px] text-slate-400">Ref {reference}</p>
+          <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+            Your package activates automatically once the payment is confirmed. You do
+            not need to pay again.
+          </p>
+        </>
       ) : (
         <>
           <Loader2
-            className={cn('mx-auto h-6 w-6 animate-spin', failed ? 'text-rose-500' : 'text-slate-400')}
+            className={cn(
+              'mx-auto h-6 w-6 animate-spin',
+              phase === 'verifying' ? 'text-emerald-500' : 'text-slate-400',
+            )}
           />
           <p className="mt-2 text-sm font-black text-slate-900 dark:text-white">
-            {failed ? 'Payment not completed' : 'Waiting for your confirmation'}
+            {phase === 'verifying' ? 'Verifying payment…' : 'Check your phone'}
           </p>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{note}</p>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {phase === 'verifying' ? phaseMessage('verifying') : waitingDetail}
+          </p>
           <p className="mt-3 font-mono text-[10px] text-slate-400">Ref {reference}</p>
-          {!failed && (
+          {/* Naming the provider is reassuring rather than technical: it tells the
+              customer the prompt came from the service their ISP configured, not a
+              stranger. The provider's own name is not a secret. */}
+          {provider && (
             <p className="mt-1 text-[10px] text-slate-400">
-              Enter your M-Pesa PIN on your phone to complete this payment.
+              Powered by {providerLabel(provider)}
             </p>
           )}
         </>

@@ -49,7 +49,12 @@
 // =============================================================================
 
 import { HashBackClient, normaliseMsisdn } from '../_shared/hashback.ts'
-import { adminFromEnv, resolvePlatformCredentials } from '../_shared/hashback-credentials.ts'
+import { PayHeroClient } from '../_shared/payhero.ts'
+import {
+  adminFromEnv,
+  resolvePlatformCredentials,
+} from '../_shared/hashback-credentials.ts'
+import { resolvePayHeroCredentials } from '../_shared/payhero-credentials.ts'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -82,6 +87,22 @@ function classify(text: string): { code: string; status: number } {
     return { code: 'not_configured', status: 503 }
   }
   return { code: 'error', status: 500 }
+}
+
+/**
+ * The project's own base URL, for building the callback address we hand PayHero.
+ *
+ * Reads the same environment variable the Supabase client is built from, so there
+ * is no second copy of the project's URL to keep in sync. Returns an empty string
+ * when it is unset rather than throwing, because the only consequence is a missing
+ * callback URL — settlement still works, it just happens on a sweep instead of
+ * immediately.
+ */
+function adminUrl(): string {
+  const deno = (globalThis as { Deno?: { env?: { get(k: string): string | undefined } } }).Deno
+  if (deno?.env?.get) return deno.env.get('SUPABASE_URL') ?? ''
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+  return proc?.env?.SUPABASE_URL ?? ''
 }
 
 Deno.serve(async (req) => {
@@ -144,6 +165,9 @@ Deno.serve(async (req) => {
     currency: string
     plan_name: string
     hashback_account_id: string
+    payhero_channel_id: number | null
+    /** Which provider owns this payment. Resolved server-side, never a request field. */
+    provider: string
     collection_mode: 'stk' | 'manual_till'
     till_number: string | null
     paybill_number: string | null
@@ -180,6 +204,83 @@ Deno.serve(async (req) => {
           ]
         : [],
     }, 200)
+  }
+
+  // ── PayHero: prompt the provider that owns this payment ─────────────────────
+  //
+  // Mirrors the HashBack branch exactly, against the already-verified PayHero
+  // adapter. Nothing about the provider is taken from the request: `charge.provider`
+  // comes from the tenant's own configuration row, and the channel id comes from
+  // that same row. So a caller on one ISP's portal cannot direct a payment at
+  // another's Till even by guessing, because they never supply either value.
+  //
+  // The response is PENDING either way. A prompt was sent; nobody has paid.
+  if (charge.provider === 'payhero') {
+    if (charge.payhero_channel_id == null) {
+      // The RPC already refuses this case, so reaching here means the config
+      // changed between the two calls. Refuse rather than prompt an unknown Till.
+      return json({ error: MESSAGES.not_configured, code: 'not_configured' }, 503)
+    }
+
+    let creds
+    try {
+      creds = await resolvePayHeroCredentials(admin)
+    } catch {
+      console.error('portal-stk: PayHero credentials not configured')
+      return json({ error: MESSAGES.not_configured, code: 'not_configured' }, 503)
+    }
+
+    try {
+      const client = new PayHeroClient({ apiToken: creds.apiToken })
+      const result = await client.initiateStk({
+        channelId: charge.payhero_channel_id,
+        // The authoritative amount, straight from the plan row.
+        amount: Number(charge.amount),
+        phoneNumber: msisdn,
+        externalReference: charge.reference,
+        // PayHero posts its callback here, which is what triggers verification.
+        callbackUrl: `${adminUrl()}/functions/v1/payhero-callback`,
+      })
+
+      // PayHero signals acceptance by returning a reference, not a boolean. An
+      // absent reference means the prompt was NOT sent, and telling the customer
+      // to look at their phone would be a lie.
+      if (!result.accepted || !result.reference) {
+        await admin.from('payments')
+          .update({ failure_reason: result.message })
+          .eq('provider_reference', charge.reference)
+        return json({
+          ok: false,
+          error: 'M-Pesa declined to start this payment. Please try again.',
+          code: 'stk_refused',
+        }, 502)
+      }
+
+      await admin.rpc('record_payhero_stk', {
+        p_payment_id: charge.payment_id,
+        p_transaction_id: result.reference,
+      })
+
+      return json({
+        ok: true,
+        status: 'pending',
+        mode: 'stk',
+        provider: 'payhero',
+        message: result.message || 'Enter your M-Pesa PIN to complete the payment.',
+        reference: charge.reference,
+        amount: Number(charge.amount),
+        currency: charge.currency,
+        plan: charge.plan_name,
+      }, 200)
+    } catch {
+      // Provider unreachable. The payment row exists and is pending, which is the
+      // correct state: it can still be settled by a later callback.
+      console.error('portal-stk: PayHero STK initiation failed')
+      return json({
+        error: 'Could not reach M-Pesa. Please try again shortly.',
+        code: 'provider_unavailable',
+      }, 502)
+    }
   }
 
   // ── Prompt the provider ────────────────────────────────────────────────────

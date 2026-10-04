@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import * as api from '../../../lib/data'
 import type { NetworkSettings, SmsSettings, TillSettings } from '../../../lib/data'
+import { fetchMyPaymentChannel, type MyPaymentChannel } from '../../../lib/payments'
+import { isAutomatedProvider, providerLabel } from '../../../lib/provider'
 import { config } from '../../../lib/config'
 import {
   Card, CardHeader, Button, Field, Alert, Spinner, inputClass, Badge,
@@ -75,7 +77,7 @@ export function PaymentSettingsPage() {
           Payment Settings
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-          Your own Till and PayBill numbers. These belong to this ISP only.
+          Who collects your money, and your own Till and PayBill numbers.
         </p>
       </div>
 
@@ -88,8 +90,17 @@ export function PaymentSettingsPage() {
         </Alert>
       )}
 
+      {/* The provider an ISP actually collects through, read from this tenant's own
+          server-resolved configuration. `fetchMyPaymentChannel()` takes no ISP id, so
+          this can only ever show this tenant's data. */}
+      <ProviderStatusCard />
+
       <Card>
-        <CardHeader title="M-Pesa collection" icon={<CreditCard className="w-4 h-4" />} />
+        <CardHeader
+          title="Manual / admin Till numbers"
+          subtitle="Used when staff confirm a payment by hand, or while no automated channel is assigned"
+          icon={<CreditCard className="w-4 h-4" />}
+        />
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Field label="Till number" hint="Customers pay to this Till">
@@ -114,15 +125,88 @@ export function PaymentSettingsPage() {
           <div className="flex items-start gap-3">
             <Lock className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
             <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              The HashBack API key and webhook secret are held server-side and
-              encrypted. They are never sent to your browser and cannot be read
-              from this page, which is why you only ever see your Till and PayBill
-              numbers here.
+              The PayHero API token is held server-side and encrypted. It is never sent
+              to your browser and cannot be read from this page. You only ever see the
+              payment channel assigned to you, which identifies where your money goes
+              but cannot authorise anything against PayHero.
             </p>
           </div>
         </div>
       </Card>
     </div>
+  )
+}
+
+/**
+ * Shows this ISP's active payment provider and channel.
+ *
+ * Read-only by design. The ISP does not choose its provider or channel: the platform
+ * connects PayHero once and assigns a channel, because a channel may only back one
+ * tenant and an ISP picking its own would let two ISPs share a Till.
+ */
+function ProviderStatusCard() {
+  const [channel, setChannel] = useState<MyPaymentChannel | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchMyPaymentChannel()
+      .then((c) => { if (!cancelled) setChannel(c) })
+      .catch((e: Error) => { if (!cancelled) setError(e.message) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  if (loading) return <Spinner label="Reading your payment provider..." />
+  if (error) return <Alert kind="error">{error}</Alert>
+
+  const provider = providerLabel(channel?.payment_provider)
+  const automated = isAutomatedProvider(channel?.payment_provider)
+  const connected = channel?.connection_status === 'connected'
+
+  return (
+    <Card>
+      <CardHeader
+        title="Payment provider"
+        subtitle="Assigned by the platform. You do not need to configure it."
+        icon={<ShieldCheck className="w-4 h-4" />}
+      />
+      <div className="p-5 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-bold text-slate-900 dark:text-white">{provider}</span>
+          {automated ? (
+            <Badge value={connected ? 'CONNECTED ✓' : 'NOT CONNECTED'} className={connected ? 'emerald' : 'amber'} />
+          ) : (
+            // Manual is a legitimate mode, not a failure state, so it is not
+            // coloured as a warning.
+            <Badge value="MANUAL / ADMIN" className="slate" />
+          )}
+        </div>
+
+        {automated ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {connected
+              ? 'Customers pay by M-Pesa prompt. Your package activates once the payment is confirmed.'
+              : 'The platform has not assigned a working payment channel to you yet. Customers cannot pay online until it does.'}
+          </p>
+        ) : (
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            You collect by hand. Staff issue instructions and confirm the payment against
+            the Till statement.
+          </p>
+        )}
+
+        {/* The channel label is the tenant's own business data and authorises
+            nothing, so it is safe to show. The masked account line is deliberately
+            partial: enough to recognise, not enough to reconstruct. */}
+        {automated && channel?.hashback_account_id && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Channel: {channel.channel_shortcode ?? channel.hashback_account_id}
+          </p>
+        )}
+      </div>
+    </Card>
   )
 }
 

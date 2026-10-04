@@ -133,63 +133,82 @@ Restart `npm run dev`. The sidebar badge switches from **Demo mode** to
 
 ---
 
-## 3. M-Pesa (HashBack)
+## 3. M-Pesa (PayHero)
 
-> **Never** put a HashBack credential in a `VITE_*` variable. Vite inlines those
-> into the public bundle. The API key and webhook secret belong in the Edge
-> Function environment and in the encrypted store, read only with the service role.
+> **Never** put a PayHero credential in a `VITE_*` variable. Vite inlines those
+> into the public bundle. The Basic API token belongs in the Edge Function
+> environment and in the encrypted store, read only with the service role.
 
-HashBack is the only M-Pesa provider. The Safaricom Daraja integration (consumer
-key, consumer secret, passkey, `stk-push`, `stk-callback`) has been removed; the
-credential forms and the STK implementation are gone from the codebase.
+PayHero is the active automated M-Pesa provider. The Safaricom Daraja integration
+(consumer key, consumer secret, passkey, `stk-push`, `stk-callback`) has been
+removed; the credential forms and the STK implementation are gone.
+
+PayHero publishes **no OAuth, Connect App or delegated authorization**. Its only
+documented scheme is a static `Authorization: Basic <token>`, so there is no
+login redirect to implement: a platform admin pastes the token once into the admin
+screen, where it is encrypted at rest and never returned to a browser.
+Verification, channel discovery, STK and settlement are then automatic.
+
+HashBack is retained for historical payments only. Its settlement path is still
+live and correct, because a callback for an old reference can still arrive.
 
 ### Payment modes
 
 | Mode | ISP needs | API keys? | How it works |
 | --- | --- | --- | --- |
+| **PayHero** | Nothing — the platform assigns a channel | Platform token only | Automated STK Push, callback verification and reconciliation. The platform owner connects PayHero and assigns each ISP its own channel. |
 | **Manual Till / Paybill** | Till or Paybill number | None | Customer pays via the M-Pesa app or `*334#`, staff confirm. Works for every ISP, immediately. |
-| **HashBack** | Merchant name, channel type, Till/PayBill shortcode | Platform key only | Automated STK Push, webhook settlement and reconciliation. The ISP links its own HashBack channel. |
 
-**Manual Till** needs nothing and remains the default. Its flow:
+**Manual Till** needs nothing and remains fully supported. Its flow:
 
-1. Staff pick an unpaid invoice in **Billing -> Till / Paybill**
+1. Staff pick an unpaid invoice in **Billing -> Manual / admin**
 2. The system issues instructions: amount, unique reference, Till number, steps
 3. The customer pays from their phone
 4. Staff confirm once it appears on the Till statement (`confirm_manual_payment`)
 5. The invoice is marked paid and the customer's expiry extends 30 days
 
-### 3.1 Platform HashBack credential
+### 3.1 Platform PayHero credential
 
-In the Super Admin panel: **Platform -> Payment gateway -> HashBack**. Enter the
-API key and webhook secret there; they are encrypted with the same AES-GCM store
-used for router credentials and are never returned by any API. The screen shows
-only *configured / not configured*, connection status and webhook status.
+In the Super Admin panel: **Platform -> Payment gateway -> PayHero**. Enter the
+Basic API token there; it is encrypted with the same AES-GCM store used for router
+credentials, under its own `PAYHERO_CREDENTIALS_KEY`, and is never returned by any
+API. The screen shows only *configured / not configured* and connection status.
 
-### 3.2 Per-ISP HashBack channel
+Saving verifies the credential against PayHero's live API and discovers the
+account, wallet balance and every registered Till/PayBill. Nothing says
+"Connected" unless PayHero answered.
 
-Each ISP registers its own channel under **Settings -> Payments** with:
+### 3.2 Assigning a channel to an ISP
 
-- Merchant / company name
-- Channel type (`CustomerBuyGoodsOnline`, `CustomerPayBillOnline`)
-- Till / shortcode / PayBill number
+Channels are discovered from PayHero, not typed. The platform admin selects one on
+the PayHero screen and assigns it to an ISP. A channel may back only one ISP — a
+unique index rejects a second claim — so two tenants can never share a Till.
 
-The Edge Function calls the HashBack Partner API (`/linkaccount`) and stores the
-returned **AccountID** against that tenant. The tenant is resolved from the
-authenticated caller's profile server-side; there is no `ispId` parameter, so a
-browser cannot ask for another ISP's channel.
+The ISP itself does not choose its provider or channel; it sees them read-only
+under **Settings -> Payments**. That is deliberate: letting an ISP pick its own
+channel is how two tenants end up collecting through the same merchant.
 
-`/linkaccount` mints a *fresh* AccountID for an already-linked shortcode, so the
-service refuses to call it twice for the same channel and an ISP never ends up
-with two live accounts.
+### 3.3 Legacy HashBack
 
-### 3.3 Deploy the Edge Functions
+HashBack configuration remains reachable at **Platform -> Payment gateway ->
+HashBack** for reconciling historical payments. It is not the active provider and
+should not be used for new collections.
+
+### 3.4 Deploy the Edge Functions
 
 ```bash
-supabase functions deploy hashback-stk     # authenticated: starts a payment
-supabase functions deploy hashback-webhook --no-verify-jwt
-supabase functions deploy hashback-admin   # authenticated: super admin only
+supabase functions deploy payhero-stk       # authenticated: starts a payment
+supabase functions deploy payhero-admin     # authenticated: super admin only
+supabase functions deploy payhero-callback  # public: PayHero cannot present a JWT
+supabase functions deploy portal-stk --no-verify-jwt
 supabase functions deploy admin-invite     --no-verify-jwt
 ```
+
+`payhero-callback` is exempt from gateway JWT verification because PayHero cannot
+send a Supabase JWT. That is safe only because the endpoint takes nothing from the
+caller except a transaction reference and re-reads the outcome from PayHero over
+the credentialed channel. Do not copy that exemption to `payhero-admin` or
+`payhero-stk`.
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
 
