@@ -27,3 +27,19 @@
 
 [functions.payhero-callback]
 verify_jwt = false
+
+# payhero-reconcile is the recovery sweep for a PayHero callback that never
+# arrived. A scheduler has no Supabase user to present a JWT, so the gateway check
+# is off and authorisation happens in the function instead: it accepts EITHER a
+# super-admin bearer token OR the PAYHERO_RECONCILE_SECRET shared secret, and
+# returns 401 for anything else.
+#
+# This is safe for the same reason payhero-callback is: it never trusts its caller
+# for anything about money. It re-reads OUR OWN pending PayHero payments and asks
+# PayHero, over the credentialed channel, whether each one actually succeeded. It
+# cannot create a payment, choose an amount, or activate anyone on its own.
+#
+# Do NOT copy this exemption to payhero-provision, payhero-admin or payhero-stk:
+# those carry tenant-scoped authority and must keep JWT verification on.
+[functions.payhero-reconcile]
+verify_jwt = false

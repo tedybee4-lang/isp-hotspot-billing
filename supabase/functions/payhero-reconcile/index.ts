@@ -24,10 +24,21 @@
 //  a unique index on the provider transaction id), so running this twice cannot
 //  renew a customer twice or add revenue twice.
 //
-//  Deploy:  supabase functions deploy payhero-reconcile
+//  Deploy:  supabase functions deploy payhero-reconcile --no-verify-jwt
 //  Schedule: attach to Supabase Cron, e.g. every 5 minutes. It also accepts a
 //            POST from a super admin, and a GET with a shared secret header for
 //            an external scheduler.
+//
+//  WHY --no-verify-jwt IS SAFE HERE
+//  -------------------------------
+//  A scheduler has no Supabase user to present a JWT, so the gateway check is off
+//  and THIS function authenticates the caller instead (super-admin bearer token,
+//  or the PAYHERO_RECONCILE_SECRET shared secret; anything else is a 401).
+//
+//  That is only acceptable because nothing about money is taken from the caller.
+//  The sweep re-reads OUR OWN pending PayHero payments and asks PayHero, over the
+//  credentialed channel, whether each one actually succeeded. An attacker gains
+//  nothing: they cannot create a payment, choose an amount, or name a tenant.
 // =============================================================================
 
 import { adminFromEnv } from '../_shared/hashback-credentials.ts'

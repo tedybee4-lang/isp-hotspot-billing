@@ -234,7 +234,7 @@ supabase functions deploy payhero-stk       # authenticated: starts a payment
 supabase functions deploy payhero-admin     # authenticated: super admin only
 supabase functions deploy payhero-callback  # public: PayHero cannot present a JWT
 supabase functions deploy payhero-provision # authenticated: registers a Till as a channel
-supabase functions deploy payhero-reconcile # scheduled: recovers missed callbacks
+supabase functions deploy payhero-reconcile --no-verify-jwt # scheduled: recovers missed callbacks
 supabase functions deploy portal-stk --no-verify-jwt
 supabase functions deploy admin-invite     --no-verify-jwt
 ```
