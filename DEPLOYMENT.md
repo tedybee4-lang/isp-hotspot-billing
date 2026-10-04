@@ -11,14 +11,30 @@ the Vercel dashboard under Settings -> Domains.
 
 ## Test accounts
 
-All use the password `ISINDU316711`.
-
 | Email | Role | Scope |
 |---|---|---|
 | `ops@ultrafaiba.net` | super_admin | platform-wide, all 3 ISPs |
 | `alpha@isp.test` | isp_owner | alpha-nets |
 | `beta@isp.test` | isp_owner | beta-broadband |
 | `gamma@isp.test` | isp_owner | gamma-fibre |
+
+The shared password is **not stored in this repository**. Supply it through the
+environment when running the authenticated browser suite:
+
+```bash
+export PLAYWRIGHT_TEST_PASSWORD='<shared test password>'
+export E2E_BASE_URL='https://your-deployment.example.com'
+npx playwright test e2e/production-auth.spec.ts
+```
+
+`e2e/production-auth.spec.ts` fails immediately with instructions if
+`PLAYWRIGHT_TEST_PASSWORD` is unset, rather than skipping — a silently skipped
+authenticated test is indistinguishable from a passing one. The account emails
+may be overridden with `PLAYWRIGHT_ISP_EMAIL` and `PLAYWRIGHT_ADMIN_EMAIL`.
+
+Keeping the password out of the tree matters here: these accounts include a
+platform super-admin, and a repository is the one place that is published,
+mirrored and cached.
 
 ---
 # Deployment Guide

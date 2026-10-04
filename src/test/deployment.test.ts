@@ -820,6 +820,41 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     expect(panel).toMatch(/onKickSession/)
   })
 
+  it('commits no plaintext account password', () => {
+    // The authenticated browser suite used to read the shared test password out
+    // of this file, which put a platform super-admin's credential in the
+    // repository - and therefore in every mirror, fork and CI cache of it.
+    const guide = read('DEPLOYMENT.md')
+    expect(guide).not.toMatch(/All use the password/i)
+    // No long password-shaped literal in the guide at all.
+    expect(guide).not.toMatch(/password[^.\n]{0,20}`[A-Za-z0-9!@#$%^&*]{8,}`/)
+
+    // And the suite must take it from the environment instead.
+    const spec = read('e2e', 'production-auth.spec.ts')
+    expect(spec).toMatch(/PLAYWRIGHT_TEST_PASSWORD/)
+    expect(spec).not.toMatch(/readFileSync/)
+
+    // Across the whole tree, no committed password literal for these accounts.
+    for (const f of ['DEPLOYMENT.md', 'e2e/production-auth.spec.ts', 'e2e/smoke.spec.ts']) {
+      expect(read(...f.split('/')), `${f} contains a password literal`)
+        .not.toMatch(/ISINDU\d+/i)
+    }
+  })
+
+  it('fails loudly when the browser test password is missing', () => {
+    // A silently skipped authenticated test is indistinguishable from a passing
+    // one, so the suite must refuse to start rather than skip.
+    const spec = read('e2e', 'production-auth.spec.ts')
+    expect(spec).toMatch(/if\s*\(\s*!PASSWORD\s*\)\s*\{/)
+    expect(spec).toMatch(/throw new Error/)
+    // The error must name the variable, not the value. The only quoted literal it
+    // may carry is the instructional placeholder, never a real password.
+    expect(spec).toMatch(/PLAYWRIGHT_TEST_PASSWORD is not set/)
+    expect(spec).not.toMatch(
+      /PASSWORD\s*=\s*['"](?!<the shared test password>)[^'"]{4,}['"]/,
+    )
+  })
+
   it('authenticates the telemetry poller, which was open to the internet', () => {
     const poll = code('supabase', 'functions', 'mikrotik-poll', 'index.ts')
     // Verified before the fix: an anonymous GET returned HTTP 200 and a summary

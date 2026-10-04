@@ -2,19 +2,30 @@
  * Authenticated smoke test against a DEPLOYED build.
  *
  * Runs against E2E_BASE_URL, so the same assertions that guard a local build
- * also guard what is actually in production. The documented test-account
- * password is read from DEPLOYMENT.md at runtime rather than written here, so
- * this file contains no credential.
+ * also guard what is actually in production.
+ *
+ * The test-account password is NOT in this repository. It is supplied through
+ * PLAYWRIGHT_TEST_PASSWORD, which is a local/CI environment variable and is
+ * never committed, never bundled and never logged. If it is absent the suite
+ * fails loudly rather than silently skipping, because a silently skipped
+ * authenticated test is indistinguishable from a passing one.
  */
 import { test, expect, type ConsoleMessage } from '@playwright/test'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 
-const ROOT = join(import.meta.dirname, '..')
-const guide = readFileSync(join(ROOT, 'DEPLOYMENT.md'), 'utf8')
-const PASSWORD = /All use the password `([^`]+)`/.exec(guide)?.[1] ?? ''
-const ISP = 'alpha@isp.test'
-const ADMIN = 'ops@ultrafaiba.net'
+const PASSWORD = process.env.PLAYWRIGHT_TEST_PASSWORD ?? ''
+const ISP = process.env.PLAYWRIGHT_ISP_EMAIL ?? 'alpha@isp.test'
+const ADMIN = process.env.PLAYWRIGHT_ADMIN_EMAIL ?? 'ops@ultrafaiba.net'
+
+if (!PASSWORD) {
+  throw new Error(
+    'PLAYWRIGHT_TEST_PASSWORD is not set.\n'
+    + 'These tests sign in as real accounts against a real deployment, so the '
+    + 'password must be supplied through the environment, not committed.\n'
+    + 'Example (PowerShell):\n'
+    + "  $env:PLAYWRIGHT_TEST_PASSWORD = '<the shared test password>'\n"
+    + '  $env:E2E_BASE_URL = 'https://your-deployment.example.com'',
+  )
+}
 
 /** Console errors that actually break the page rather than noise. */
 function fatalErrors(messages: ConsoleMessage[]): string[] {
