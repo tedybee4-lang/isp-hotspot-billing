@@ -47,6 +47,8 @@ function fakeAdmin(overrides: {
   config?: Record<string, unknown> | null
   rpcResults?: Record<string, unknown>
   calls?: string[]
+  /** Other ISPs' short codes, for the cross-tenant Till-conflict check. */
+  claimants?: Array<{ isp_id: string; payhero_channel_short_code: string | null }>
 } = {}) {
   const calls = overrides.calls ?? []
   const ispId = 'ispId' in overrides ? overrides.ispId : 'isp-a'
@@ -82,6 +84,16 @@ function fakeAdmin(overrides: {
           }
           return chain
         },
+        // The cross-tenant Till-claimant sweep in channel provisioning. Returns
+        // whatever the test configured as `claimants`, defaulting to none.
+        neq: () => chain,
+        not: () => Promise.resolve({
+          data: (overrides as { claimants?: unknown }).claimants ?? [],
+          error: null,
+        }),
+        limit: () => chain,
+        lte: () => chain,
+        order: () => chain,
         maybeSingle: () =>
           Promise.resolve({
             data:
@@ -91,7 +103,12 @@ function fakeAdmin(overrides: {
                 ? { isp_id: ispId }
                 : table === 'platform_payment_config'
                   // The encrypted credential lives here, never in plaintext.
-                  ? { payhero_api_token_ciphertext: STORED_CIPHERTEXT }
+                  // payhero_account_id is what channel registration needs as its
+                  // `account_id`, so it must be present for provisioning to proceed.
+                  ? {
+                      payhero_api_token_ciphertext: STORED_CIPHERTEXT,
+                      payhero_account_id: 5003,
+                    }
                   : (builder.__result ?? null),
             error: null,
           }),
@@ -619,5 +636,266 @@ describe('PayHero tenant isolation', () => {
       vi.mocked(fetchImpl).mock.calls.map((c) => c[1]?.body ?? null),
     )
     expect(rendered).not.toContain(TOKEN)
+  })
+})
+
+describe('automatic PayHero channel provisioning', () => {
+  // The property under test: an ISP enters a Till and it becomes a channel they
+  // can take money against, WITHOUT a human creating it in PayHero's dashboard,
+  // and WITHOUT a second channel ever appearing for the same Till.
+
+  it('registers a channel with PayHero for a brand-new Till', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      // Discovery first: PayHero does not know this Till yet.
+      if (String(init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ payment_channels: [] }), { status: 200 })
+      }
+      return new Response(
+        JSON.stringify({ id: 9001, channel_type: 'till', short_code: '522533' }),
+        { status: 200 },
+      )
+    }) as unknown as typeof fetch
+
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      config: { payhero_channel_id: null, payhero_channel_short_code: null },
+      rpcResults: {
+        provision_payhero_channel: {
+          ok: true, payhero_channel_id: 9001, connection_status: 'connected',
+        },
+      },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.provisionPayHeroChannel({ ispId: 'isp-a', shortCode: '522533' })
+
+    expect(result.ok).toBe(true)
+    expect(result.status).toBe('ready')
+    expect(result.created).toBe(true)
+    expect(calls).toContain('provision_payhero_channel')
+
+    // The documented Register Payment Channel body was sent, verbatim.
+    const posted = vi.mocked(fetchImpl).mock.calls
+      .map((c) => c[1]?.body)
+      .filter(Boolean)
+      .map((b) => JSON.parse(String(b)))
+    expect(posted[0]).toMatchObject({ channel_type: 'till', short_code: 522533 })
+  })
+
+  it('creates NOTHING when the Till has not changed', async () => {
+    // This is the duplicate-channel guard. PayHero's register endpoint has no
+    // idempotency key, so re-registering on every settings save would leave an
+    // ISP with two channels for one Till and split its history.
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ payment_channels: [] }), { status: 200 }),
+    ) as unknown as typeof fetch
+
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      config: { payhero_channel_id: 13137, payhero_channel_short_code: '5441898' },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.provisionPayHeroChannel({
+      ispId: 'isp-a',
+      // The SAME Till already connected.
+      shortCode: '5441898',
+    })
+
+    expect(result.status).toBe('ready')
+    expect(result.created).toBe(false)
+    expect(result.channelId).toBe(13137)
+    // No provider write of any kind, and no database write either.
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(calls).not.toContain('provision_payhero_channel')
+  })
+
+  it('ADOPTS a channel PayHero already knows rather than creating a second', async () => {
+    // An ISP whose Till was registered out-of-band is linked to that channel. It
+    // is not duplicated, which is the whole reason discovery runs before register.
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          payment_channels: [{ id: 7777, short_code: '5441898', is_active: true }],
+        }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch
+
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      config: { payhero_channel_id: null, payhero_channel_short_code: null },
+      rpcResults: {
+        provision_payhero_channel: {
+          ok: true, payhero_channel_id: 7777, connection_status: 'connected',
+        },
+      },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.provisionPayHeroChannel({
+      ispId: 'isp-a', shortCode: '5441898',
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.created).toBe(false)
+    expect(result.channelId).toBe(7777)
+    // Discovery only: no POST was made.
+    expect(vi.mocked(fetchImpl).mock.calls.every(
+      (c) => (c[1]?.method ?? 'GET') === 'GET',
+    )).toBe(true)
+  })
+
+  it('rejects a malformed Till before contacting PayHero', async () => {
+    // Server-side validation is mandatory: an obvious typo must not become a
+    // channel on a real merchant account, and must not cost a provider call.
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('PayHero must not be contacted for an invalid Till')
+    }) as unknown as typeof fetch
+    const admin = fakeAdmin({ config: { payhero_channel_id: null } })
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+
+    const result = await service.provisionPayHeroChannel({ ispId: 'isp-a', shortCode: '12' })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('invalid_till')
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it('never reports READY when PayHero refused the registration', async () => {
+    // The failure mode this guards: a dashboard saying "ready" for a channel
+    // PayHero never created, so every customer's STK push is then rejected.
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (String(init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ payment_channels: [] }), { status: 200 })
+      }
+      return new Response(
+        JSON.stringify({ error_message: 'Invalid request' }),
+        { status: 400 },
+      )
+    }) as unknown as typeof fetch
+
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      config: { payhero_channel_id: null, payhero_channel_short_code: null },
+      // The failure path is recorded as a FAILURE state only.
+      rpcResults: { set_payhero_channel_state: { ok: true } },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.provisionPayHeroChannel({ ispId: 'isp-a', shortCode: '522533' })
+
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('failed')
+    expect(result.channelId).toBeNull()
+    // Recorded as failed, and never bound to a channel.
+    expect(calls).toContain('set_payhero_channel_state')
+    expect(calls).not.toContain('provision_payhero_channel')
+  })
+
+  it('never reports READY when the database refuses the binding', async () => {
+    // PayHero succeeded but the write did not. Reporting ready here would show an
+    // ISP a live channel that no payment can actually reach.
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      if (String(init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify({ payment_channels: [] }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ id: 9001, short_code: '522533' }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const admin = fakeAdmin({
+      config: { payhero_channel_id: null, payhero_channel_short_code: null },
+      rpcResults: {
+        // The one-channel-one-ISP rule refusing.
+        provision_payhero_channel: { ok: false, reason: 'channel_already_assigned' },
+      },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.provisionPayHeroChannel({ ispId: 'isp-a', shortCode: '522533' })
+
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('failed')
+    expect(result.code).toBe('channel_already_assigned')
+  })
+})
+
+describe('callback lookup hints and amount verification', () => {
+  it('falls back through PayHero identifiers when one 404s', async () => {
+    // The STK reference may not be indexed yet, but PayHero also indexes the
+    // M-Pesa receipt. Giving up on the first 404 is what stranded a real payment.
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('not-indexed')) {
+        return new Response(JSON.stringify({ error_message: 'Not found' }), { status: 404 })
+      }
+      return new Response(
+        JSON.stringify({ status: 'SUCCESS', third_party_reference: 'SKQ96C7K7H', amount: 10 }),
+        { status: 200 },
+      )
+    }) as unknown as typeof fetch
+
+    const admin = fakeAdmin({
+      payment: {
+        id: 'pay-1', isp_id: 'isp-a', status: 'pending',
+        provider_transaction_id: 'not-indexed', amount: 10,
+      },
+      rpcResults: { settle_payhero_payment: { settled: true, activated: true } },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.verifyPayHeroPayment({
+      reference: 'ISPFLOW-abc',
+      receiptHint: 'SKQ96C7K7H',
+    })
+
+    expect(result.settled).toBe(true)
+    // The real M-Pesa receipt is stored, not our internal reference.
+    const settledArgs = vi.mocked(admin.rpc).mock.calls
+      .find((c) => c[0] === 'settle_payhero_payment')?.[1] as Record<string, unknown>
+    expect(settledArgs.p_receipt).toBe('SKQ96C7K7H')
+  })
+
+  it('leaves the payment pending when no identifier resolves', async () => {
+    // Early indexing latency must NOT fail a real payment, and must NOT be
+    // reported as success either. Pending lets the reconciliation sweep retry.
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ error_message: 'Not found' }), { status: 404 }),
+    ) as unknown as typeof fetch
+
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      payment: { id: 'pay-1', isp_id: 'isp-a', status: 'pending', amount: 10 },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })
+
+    expect(result.settled).toBe(false)
+    expect(result.reason).toBe('pending')
+    expect(calls).not.toContain('settle_payhero_payment')
+    expect(calls).not.toContain('fail_hashback_payment')
+  })
+
+  it('refuses to settle when PayHero reports a different amount', async () => {
+    // A verified SUCCESS is necessary but not sufficient: it must be the SUCCESS
+    // of THIS payment. Activating on a mismatched sum is a revenue and trust bug.
+    const fetchImpl = providerFetch({ status: 'SUCCESS', amount: 1 })
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      payment: { id: 'pay-1', isp_id: 'isp-a', status: 'pending', amount: 1500 },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })
+
+    expect(result.settled).toBe(false)
+    expect(result.reason).toBe('amount_mismatch')
+    expect(calls).not.toContain('settle_payhero_payment')
   })
 })

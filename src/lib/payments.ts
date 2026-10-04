@@ -17,6 +17,19 @@
 import { requireSupabase, functionsUrl } from './supabase'
 import { IS_LIVE, config } from './config'
 
+/**
+ * Re-exported so an ISP settings screen gets the whole PayHero surface from one
+ * import, which is the module that screen already uses.
+ *
+ * These are thin call layers only. Neither ever holds a PayHero credential: the
+ * Basic token is decrypted inside the Edge Function with the service role and is
+ * never returned to a browser.
+ */
+export {
+  provisionPayHeroChannel,
+  type PayHeroProvisioningResult,
+} from './payhero'
+
 export class PaymentError extends Error {
   /** The RPC or function's machine-readable code, when it gave one. */
   readonly code: string | null

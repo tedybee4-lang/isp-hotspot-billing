@@ -132,6 +132,33 @@ export interface Payment {
   checkout_request_id: string | null
   mpesa_receipt: string | null
   created_at: string
+  /**
+   * Which provider collected this payment: 'payhero', 'hashback', or 'manual'.
+   *
+   * Present on every payment and null for a manual Till collection, which has no
+   * provider behind it. The ISP payment list shows it so an operator can tell an
+   * automated payment from a hand-confirmed one without inferring it from `method`.
+   */
+  payment_provider?: string | null
+  /** Our own opaque reference. The only thing a callback can be matched on. */
+  provider_reference?: string | null
+  /** The reference PayHero itself issued. Not an M-Pesa receipt. */
+  provider_transaction_id?: string | null
+  /** The M-Pesa receipt code, as a customer would quote it. */
+  provider_receipt?: string | null
+  /**
+   * The PayHero channel that took this payment. An identifier PayHero reported,
+   * never a credential, and null for every non-PayHero payment.
+   */
+  payhero_channel_id?: number | null
+  /** Why a payment failed, when it did. Provider text, never an exception. */
+  failure_reason?: string | null
+  /** When the prompt was sent, as opposed to when the row was created. */
+  initiated_at?: string | null
+  /** When verified settlement completed. Null while the payment is unresolved. */
+  settled_at?: string | null
+  /** Package name recorded at purchase time, for the history list. */
+  package_name?: string | null
 }
 
 export interface Node {

@@ -171,6 +171,73 @@ export async function disconnectPayHero(): Promise<PayHeroPlatformStatus | null>
   return (body.status as PayHeroPlatformStatus) ?? null
 }
 
+/** What the backend says about a provisioning attempt. Never optimistic. */
+export interface PayHeroProvisioningResult {
+  ok: boolean
+  /** READY only when PayHero confirmed a channel. Never faked. */
+  status: 'pending' | 'ready' | 'failed'
+  channelId: number | null
+  /** True only when a NEW channel was created at PayHero. */
+  created: boolean
+  /** Safe, ISP-facing sentence produced server-side. */
+  message: string
+  code?: string | null
+}
+
+/**
+ * Registers (or reuses) this tenant's PayHero channel for a Till number.
+ *
+ * Called after the ISP saves their Till. The Till is the only thing sent: the ISP
+ * is resolved server-side from the caller's session, so this cannot be pointed at
+ * another tenant. The result is real backend state — READY is only ever returned
+ * when PayHero actually confirmed a channel.
+ */
+export async function provisionPayHeroChannel(
+  shortCode: string,
+): Promise<PayHeroProvisioningResult> {
+  if (!IS_LIVE) {
+    return {
+      ok: false,
+      status: 'failed',
+      channelId: null,
+      created: false,
+      message: 'Demo mode: no payment channel is registered.',
+      code: 'demo_mode',
+    }
+  }
+  const sb = requireSupabase()
+  const { data: sess } = await sb.auth.getSession()
+  const res = await fetch(functionsUrl('payhero-provision'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${sess.session?.access_token ?? ''}`,
+      apikey: config.supabaseAnonKey,
+    },
+    body: JSON.stringify({ shortCode }),
+  })
+  const body = await res.json().catch(() => ({}))
+  const result = body as Partial<PayHeroProvisioningResult>
+
+  // A 422 is a normal outcome — PayHero refused that Till — and it carries a
+  // message written for the ISP, so it is returned rather than thrown. Only a
+  // transport or auth failure throws, because those know nothing about the Till
+  // the ISP actually typed.
+  if (!res.ok && res.status !== 422) {
+    throw new PaymentError(
+      (body as { error?: string }).error ?? 'The payment channel could not be set up.',
+    )
+  }
+  return {
+    ok: Boolean(result.ok),
+    status: (result.status ?? 'failed') as PayHeroProvisioningResult['status'],
+    channelId: result.channelId ?? null,
+    created: Boolean(result.created),
+    message: result.message ?? 'Payment channel setup failed.',
+    code: result.code ?? null,
+  }
+}
+
 /**
  * Starts a PayHero STK payment for the caller's own tenant.
  *

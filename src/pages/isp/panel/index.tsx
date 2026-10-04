@@ -288,13 +288,70 @@ return (
 }
 
 // -- Payments -----------------------------------------------------------------
+
+/**
+ * Renders the provider that collected a payment, from the payment row itself.
+ *
+ * Derived from `payment_provider`, never from `method`, because `method` says HOW
+ * the money was collected (mpesa vs till_manual) and cannot distinguish PayHero
+ * from any other automated provider.
+ */
+function ProviderCell({ payment }: { payment: Payment }) {
+  const provider = payment.payment_provider ?? null
+  if (!provider || provider === 'manual') {
+    return <span className="text-[10px] font-mono uppercase text-slate-500">Manual</span>
+  }
+  return (
+    <span className="text-[10px] font-mono uppercase text-slate-600 dark:text-slate-300">
+      {provider}
+    </span>
+  )
+}
+
+/**
+ * The channel that took this payment.
+ *
+ * Only meaningful for an automated provider, and shown as a plain identifier: it
+ * tells an ISP which Till collected the money without exposing anything that could
+ * authorise an API call.
+ */
+function ChannelCell({ payment }: { payment: Payment }) {
+  if (!payment.payhero_channel_id) return <span className="text-slate-400">--</span>
+  return (
+    <span className="font-mono text-[10px] text-slate-500">
+      {payment.payhero_channel_id}
+    </span>
+  )
+}
+
+/**
+ * The reference an ISP can actually use to chase a payment.
+ *
+ * Prefers the M-Pesa receipt, because that is what a customer reads off their phone,
+ * then PayHero's own transaction reference. The internal reference is kept in the
+ * search index but is not the headline: it means nothing to the person chasing it.
+ */
+function ReferenceCell({ payment }: { payment: Payment }) {
+  const shown = payment.mpesa_receipt
+    ?? payment.provider_receipt
+    ?? payment.provider_transaction_id
+    ?? payment.checkout_request_id
+  return (
+    <span className="font-mono text-[10px] text-slate-400">
+      {shown ?? '--'}
+    </span>
+  )
+}
+
 export function PaymentsPage() {
   const { payments, loading } = usePanel()
   const columns: Column<Payment>[] = [
     { key: 'amount', header: 'Amount', sort: (p) => Number(p.amount), cell: (p) => <Money value={p.amount} /> },
+    { key: 'provider', header: 'Provider', cell: (p) => <ProviderCell payment={p} /> },
     { key: 'method', header: 'Method', cell: (p) => <span className="font-mono text-[10px] uppercase">{p.method}</span> },
+    { key: 'channel', header: 'Channel', cell: (p) => <ChannelCell payment={p} /> },
     { key: 'phone', header: 'Phone', cell: (p) => <span className="font-mono">{p.phone ?? '--'}</span> },
-    { key: 'receipt', header: 'Reference', cell: (p) => <span className="font-mono text-[10px] text-slate-400">{p.mpesa_receipt ?? p.checkout_request_id ?? '--'}</span> },
+    { key: 'receipt', header: 'Reference', cell: (p) => <ReferenceCell payment={p} /> },
     { key: 'status', header: 'Status', sort: (p) => p.status, cell: (p) => <StatusCell value={p.status} /> },
     { key: 'date', header: 'Date', sort: (p) => p.created_at, cell: (p) => <When value={p.created_at} /> },
   ]
@@ -304,7 +361,21 @@ export function PaymentsPage() {
       icon={<CreditCard className="w-5 h-5" />} rows={payments} columns={columns}
       rowKey={(p) => p.id} loading={loading}
       statusField="status" statusOptions={['success', 'pending', 'failed', 'reversed']}
-      searchFields={(p) => [p.phone ?? '', p.mpesa_receipt ?? '', p.checkout_request_id ?? '', p.method]}
+      // Searchable by everything an ISP is actually asked to look a payment up by:
+      // the phone on the receipt, the M-Pesa code, PayHero's reference, our own
+      // internal reference, and the channel it went through. Before this, a search
+      // for a PayHero reference returned nothing at all.
+      searchFields={(p) => [
+        p.phone ?? '',
+        p.mpesa_receipt ?? '',
+        p.provider_receipt ?? '',
+        p.provider_transaction_id ?? '',
+        p.provider_reference ?? '',
+        p.checkout_request_id ?? '',
+        p.payhero_channel_id != null ? String(p.payhero_channel_id) : '',
+        p.payment_provider ?? '',
+        p.method,
+      ]}
       emptyTitle="No payments yet"
     />
   )

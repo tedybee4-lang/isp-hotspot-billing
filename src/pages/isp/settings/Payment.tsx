@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import * as api from '../../../lib/data'
 import type { NetworkSettings, SmsSettings, TillSettings } from '../../../lib/data'
-import { fetchMyPaymentChannel, type MyPaymentChannel } from '../../../lib/payments'
+import { fetchMyPaymentChannel, type MyPaymentChannel, provisionPayHeroChannel, type PayHeroProvisioningResult } from '../../../lib/payments'
 import { isAutomatedProvider, providerLabel } from '../../../lib/provider'
 import { config } from '../../../lib/config'
 import {
@@ -119,6 +119,11 @@ export function PaymentSettingsPage() {
         </div>
       </Card>
 
+      <PayHeroChannelCard
+        tillNumber={number}
+        onProvisioned={() => void till.refresh()}
+      />
+
       <Card>
         <CardHeader title="Security" icon={<ShieldCheck className="w-4 h-4" />} />
         <div className="p-5">
@@ -134,6 +139,133 @@ export function PaymentSettingsPage() {
         </div>
       </Card>
     </div>
+  )
+}
+
+/**
+ * Automatic PayHero channel setup, from the Till the ISP already typed.
+ *
+ * WHAT THIS SHOWS, AND WHY IT IS NOT A LOCAL STATE
+ * -----------------------------------------------
+ * The card renders one of three states, and only "ready" ever means the ISP can
+ * take money:
+ *
+ *   Setting up payment channel...   a provisioning call is in flight
+ *   Payment channel ready            PayHero CONFIRMED a channel for this Till
+ *   Payment channel setup failed     PayHero refused it, or the save did not land
+ *
+ * The ready state is never set optimistically. It appears only in the response to
+ * a real call, which means the ISP is never told "ready" for a channel PayHero has
+ * not actually created — the failure mode where a dashboard says live and every
+ * customer's STK push is then rejected.
+ *
+ * Retrying is safe and is the intended next action after a failure. The server
+ * reuses the existing channel when the Till has not changed, so a retry cannot
+ * create a second channel for one Till.
+ */
+function PayHeroChannelCard({
+  tillNumber,
+  onProvisioned,
+}: {
+  tillNumber: string
+  onProvisioned: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<PayHeroProvisioningResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  // The Till this result belongs to. Without it, editing the field would leave a
+  // "ready" badge sitting next to a DIFFERENT number, which is precisely the kind
+  // of stale green tick that makes an ISP believe they are live when they are not.
+  const [settledFor, setSettledFor] = useState('')
+
+  const digits = tillNumber.replace(/\D/g, '')
+  const stale = settledFor !== '' && settledFor !== digits
+
+  async function run() {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await provisionPayHeroChannel(digits)
+      setResult(res)
+      setSettledFor(digits)
+      if (res.ok) onProvisioned()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reach the server.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ready = result?.status === 'ready' && !stale
+
+  return (
+    <Card>
+      <CardHeader
+        title="PayHero payment channel"
+        subtitle="Automatic M-Pesa collection. Enter your Till above, then set up the channel."
+        icon={<CreditCard className="w-4 h-4" />}
+      />
+      <div className="p-5 space-y-4">
+        <Alert kind="info">
+          Setting up a channel registers your Till with PayHero so customers can pay
+          by STK push. Nothing is charged, and your PayHero credentials stay on the
+          server — this page only ever shows the channel id assigned to you.
+        </Alert>
+
+        {busy && (
+          <Alert kind="info">Setting up payment channel...</Alert>
+        )}
+
+        {!busy && error && (
+          <Alert kind="error">{error}</Alert>
+        )}
+
+        {!busy && !error && stale && result && (
+          <Alert kind="info">
+            The Till number changed. Set up the channel again to apply the new Till.
+          </Alert>
+        )}
+
+        {!busy && !error && ready && (
+          <Alert kind="success">
+            Payment channel ready. PayHero channel {result?.channelId}
+            {result?.created ? ' (newly created)' : ' (existing channel reused)'}.
+          </Alert>
+        )}
+
+        {!busy && !error && result && !ready && !stale && (
+          <Alert kind="error">
+            {result.message}
+            {result.code === 'till_in_use' && (
+              ' Each Till can only be used by one ISP on this platform.'
+            )}
+          </Alert>
+        )}
+
+        <div className="flex items-center gap-3">
+          <Button
+            size="sm"
+            disabled={busy || digits.length < 5}
+            icon={<CreditCard className="w-3.5 h-3.5" />}
+            onClick={() => void run()}
+          >
+            {busy
+              ? 'Setting up...'
+              : ready && !stale
+                ? 'Check again'
+                : result && !stale
+                  ? 'Retry setup'
+                  : 'Set up payment channel'}
+          </Button>
+          {digits.length > 0 && digits.length < 5 && (
+            <span className="text-[11px] text-slate-500">
+              Enter your Till number first.
+            </span>
+          )}
+        </div>
+      </div>
+    </Card>
   )
 }
 

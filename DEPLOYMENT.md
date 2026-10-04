@@ -181,12 +181,45 @@ account, wallet balance and every registered Till/PayBill. Nothing says
 ### 3.2 Assigning a channel to an ISP
 
 Channels are discovered from PayHero, not typed. The platform admin selects one on
-the PayHero screen and assigns it to an ISP. A channel may back only one ISP — a
-unique index rejects a second claim — so two tenants can never share a Till.
+the PayHero screen and assigns it to an ISP. A channel may back only one ISP, so two
+tenants can never share a Till.
 
-The ISP itself does not choose its provider or channel; it sees them read-only
-under **Settings -> Payments**. That is deliberate: letting an ISP pick its own
-channel is how two tenants end up collecting through the same merchant.
+**An ISP's Till becomes its channel automatically.** Under **Settings -> Payment
+Settings** the ISP enters their Till number and chooses *Set up payment channel*.
+The server registers it with PayHero via the documented **Register Payment
+Channel** endpoint (`POST /api/v2/payment_channels`), stores the returned channel id
+against that ISP, and only then reports *ready*.
+
+Registration is idempotent, and the order is deliberate, because PayHero's register
+endpoint has **no idempotency key**: calling it twice creates two channels for one
+Till, splitting that Till's history in two.
+
+1. This ISP already holds a channel for that same Till: reuse it, create nothing.
+2. Another ISP already holds that Till: refused. Two tenants sharing a Till would
+   each settle against the other's money.
+3. PayHero already knows a channel for that Till: adopt it, do not duplicate it.
+4. Otherwise register a new one.
+
+**`ready` is never shown optimistically.** It appears only in the response to a
+real PayHero call. A failed registration stores a failure state and a safe message,
+and the ISP can retry; a retry cannot create a duplicate.
+
+Server-side Till validation runs before PayHero is contacted and is deliberately
+permissive on length (5 to 9 digits), because this platform already has a live
+7-digit Till that must keep working. PayHero remains the authority on whether the
+number actually exists.
+
+Manual assignment from the admin screen is unchanged and remains available for an
+ISP whose Till was created in PayHero's own dashboard first; such a Till is adopted
+rather than duplicated.
+
+The ISP sees its own channel read-only and never receives a PayHero credential. The
+Basic token is decrypted inside the Edge Function with the service role and is never
+returned to a browser.
+
+The ISP does not choose its provider: it is set when the channel is provisioned.
+The ISP never picks a channel id by hand, because letting one tenant choose its own
+merchant is how two tenants end up collecting through the same Till.
 
 ### 3.3 Legacy HashBack
 
@@ -200,6 +233,8 @@ should not be used for new collections.
 supabase functions deploy payhero-stk       # authenticated: starts a payment
 supabase functions deploy payhero-admin     # authenticated: super admin only
 supabase functions deploy payhero-callback  # public: PayHero cannot present a JWT
+supabase functions deploy payhero-provision # authenticated: registers a Till as a channel
+supabase functions deploy payhero-reconcile # scheduled: recovers missed callbacks
 supabase functions deploy portal-stk --no-verify-jwt
 supabase functions deploy admin-invite     --no-verify-jwt
 ```
@@ -207,8 +242,25 @@ supabase functions deploy admin-invite     --no-verify-jwt
 `payhero-callback` is exempt from gateway JWT verification because PayHero cannot
 send a Supabase JWT. That is safe only because the endpoint takes nothing from the
 caller except a transaction reference and re-reads the outcome from PayHero over
-the credentialed channel. Do not copy that exemption to `payhero-admin` or
-`payhero-stk`.
+the credentialed channel. Do not copy that exemption to `payhero-admin`,
+`payhero-stk`, `payhero-provision` or `payhero-reconcile`.
+
+**The callback payload is nested.** PayHero posts
+`{ forward_url, response: { ExternalReference, MpesaReceiptNumber,
+CheckoutRequestID, Amount, Status }, status }`. The reference is NOT at the top
+level. An endpoint that only reads top-level keys will silently match nothing and
+leave every payment pending forever — which is exactly what happened here.
+
+**PayHero's callback cannot be relied on to arrive.** `payhero-callback` answers
+200 in every case on purpose, so a lost or early callback leaves nobody to retry.
+`payhero-reconcile` is the retry: attach it to Supabase Cron (every 5 minutes is
+enough). It re-reads OUR OWN pending PayHero payments and asks PayHero about each
+one by the reference PayHero issued; it can never create a payment. Authorise it
+with either a super-admin session or a shared secret:
+
+```bash
+supabase secrets set PAYHERO_RECONCILE_SECRET="$(openssl rand -hex 32)"
+```
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
 

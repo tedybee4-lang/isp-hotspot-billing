@@ -61,6 +61,8 @@ describe('PayHero endpoint and auth contract', () => {
       paymentChannels: '/api/v2/payment_channels',
       wallets: '/api/v2/wallets',
       transactionStatus: '/api/v2/transaction-status',
+      // Used to recover a payment whose callback never arrived.
+      accountTransactions: '/api/v2/transactions',
     })
   })
 
@@ -318,5 +320,115 @@ describe('PayHero error handling and secret protection', () => {
     const err = await api.listChannels().catch((e) => e)
     expect((err as HashBackError).providerMessage).toBe('Channel not active')
     expect((err as HashBackError).status).toBe(400)
+  })
+})
+
+describe('Register Payment Channel', () => {
+  // This is the operation that turns a new ISP's Till into a channel they can
+  // actually take money against, so both its request shape and its refusal to
+  // fake success are pinned here.
+
+  it('posts the documented body to the documented path', async () => {
+    // Field names are PayHero's own, verbatim from its Register Payment Channel
+    // documentation. Inventing one would be a silent 400 against the live API.
+    const { api, calls } = client({
+      body: { id: 2429, channel_type: 'till', account_id: 5003, short_code: '522533' },
+    })
+
+    const result = await api.registerChannel({
+      channelType: 'till',
+      accountId: 5003,
+      shortCode: '522533',
+      accountNumber: '522533',
+      description: 'Beta Broadband',
+    })
+
+    expect(calls[0].url).toBe(`${BASE}api/v2/payment_channels`)
+    expect(calls[0].init.method).toBe('POST')
+    expect(body(calls[0])).toEqual({
+      channel_type: 'till',
+      account_id: 5003,
+      short_code: 522533,
+      account_number: '522533',
+      description: 'Beta Broadband',
+    })
+    expect(result.registered).toBe(true)
+    expect(result.channel?.id).toBe(2429)
+  })
+
+  it('treats a 200 with no channel id as a FAILURE, not a quiet success', async () => {
+    // Marking a channel ready that PayHero did not create is the worst outcome:
+    // the dashboard says live and every customer's STK push is then rejected.
+    const { api } = client({ body: { status: 'ok' } })
+    const result = await api.registerChannel({
+      channelType: 'till', accountId: 5003, shortCode: '522533',
+      accountNumber: '522533', description: 'X',
+    })
+    expect(result.registered).toBe(false)
+    expect(result.channel).toBeNull()
+  })
+
+  it('refuses a malformed Till before spending a provider call', async () => {
+    // PayHero would reject this anyway, but failing locally means a typo cannot
+    // create a junk channel on a real merchant account.
+    const { api, calls } = client({ body: { id: 1 } })
+    await expect(api.registerChannel({
+      channelType: 'till', accountId: 5003, shortCode: 'abc',
+      accountNumber: 'abc', description: 'X',
+    })).rejects.toMatchObject({ kind: 'validation' })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('finds an existing channel by short code instead of creating a duplicate', async () => {
+    // PayHero's register endpoint has NO idempotency key, so this lookup is the
+    // only thing standing between an ISP and two channels for one Till.
+    const { impl, calls } = stubFetch({
+      body: {
+        payment_channels: [
+          { id: 1, short_code: '111111' },
+          { id: 13137, short_code: '5441898' },
+        ],
+      },
+    })
+    const api = new PayHeroClient({ apiToken: TOKEN, baseUrl: BASE, fetchImpl: impl })
+
+    const found = await api.findChannelByShortCode('5441898')
+    expect(found?.id).toBe(13137)
+    // Only the discovery GET. No POST: nothing was created.
+    expect(calls).toHaveLength(1)
+  })
+
+  it('returns null when PayHero knows no channel for that Till', async () => {
+    const { impl } = stubFetch({ body: { payment_channels: [] } })
+    const api = new PayHeroClient({ apiToken: TOKEN, baseUrl: BASE, fetchImpl: impl })
+    expect(await api.findChannelByShortCode('999999')).toBeNull()
+  })
+})
+
+describe('transaction-status identifiers', () => {
+  it('reads the M-Pesa receipt out of the status response', async () => {
+    // The documented response names the M-Pesa code `third_party_reference`. Before
+    // this, settlement stored OUR reference as the receipt, so the ISP list showed
+    // an internal id where the customer could see their real M-Pesa code.
+    const { api } = client({
+      body: {
+        status: 'SUCCESS',
+        reference: 'feb7-4ad8-99f0',
+        third_party_reference: 'SKQ96C7K7H',
+        amount: 10,
+      },
+    })
+    const status = await api.getTransactionStatus('feb7-4ad8-99f0')
+    expect(status.receipt).toBe('SKQ96C7K7H')
+    expect(status.providerReference).toBe('feb7-4ad8-99f0')
+    expect(status.amount).toBe(10)
+    expect(status.state).toBe('success')
+  })
+
+  it('does NOT treat QUEUED as success', async () => {
+    // PayHero documents QUEUED as "no callback received yet". Reading it as paid
+    // would grant service for money that has not moved.
+    const { api } = client({ body: { status: 'QUEUED' } })
+    expect((await api.getTransactionStatus('x')).state).toBe('pending')
   })
 })

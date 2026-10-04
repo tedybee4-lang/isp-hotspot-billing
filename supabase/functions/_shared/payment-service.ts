@@ -70,6 +70,25 @@ export interface ProcessResult {
   ispId?: string
 }
 
+/**
+ * The outcome of one automatic channel-provisioning attempt.
+ *
+ * `status` mirrors the internal channel states the system already uses. READY is
+ * only ever returned when PayHero actually returned a channel id AND the database
+ * accepted the binding; nothing else can produce it.
+ */
+export interface PayHeroProvisioningResult {
+  ok: boolean
+  status: 'pending' | 'ready' | 'failed'
+  /** PayHero's channel id, once one exists. Null on failure. */
+  channelId: number | null
+  /** True only when this call created a NEW channel at PayHero. */
+  created: boolean
+  /** Safe, customer-facing sentence. Never contains a credential or provider text. */
+  message: string
+  code?: string
+}
+
 /** Errors this service raises, as opposed to provider errors. */
 export class PaymentServiceError extends Error {
   readonly code:
@@ -563,7 +582,18 @@ export class PaymentGatewayService {
    * reference already settled returns duplicate=true and writes nothing, so
    * out-of-order or repeated callbacks cannot renew a customer twice.
    */
-  async verifyPayHeroPayment(input: { reference: string }): Promise<ProcessResult> {
+  async verifyPayHeroPayment(input: {
+    reference: string
+    /**
+     * Optional provider identifiers supplied by the callback. These are LOOKUP
+     * HINTS and nothing more: they choose which question to ask PayHero, and are
+     * never a reason to settle. They exist because PayHero indexes a transaction
+     * under its own identifiers, and the M-Pesa receipt usually resolves faster
+     * than the reference we originally sent.
+     */
+    receiptHint?: string | null
+    checkoutRequestIdHint?: string | null
+  }): Promise<ProcessResult> {
     const reference = input.reference?.trim()
     if (!reference) {
       return {
@@ -581,7 +611,7 @@ export class PaymentGatewayService {
     // verified customer payment from ever reaching settlement.
     const { data: payment, error: paymentErr } = await this.admin
       .from('payments')
-      .select('id, isp_id, status, provider_transaction_id')
+      .select('id, isp_id, status, provider_transaction_id, amount')
       .eq('provider_reference', reference)
       .maybeSingle()
 
@@ -596,6 +626,7 @@ export class PaymentGatewayService {
       isp_id?: string | null
       status?: string | null
       provider_transaction_id?: string | null
+      amount?: number | string | null
     } | null
 
     if (!row?.isp_id) {
@@ -616,41 +647,71 @@ export class PaymentGatewayService {
 
     const client = await this.payHeroClient()
 
-    // LOOK UP BY PAYHERO'S OWN REFERENCE, NOT OURS.
+    // Look the transaction up by an identifier PAYHERO issued.
     //
-    // This was verified against the live API after a real customer payment got
-    // stuck at 'pending' forever:
+    // Verified against the live API after a real customer payment got stuck at
+    // 'pending' forever:
     //
     //   GET /api/v2/transaction-status?reference=ISPFLOW-<ours>  -> 404
     //   GET /api/v2/transaction-status?reference=feb7-4ad8-...   -> SUCCESS
     //
-    // PayHero resolves the query by the reference IT issued, not by the
-    // `external_reference` we sent it. Querying with our own value therefore 404s,
-    // which used to throw out of here, so settlement never ran and the customer
-    // paid for a package they were never given.
+    // PayHero resolves this query by its own identifiers, and it documents that the
+    // M-Pesa code is accepted too. So rather than picking one value and hoping,
+    // the candidates are tried in order of how likely each is to be indexed:
     //
-    // `provider_transaction_id` is the reference PayHero returned when it accepted
-    // the STK push, and record_payhero_stk already stored it. Fall back to our own
-    // reference only for a payment whose STK response was never recorded.
-    const lookup = row.provider_transaction_id ?? reference
+    //   1. provider_transaction_id  the reference PayHero returned when it accepted
+    //                                the STK push (record_payhero_stk stored it)
+    //   2. the callback's M-Pesa receipt        (a hint, never a decision)
+    //   3. the callback's CheckoutRequestID     (ditto)
+    //   4. our own reference                    (last resort)
+    //
+    // A candidate that 404s is not an error: it means "not indexed under that name
+    // yet", so the next candidate is tried rather than abandoning the payment.
+    const candidates = [
+      row.provider_transaction_id,
+      input.receiptHint,
+      input.checkoutRequestIdHint,
+      reference,
+    ].filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
 
-    let status: Awaited<ReturnType<typeof client.getTransactionStatus>>
-    try {
-      status = await client.getTransactionStatus(lookup)
-    } catch (err) {
-      // A 404 means PayHero has no record under that reference yet. For a
-      // transaction that was only just prompted that is the normal race: the
-      // callback can arrive before the provider has indexed it. It is reported as
-      // pending so the next attempt retries, NOT as an error that abandons the
-      // payment — which is what left a paying customer stuck.
-      const e = err as { status?: number | null }
-      if (e?.status === 404) {
-        return {
-          ok: true, settled: false, duplicate: false, activated: false,
-          reason: 'pending', ispId: row.isp_id,
+    // De-duplicated while preserving order, so a repeated value costs one call.
+    const lookups = [...new Set(candidates.map((v) => v.trim()))]
+
+    let status: Awaited<ReturnType<typeof client.getTransactionStatus>> | null = null
+    let lastError: unknown = null
+
+    for (const lookup of lookups) {
+      try {
+        status = await client.getTransactionStatus(lookup)
+        break
+      } catch (err) {
+        // A 404 means PayHero has no record under that reference yet. For a
+        // transaction only just prompted that is the normal race: the callback can
+        // arrive before the provider has indexed it. It is not an error that
+        // abandons the payment — which is what left a paying customer stuck — so
+        // the next candidate is tried.
+        const e = err as { status?: number | null }
+        if (e?.status === 404) {
+          lastError = err
+          continue
         }
+        throw err
       }
-      throw err
+    }
+
+    if (!status) {
+      // Every identifier we hold is unknown to PayHero. That is either very early
+      // indexing latency or a reference that will never resolve, so the payment is
+      // left PENDING for the reconciliation sweep to retry, not failed: it is not
+      // known to be unpaid, and failing it could cancel a real payment.
+      console.warn(
+        'payhero-callback: no PayHero record under any known identifier',
+        JSON.stringify({ reference: row.id, tried: lookups.length }),
+      )
+      return {
+        ok: true, settled: false, duplicate: false, activated: false,
+        reason: 'pending', ispId: row.isp_id,
+      }
     }
 
     if (status.state === 'pending') {
@@ -673,6 +734,40 @@ export class PaymentGatewayService {
       }
     }
 
+    // ── Amount verification ─────────────────────────────────────────────────
+    //
+    // A verified SUCCESS is necessary but not sufficient: it must be the SUCCESS of
+    // THIS payment. If PayHero reports a different amount than the plan charged, the
+    // customer has paid the wrong sum for this package, and activating it silently
+    // would be both a revenue and a trust failure.
+    //
+    // The comparison is only made when PayHero actually reported an amount. An
+    // absent amount is not a mismatch; inventing a zero here would reject every
+    // legitimate payment whose status response omits it.
+    if (status.amount !== null && row.amount !== null && row.amount !== undefined) {
+      const expected = Number(row.amount)
+      if (Number.isFinite(expected) && Math.abs(expected - status.amount) > 0.009) {
+        // Recorded for a human, and NOT settled. This is the one case where a
+        // confirmed provider success is deliberately left unapplied.
+        console.error(
+          'payhero-callback: amount mismatch, refusing to settle',
+          JSON.stringify({
+            reference: row.id,
+            expected,
+            reported: status.amount,
+          }),
+        )
+        await this.recordPayHeroReconciliation(
+          reference,
+          `amount mismatch: expected ${expected}, PayHero reported ${status.amount}`,
+        )
+        return {
+          ok: false, settled: false, duplicate: false, activated: false,
+          reason: 'amount_mismatch', ispId: row.isp_id,
+        }
+      }
+    }
+
     // ── Verified success ────────────────────────────────────────────────────
     //
     // Only now, and only because PayHero said so on a credentialed call, is the
@@ -681,10 +776,15 @@ export class PaymentGatewayService {
     // against replays.
     const { data: settled, error } = await this.admin.rpc('settle_payhero_payment', {
       p_reference: reference,
-      p_transaction_id: String(status.raw.id ?? reference),
-      p_receipt: String(status.raw.receipt ?? status.raw.id ?? reference),
-      p_msisdn: typeof status.raw.phone_number === 'string' ? status.raw.phone_number : null,
-      p_amount: typeof status.raw.amount === 'number' ? status.raw.amount : null,
+      // Prefer the reference PayHero reports about the transaction, then the
+      // M-Pesa code. Falling back to OUR reference would store our own id as if
+      // it were the provider's, which is what made receipts unreadable.
+      p_transaction_id: status.providerReference ?? status.receipt ?? reference,
+      p_receipt: status.receipt ?? status.providerReference ?? reference,
+      p_msisdn: status.phone,
+      // The provider's amount, so the settlement record carries what PayHero
+      // actually moved rather than what we asked for.
+      p_amount: status.amount,
       // No channel id is passed: `payments` has no such column, and the provider's
       // verbatim payload below already records which merchant took the money. This
       // argument is only an audit label in the shared settle function.
@@ -1101,5 +1201,331 @@ export class PaymentGatewayService {
   }> {
     const channel = await this.loadChannel(ispId)
     return { accountId: channel.accountId, connected: channel.connected }
+  }
+
+  // ── Automatic PayHero channel provisioning ──────────────────────────────
+
+  /**
+   * Registers (or reuses) a PayHero payment channel for an ISP's Till.
+   *
+   * This is what lets a new ISP accept money without a human creating the channel
+   * in PayHero's dashboard first.
+   *
+   * IDEMPOTENCY IS THE WHOLE PROBLEM HERE
+   * ------------------------------------
+   * PayHero's "Register Payment Channel" is a plain POST with no idempotency key,
+   * so calling it twice creates two channels for one Till and splits that Till's
+   * history in half. The order below is therefore not incidental:
+   *
+   *   1. If this ISP already holds a channel for the SAME short code, reuse it and
+   *      return. Saving unchanged settings creates nothing.
+   *   2. If another ISP already holds that short code, refuse. Two tenants sharing
+   *      a Till would each settle against the other's money.
+   *   3. Adopt a channel PayHero already knows for that short code, rather than
+   *      duplicating one that was registered out-of-band.
+   *   4. Only then register a new one.
+   *
+   * Every failure leaves the channel NOT ready, with a safe message. Nothing here
+   * marks a channel ready on the strength of a call that did not succeed.
+   */
+  async provisionPayHeroChannel(input: {
+    ispId: string
+    /** The Till or PayBill number the ISP entered. */
+    shortCode: string
+    /** Beneficiary/bank account number PayHero records alongside the channel. */
+    accountNumber?: string | null
+    /** Channel description shown to the ISP. Defaults to the ISP's own name. */
+    description?: string | null
+  }): Promise<PayHeroProvisioningResult> {
+    const shortCode = (input.shortCode ?? '').replace(/\D/g, '')
+    const ispId = input.ispId
+
+    // ── Server-side Till validation, before PayHero is contacted ──────────
+    // Deliberately permissive on length. Kenyan Tills are commonly 6 digits and
+    // PayBills 5, but this platform already has a live 7-digit Till in production
+    // (Beta Broadband, 5441898), and a check that rejected it would silently break
+    // an ISP whose payments work today. So the guard rejects only what is
+    // certainly wrong — non-digits, or something too short or long to be a Till.
+    // PayHero remains the authority on whether the number actually exists.
+    if (!/^\d{5,9}$/.test(shortCode)) {
+      return this.failProvisioning(
+        ispId,
+        'Enter a valid Till or PayBill number.',
+        'invalid_till',
+      )
+    }
+
+    const { data: cfg } = await this.admin
+      .from('isp_payment_configs')
+      .select('payhero_channel_id, payhero_channel_short_code, merchant_name')
+      .eq('isp_id', ispId)
+      .maybeSingle()
+
+    const config = cfg as {
+      payhero_channel_id?: number | null
+      payhero_channel_short_code?: string | null
+      merchant_name?: string | null
+    } | null
+
+    // ── 1. Unchanged Till → reuse, create nothing ─────────────────────────
+    // The stored short code is what makes this check possible; without it every
+    // settings save would have to ask PayHero again and could create a duplicate.
+    const storedShortCode = (config?.payhero_channel_short_code ?? '').replace(/\D/g, '')
+    if (config?.payhero_channel_id && storedShortCode === shortCode) {
+      return {
+        ok: true,
+        status: 'ready',
+        channelId: Number(config.payhero_channel_id),
+        created: false,
+        message: 'Your Till is already connected to PayHero.',
+      }
+    }
+
+    // ── 2. Does another ISP already own this Till? ────────────────────────
+    // One Till collecting for two ISPs silently sends one customer's money to
+    // another's revenue, so this is refused rather than allowed to "work".
+    const { data: claimants } = await this.admin
+      .from('isp_payment_configs')
+      .select('isp_id, payhero_channel_short_code')
+      .neq('isp_id', ispId)
+      .not('payhero_channel_short_code', 'is', null)
+
+    const clash = ((claimants ?? []) as Array<{
+      isp_id: string
+      payhero_channel_short_code: string | null
+    }>).find(
+      (r) => (r.payhero_channel_short_code ?? '').replace(/\D/g, '') === shortCode,
+    )
+    if (clash) {
+      return this.failProvisioning(
+        ispId,
+        'That Till is already connected to another ISP on this platform.',
+        'till_in_use',
+      )
+    }
+
+    const client = await this.payHeroClient()
+
+    // ── 3. Adopt a channel PayHero already knows about ────────────────────
+    const discovered = await client.findChannelByShortCode(shortCode).catch(() => null)
+    if (discovered) {
+      const assigned = await this.assignPayHeroChannel(ispId, discovered.id, shortCode)
+      if (!assigned.ok) return assigned
+      return {
+        ok: true,
+        status: 'ready',
+        channelId: discovered.id,
+        created: false,
+        message: 'Connected to your existing PayHero Till.',
+      }
+    }
+
+    return this.registerNewPayHeroChannel({ ispId, shortCode, input, config })
+  }
+
+  /** Steps 4-5 of provisioning: create the channel at PayHero, then bind it. */
+  private async registerNewPayHeroChannel(args: {
+    ispId: string
+    shortCode: string
+    input: { accountNumber?: string | null; description?: string | null }
+    config: { merchant_name?: string | null } | null
+  }): Promise<PayHeroProvisioningResult> {
+    const { ispId, shortCode, input, config } = args
+
+    // PayHero's Register Payment Channel requires the account id. Read from the
+    // last verified snapshot rather than spending another provider call.
+    const accountId = await this.payHeroAccountId()
+    if (accountId === null) {
+      return this.failProvisioning(
+        ispId,
+        'PayHero account details are not available yet. Please try again shortly.',
+        'account_unavailable',
+      )
+    }
+
+    let registered: Awaited<ReturnType<PayHeroClient['registerChannel']>>
+    try {
+      registered = await (await this.payHeroClient()).registerChannel({
+        channelType: 'till',
+        accountId,
+        shortCode,
+        // PayHero requires this field. The short code is the truthful value when
+        // the ISP has not supplied a beneficiary account number.
+        accountNumber: (input.accountNumber ?? '').trim() || shortCode,
+        description:
+          (input.description ?? config?.merchant_name ?? '').trim() || `ISP Till ${shortCode}`,
+      })
+    } catch (err) {
+      const diagnostic = err instanceof Error ? err.message : 'PayHero refused the request.'
+      // Provider text is kept for an operator but never rendered to a customer,
+      // and it can never contain the credential because the client never puts it
+      // in a thrown error.
+      return this.failProvisioning(
+        ispId,
+        'Payment channel setup failed. Please verify the Till Number and try again.',
+        'registration_failed',
+        diagnostic,
+      )
+    }
+
+    if (!registered.registered || !registered.channel) {
+      return this.failProvisioning(
+        ispId,
+        'PayHero did not create a channel for this Till. Please try again.',
+        'registration_failed',
+        registered.message,
+      )
+    }
+
+    const assigned = await this.assignPayHeroChannel(ispId, registered.channel.id, shortCode)
+    if (!assigned.ok) return assigned
+
+    return {
+      ok: true,
+      status: 'ready',
+      channelId: registered.channel.id,
+      created: true,
+      message: 'Payment channel created and ready.',
+    }
+  }
+
+  /**
+   * Records a provisioning failure without ever marking the channel ready.
+   *
+   * Shaped as a `return this.failProvisioning(...)` helper so no call site can
+   * accidentally report success on a failed write.
+   */
+  private async failProvisioning(
+    ispId: string,
+    message: string,
+    code: string,
+    diagnostic?: string,
+  ): Promise<PayHeroProvisioningResult> {
+    console.error(
+      'payhero-provision: failed',
+      JSON.stringify({ ispId, code, diagnostic: diagnostic ?? null }),
+    )
+    // Best effort: the ISP must still receive the failure message even if this
+    // bookkeeping write fails, so the result is returned either way.
+    try {
+      await this.admin.rpc('set_payhero_channel_state', {
+        p_isp_id: ispId,
+        p_status: 'failed',
+        p_error: diagnostic ? `${message} (${diagnostic})` : message,
+      })
+    } catch {
+      // Nothing further to escalate to from here.
+    }
+
+    return { ok: false, status: 'failed', channelId: null, created: false, message, code }
+  }
+
+  /**
+   * Binds a PayHero channel to an ISP and records the short code behind it.
+   *
+   * The one-channel-one-ISP rule is enforced in the database, so a crafted request
+   * cannot point two tenants at one Till even if this code were bypassed.
+   */
+  private async assignPayHeroChannel(
+    ispId: string,
+    channelId: number,
+    shortCode: string,
+  ): Promise<PayHeroProvisioningResult> {
+    const { data, error } = await this.admin.rpc('provision_payhero_channel', {
+      p_isp_id: ispId,
+      p_channel_id: channelId,
+      p_short_code: shortCode,
+    })
+
+    const result = data as {
+      ok?: boolean
+      reason?: string
+      payhero_channel_id?: number | null
+      connection_status?: string | null
+    } | null
+
+    if (error || !result?.ok) {
+      const reason = result?.reason ?? 'assignment_failed'
+      const message =
+        reason === 'channel_already_assigned'
+          ? 'That PayHero channel is already used by another ISP.'
+          : 'The payment channel could not be saved. Please try again.'
+      console.error(
+        'payhero-provision: assignment refused',
+        JSON.stringify({ ispId, channelId, reason, error: error?.message ?? null }),
+      )
+      return { ok: false, status: 'failed', channelId: null, created: false, message, code: reason }
+    }
+
+    return {
+      ok: true,
+      status: result.connection_status === 'connected' ? 'ready' : 'pending',
+      channelId: Number(result.payhero_channel_id ?? channelId),
+      created: true,
+      message: 'Payment channel ready.',
+    }
+  }
+
+  /** The PayHero account id, which channel registration requires. */
+  private async payHeroAccountId(): Promise<number | null> {
+    const { data } = await this.admin
+      .from('platform_payment_config')
+      .select('payhero_account_id')
+      .maybeSingle()
+
+    const id = (data as { payhero_account_id?: number | null } | null)?.payhero_account_id
+    return id === null || id === undefined ? null : Number(id)
+  }
+
+  /**
+   * Reconciles PayHero payments that are still pending.
+   *
+   * The recovery path for a callback that never arrived, or one that arrived before
+   * PayHero had indexed the transaction. It re-asks PayHero about OUR OWN pending
+   * payments only, so it can never invent a payment — it can only confirm one that
+   * already exists here, against the provider's own record.
+   *
+   * `olderThanMinutes` is the throttle: a transaction younger than that is left
+   * alone so this never races the callback that is about to arrive.
+   */
+  async reconcilePendingPayHeroPayments(
+    input: { olderThanMinutes?: number; limit?: number } = {},
+  ): Promise<{ scanned: number; settled: number; failed: number; stillPending: number }> {
+    const olderThan = input.olderThanMinutes ?? 5
+    const limit = Math.min(input.limit ?? 20, 100)
+    const since = new Date(Date.now() - olderThan * 60_000).toISOString()
+
+    const { data } = await this.admin
+      .from('payments')
+      .select('provider_reference')
+      .eq('payment_provider', 'payhero')
+      .eq('status', 'pending')
+      .not('initiated_at', 'is', null)
+      .lte('initiated_at', since)
+      .order('initiated_at', { ascending: true })
+      .limit(limit)
+
+    const rows = (data ?? []) as Array<{ provider_reference: string | null }>
+    const summary = { scanned: 0, settled: 0, failed: 0, stillPending: 0 }
+
+    for (const row of rows) {
+      if (!row.provider_reference) continue
+      summary.scanned += 1
+      try {
+        const result = await this.verifyPayHeroPayment({
+          reference: row.provider_reference,
+        })
+        if (result.settled) summary.settled += 1
+        else if (result.reason === 'failed') summary.failed += 1
+        else summary.stillPending += 1
+      } catch {
+        // One unreachable transaction must not stop the sweep. The payment stays
+        // pending and is retried on the next run.
+        summary.stillPending += 1
+      }
+    }
+
+    console.log('payhero-reconcile: sweep complete', JSON.stringify(summary))
+    return summary
   }
 }

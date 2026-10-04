@@ -47,12 +47,19 @@ export const PAYHERO_BASE_URL = 'https://backend.payhero.co.ke'
 export const PAYHERO_ENDPOINTS = {
   /** Initiate an M-Pesa STK push. Returns a transaction reference. */
   initiateStk: '/api/v2/payments',
-  /** Channels (Till/PayBill) registered on the account. Drives discovery. */
+  /**
+   * Channels (Till/PayBill) registered on the account.
+   *
+   * GET discovers them; POST registers a new one. Both verbs are documented on the
+   * same path, which is why this is one entry and not two.
+   */
   paymentChannels: '/api/v2/payment_channels',
   /** Wallets held by the account, including the service wallet balance. */
   wallets: '/api/v2/wallets',
-  /** Authoritative transaction status by our external reference. */
+  /** Authoritative transaction status, keyed by the reference PayHero issued. */
   transactionStatus: '/api/v2/transaction-status',
+  /** Account transactions, used to reconcile a callback that never arrived. */
+  accountTransactions: '/api/v2/transactions',
 } as const
 
 export type PayHeroEndpointName = keyof typeof PAYHERO_ENDPOINTS
@@ -225,23 +232,52 @@ export class PayHeroClient {
    *
    * This is the verification path. STK initiation is a request for a prompt, not
    * proof of payment, so nothing may be activated on the strength of that call.
+   *
+   * `reference` must be a value PAYHERO issued — the `reference` from the STK
+   * response, the M-Pesa receipt code, or the callback's ExternalReference. PayHero
+   * resolves this lookup by its own identifiers and 404s on an arbitrary string.
    */
   async getTransactionStatus(
     reference: string,
-  ): Promise<{ state: 'success' | 'failed' | 'pending'; raw: Record<string, unknown> }> {
+  ): Promise<{
+    state: 'success' | 'failed' | 'pending'
+    raw: Record<string, unknown>
+    /** PayHero's own reference for this transaction, when it reports one. */
+    providerReference: string | null
+    /** The M-Pesa receipt / provider code, which is what a customer is shown. */
+    receipt: string | null
+    amount: number | null
+    phone: string | null
+    channelId: number | null
+  }> {
     const body = await this.request<Record<string, unknown>>('transactionStatus', {
       method: 'GET',
       path: `${PAYHERO_ENDPOINTS.transactionStatus}?reference=${encodeURIComponent(reference)}`,
     })
-    // PayHero documents no ResultCode for this endpoint, so success is read from
-    // the recorded status string rather than invented.
+    // PayHero documents three status values: QUEUED (no callback received yet),
+    // SUCCESS and FAILED. The extra words are tolerated because refusing to
+    // recognise a real payment over a renamed status is the worse failure.
+    // QUEUED is deliberately NOT success.
     const recorded = String(body.status ?? body.transaction_status ?? '')
     const state = /success|completed|settled|paid/i.test(recorded)
       ? 'success'
       : /fail|revert|cancel/i.test(recorded)
         ? 'failed'
         : 'pending'
-    return { state, raw: body }
+
+    // The M-Pesa code is `third_party_reference` or `provider_reference`. Reading
+    // both lets settlement store a real receipt rather than our own reference.
+    return {
+      state,
+      raw: body,
+      providerReference: this.string(body, 'reference'),
+      receipt:
+        this.string(body, 'third_party_reference') ??
+        this.string(body, 'provider_reference'),
+      amount: this.number(body, 'amount') ?? this.number(body, 'Amount'),
+      phone: this.string(body, 'phone_number') ?? this.string(body, 'Phone'),
+      channelId: this.number(body, 'channel_id'),
+    }
   }
 /**
  * One pass against the account: channels plus wallet balance.
@@ -266,6 +302,139 @@ export class PayHeroClient {
     if (!body || typeof body !== 'object') return null
     const value = (body as Record<string, unknown>)[key]
     return typeof value === 'string' && value.length > 0 ? value : null
+  }
+
+  /**
+   * Reads a numeric field, tolerating the string form.
+   *
+   * PayHero returns `amount` as a number but ids and balances have been observed
+   * as strings, so a strict typeof check would silently drop a real channel id.
+   */
+  private number(body: unknown, key: string): number | null {
+    if (!body || typeof body !== 'object') return null
+    const value = (body as Record<string, unknown>)[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value)
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return null
+  }
+
+  /**
+   * Registers a payment channel (Till or PayBill) on the account.
+   *
+   * PayHero's documented "Register Payment Channel" operation. This is what turns
+   * a new ISP's Till into a channel their customers can actually pay against.
+   *
+   * Idempotency is NOT provided by PayHero: calling this twice for one Till creates
+   * two channels. The caller must look before it writes — `findChannelByShortCode`
+   * exists for exactly that, and the payment service always calls it first.
+   */
+  async registerChannel(input: {
+    channelType: 'paybill' | 'till' | 'bank'
+    accountId: number
+    shortCode: string
+    accountNumber: string
+    description: string
+  }): Promise<{ registered: boolean; channel: PayHeroChannel | null; message: string }> {
+    if (!Number.isInteger(input.accountId) || input.accountId <= 0) {
+      throw new HashBackError({
+        kind: 'validation',
+        message: 'registerChannel: account_id must be the PayHero account id.',
+        details: { field: 'account_id' },
+      })
+    }
+    // Length is checked loosely on purpose: this platform has a live 7-digit Till,
+// and a stricter check here would reject an ISP whose payments already work.
+    // PayHero is the authority on whether the Till actually exists.
+    if (!/^\d{5,9}$/.test(input.shortCode)) {
+      throw new HashBackError({
+        kind: 'validation',
+        message: 'registerChannel: short_code must be a Till or PayBill number.',
+        details: { field: 'short_code' },
+      })
+    }
+
+    // Field names are PayHero's own, verbatim from its documented request body.
+    const body = await this.request<Record<string, unknown>>('registerChannel', {
+      method: 'POST',
+      path: PAYHERO_ENDPOINTS.paymentChannels,
+      json: {
+        channel_type: input.channelType,
+        account_id: input.accountId,
+        short_code: Number(input.shortCode),
+        account_number: input.accountNumber,
+        description: input.description,
+      },
+    })
+
+    // PayHero returns the channel row at the top level on success. A 200 carrying
+    // no usable id is a failure, not a quiet success: a channel we cannot address
+    // is not a channel, and marking one READY would break the customer's STK.
+    const id = this.number(body, 'id')
+    const channel = id === null
+      ? null
+      : {
+          id,
+          channel_type: String(body.channel_type ?? input.channelType),
+          transaction_type: String(body.transaction_type ?? ''),
+          account_id: this.number(body, 'account_id') ?? input.accountId,
+          short_code: String(body.short_code ?? input.shortCode),
+          account_number: String(body.account_number ?? input.accountNumber),
+          description: String(body.description ?? input.description),
+          is_active: body.is_active !== false,
+        }
+
+    return {
+      registered: channel !== null,
+      channel,
+      message: channel
+        ? 'Payment channel registered with PayHero.'
+        : this.string(body, 'error_message') ?? 'PayHero did not return a channel.',
+    }
+  }
+
+  /**
+   * Finds an already-registered channel for a Till/PayBill short code.
+   *
+   * This is what makes automatic provisioning idempotent. PayHero offers no
+   * "get or create" and no idempotency key, so the caller must look before it
+   * writes or it will create a duplicate channel on every settings save.
+   */
+  async findChannelByShortCode(shortCode: string): Promise<PayHeroChannel | null> {
+    const wanted = shortCode.replace(/\D/g, '')
+    const channels = await this.listChannels()
+    return (
+      channels.find((c) => String(c.short_code ?? '').replace(/\D/g, '') === wanted) ?? null
+    )
+  }
+
+  /**
+   * Recent account transactions, newest first.
+   *
+   * Used to recover from a callback that never arrived: the money movement is
+   * recorded here even when no webhook was delivered. Callers match on an
+   * authoritative identifier only — never on amount plus phone.
+   */
+  async listAccountTransactions(
+    input: { page?: number; perPage?: number } = {},
+  ): Promise<Record<string, unknown>[]> {
+    const params = new URLSearchParams()
+    if (input.page && input.page > 1) params.set('page', String(input.page))
+    if (input.perPage && input.perPage > 0) params.set('per', String(input.perPage))
+    const query = params.toString() ? `?${params}` : ''
+
+    const body = await this.request<
+      { transactions?: Record<string, unknown>[] } | Record<string, unknown>[]
+    >('accountTransactions', {
+      method: 'GET',
+      path: PAYHERO_ENDPOINTS.accountTransactions + query,
+    })
+
+    if (Array.isArray(body)) return body
+    const rows = (body as { transactions?: unknown[] }).transactions
+    return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : []
   }
 
   /**

@@ -190,10 +190,34 @@ describe('PayHero endpoint security posture', () => {
 
   it('never trusts the callback body for the outcome', () => {
     const fn = code('supabase/functions/payhero-callback/index.ts')
-    // Only the reference is read; the status always comes from PayHero.
-    expect(fn).toMatch(/verifyPayHeroPayment\(\{ reference \}\)/)
+    // Only the reference (and identifiers used to LOOK UP the transaction) is read;
+    // the status always comes from PayHero's own credentialed answer.
+    expect(fn).toMatch(/verifyPayHeroPayment\(\{/)
     expect(fn).not.toMatch(/payload\.status/)
     expect(fn).not.toMatch(/body\.status/)
+    // The provider identifiers the callback supplies are hints for the lookup only.
+    // Nothing in this file may treat a callback's own "Status: Success" as proof.
+    expect(fn).not.toMatch(/nested\.Status/)
+    expect(fn).not.toMatch(/response\?\.Status\s*===/)
+  })
+
+  it('reads the reference out of the NESTED response PayHero actually sends', () => {
+    // This is the defect that left real payments stuck at 'pending' forever.
+    //
+    // PayHero's documented callback is:
+    //   { forward_url, response: { ExternalReference, MpesaReceiptNumber, ... }, status }
+    // The reference is NOT top-level. An earlier version of this endpoint only
+    // looked at top-level keys, so every genuine callback returned
+    // 'missing_reference', nothing verified, and the ISP dashboard never showed a
+    // successful payment even though the customer had paid.
+    const fn = code('supabase/functions/payhero-callback/index.ts')
+
+    expect(fn).toMatch(/body\.response/)
+    expect(fn).toMatch(/nested\?\.ExternalReference/)
+    // The M-Pesa receipt and CheckoutRequestID are the identifiers PayHero indexes,
+    // so they must reach the verification call.
+    expect(fn).toMatch(/MpesaReceiptNumber/)
+    expect(fn).toMatch(/CheckoutRequestID/)
   })
 
   it('never invents a PayHero signature check', () => {
@@ -461,5 +485,97 @@ describe('HashBack history is preserved and labelled honestly', () => {
     // Historical rows still carry it; dropping it would destroy them.
     expect(has('supabase/migrations/20260101100000_hashback_gateway.sql')).toBe(true)
     expect(code(GATEWAY)).not.toMatch(/drop column hashback_account_id/i)
+  })
+})
+
+const PROVISIONING = 'supabase/migrations/20260101400000_payhero_channel_provisioning.sql'
+
+describe('automatic channel provisioning and reconciliation are deployable', () => {
+  it('ships a provisioning function that resolves the ISP server-side', () => {
+    // The ISP must never come from the request body. If it did, ISP A could
+    // provision against ISP B's Till and redirect B's revenue.
+    const fn = code('supabase/functions/payhero-provision/index.ts')
+    expect(fn).toMatch(/from\('profiles'\)[\s\S]*?select\('isp_id, role'\)/)
+    expect(fn).toMatch(/admin\.auth\.getUser\(token\)/)
+    expect(fn).toMatch(/provisionPayHeroChannel\(\{\s*ispId/)
+    expect(fn).not.toMatch(/body\.ispId/)
+  })
+
+  it('keeps the PayHero credential out of the provisioning request', () => {
+    // The browser sends a Till and nothing else. If it could send a token, the
+    // credential would be readable from devtools and from logs.
+    const fn = code('supabase/functions/payhero-provision/index.ts')
+    const body = fn.slice(fn.indexOf('JSON.stringify({'))
+    expect(body).not.toMatch(/apiToken|api_token|Authorization:\s*`Basic/)
+  })
+
+  it('ships a reconciliation sweep that only confirms OUR OWN pending payments', () => {
+    // A sweep that could create payments would let anyone mint revenue. It must
+    // only ever confirm a payment that already exists here, against PayHero.
+    const svc = code('supabase/functions/_shared/payment-service.ts')
+    const sweep = svc.slice(svc.indexOf('reconcilePendingPayHeroPayments'))
+    expect(sweep).toMatch(/eq\('payment_provider', 'payhero'\)/)
+    expect(sweep).toMatch(/eq\('status', 'pending'\)/)
+    expect(sweep).not.toMatch(/\.insert\(/)
+  })
+
+  it('protects the reconciliation endpoint', () => {
+    // It settles real money, so an unauthenticated caller must never reach it.
+    const fn = code('supabase/functions/payhero-reconcile/index.ts')
+    expect(fn).toMatch(/PAYHERO_RECONCILE_SECRET/)
+    expect(fn).toMatch(/=== 'super_admin'/)
+    expect(fn).toMatch(/401/)
+  })
+
+  it('adopts the existing payment_channel_status enum rather than inventing one', () => {
+    // A second, competing status vocabulary would leave the portal and the
+    // dashboard disagreeing about whether an ISP can take money.
+    const sql = code(PROVISIONING)
+    expect(sql).toMatch(/v_state\s*:=\s*p_status::public\.payment_channel_status/)
+    expect(sql).not.toMatch(/create type/i)
+  })
+
+  it('never lets a failure path mark a channel connected', () => {
+    // The most dangerous transition in this feature. If the failure path could
+    // mark connected, a rejected Till would show an ISP as live while every
+    // STK push fails.
+    const sql = code(PROVISIONING)
+    const fn = sql.slice(sql.indexOf('create or replace function public.set_payhero_channel_state'))
+    expect(fn).toMatch(/Only a provisioning failure state may be written here/)
+    expect(fn).not.toMatch(/connection_status\s*=\s*'connected'/)
+  })
+
+  it('is additive: it drops, deletes and resets nothing', () => {
+    const sql = code(PROVISIONING)
+    expect(sql).not.toMatch(/\bdrop\s+table\b/i)
+    expect(sql).not.toMatch(/\btruncate\b/i)
+    expect(sql).not.toMatch(/\bdelete\s+from\b/i)
+  })
+
+  it('backfills existing PayHero ISPs so they are never re-provisioned', () => {
+    // Beta Broadband already has channel 13137 and Till 5441898. Without this
+    // backfill its next settings save would register a SECOND channel for the
+    // same Till, splitting one merchant's history in two.
+    const sql = code(PROVISIONING)
+    expect(sql).toMatch(/update public\.isp_payment_configs c\s+set payhero_channel_short_code/)
+    expect(sql).toMatch(/where c\.payhero_channel_id is not null/)
+  })
+
+  it('reuses the settlement function rather than writing a second one', () => {
+    // A second settlement path is how a payments system starts double-renewing.
+    const sql = code(PROVISIONING)
+    const settle = sql.slice(sql.indexOf('create or replace function public.settle_payhero_payment'))
+    expect(settle).toMatch(/settle_hashback_payment\(/)
+    expect(settle).toMatch(/select c\.payhero_channel_id into v_channel[\s\S]*?p\.isp_id/)
+  })
+
+  it('shows the real provider, channel and references in the ISP payment list', () => {
+    // Before this the list showed only method/phone/receipt, so a PayHero payment
+    // was indistinguishable from a manual one and unsearchable by its reference.
+    const page = code('src/pages/isp/panel/index.tsx')
+    expect(page).toMatch(/p\.payment_provider/)
+    expect(page).toMatch(/p\.payhero_channel_id/)
+    expect(page).toMatch(/p\.provider_transaction_id/)
+    expect(page).toMatch(/p\.provider_reference/)
   })
 })
