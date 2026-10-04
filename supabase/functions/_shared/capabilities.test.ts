@@ -94,6 +94,25 @@ describe('buildProvisioningCommand', () => {
     expect(cmd).toContain('/import file-name=$f')
   })
 
+  it('writes the fetched file, instead of discarding the result', () => {
+    // Regression: `output=none` made /tool fetch throw the bytes away, so
+    // dst-path was never written and the file check below always failed. On a
+    // real router this made provisioning impossible while looking like a
+    // network problem, which is why it was so hard to diagnose.
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).not.toMatch(/output=none/)
+    expect(fetchLine).toMatch(/output=file/)
+    // The download must be explicit rather than relying on a default.
+    expect(fetchLine).toMatch(/dst-path=\$f/)
+  })
+
+  it('cannot report an unreachable endpoint when the fetch simply discarded', () => {
+    // Guard the exact failure mode: the error below must be reachable only
+    // because the file genuinely is absent.
+    expect(cmd).toContain('[:len [/file find name=$f]] = 0')
+    expect(cmd.indexOf('/tool fetch')).toBeLessThan(cmd.indexOf('/file find'))
+  })
+
   it('does not leave the downloaded file behind', () => {
     expect(cmd).toContain('/file remove $f')
   })

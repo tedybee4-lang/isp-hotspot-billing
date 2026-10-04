@@ -855,7 +855,51 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     )
   })
 
-  it('exposes customer create and status changes, instead of discarding them', () => {
+  it('resolves the customer portal from the database, not the demo store', () => {
+    // The portal looked the tenant up in the local demo store, which only ever
+    // contains sample ISPs. Every real tenant therefore resolved to "Portal not
+    // found" in production while the backend was perfectly capable of serving
+    // it - verified live: public_portal_settings returns all three real ISPs.
+    const portal = read('src/pages/CaptivePortal.tsx')
+
+    // The live branch must go to the public RPC, and must derive the ISP it
+    // renders from that response.
+    expect(portal).toMatch(/fetchPublicPortalSettings\(slug/)
+    expect(portal).toMatch(/name:\s*settings\.isp_name/)
+    expect(portal).toMatch(/brand_color:\s*settings\.brand_color/)
+
+    // The demo lookup must not be reachable on the live path, i.e. it may only
+    // appear after an early `return` on the live branch.
+    const liveIdx = portal.indexOf("config.mode === 'live'")
+    const demoIdx = portal.indexOf('loadDb().isps.find')
+    expect(liveIdx, 'no live branch found').toBeGreaterThan(-1)
+    expect(demoIdx, 'demo lookup still present').toBeGreaterThan(-1)
+    expect(demoIdx, 'demo lookup must not run before the live branch returns')
+      .toBeGreaterThan(liveIdx)
+    expect(portal.slice(liveIdx, demoIdx)).toMatch(/^\s*return\s*$/m)
+
+    // A transport failure must not masquerade as "no such portal".
+    expect(portal).toMatch(/setLoadError\(/)
+    expect(portal).toMatch(/Portal unavailable/)
+  })
+
+it('never claims a RouterOS fetch wrote a file it discarded', () => {
+    // `output=none` makes /tool fetch throw the bytes away, so the file check
+    // after it could never pass and provisioning failed on every router while
+    // reporting a network error. Regression guard on the real generated script.
+    const caps = read('supabase/functions/_shared/capabilities.ts')
+    // Match the command itself, not the explanatory comment above it.
+    const fetchLine = caps.split('\n').find((l) => l.includes('/tool fetch url=')) ?? ''
+    expect(fetchLine).not.toMatch(/output=none/)
+    expect(fetchLine).toMatch(/output=file/)
+
+    // The connectivity probe in the worker legitimately wants output=none: it
+    // must not be "fixed" along with the provisioning download.
+    const handlers = read('worker/src/handlers.ts')
+    expect(handlers).toMatch(/output=none keep-result=no/)
+  })
+
+it('exposes customer create and status changes, instead of discarding them', () => {
     // The Customers page destructured addClient/setClientStatus and then threw
     // them away with `void`, so an ISP could list customers but never create,
     // suspend or reactivate one - the backend was complete and unreachable.

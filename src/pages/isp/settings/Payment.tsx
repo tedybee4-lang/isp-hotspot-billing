@@ -114,7 +114,7 @@ export function PaymentSettingsPage() {
           <div className="flex items-start gap-3">
             <Lock className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
             <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              The Daraja consumer key, secret and passkey are held server-side and
+              The HashBack API key and webhook secret are held server-side and
               encrypted. They are never sent to your browser and cannot be read
               from this page, which is why you only ever see your Till and PayBill
               numbers here.

@@ -211,7 +211,11 @@ export function buildProvisioningCommand(opts: {
     `  :local u "${opts.claimUrl}";`,
     `  :local t "${opts.token}";`,
     '  :local f "netisp-claim.rsc";',
-    '  /tool fetch url=($u . "?token=" . $t) mode=https dst-path=$f output=none;',
+    // output=file is REQUIRED. `output=none` tells RouterOS to discard the
+    // fetched bytes instead of writing dst-path, so the file check below could
+    // never succeed and every router failed with "could not reach the
+    // provisioning endpoint" no matter how healthy the link was.
+    '  /tool fetch url=($u . "?token=" . $t) mode=https dst-path=$f output=file keep-result=yes;',
     '  :if ([:len [/file find name=$f]] = 0) do={',
     '    :error "NETISP: could not reach the provisioning endpoint.";',
     '  }',

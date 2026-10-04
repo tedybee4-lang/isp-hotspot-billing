@@ -10,16 +10,22 @@ import { redeemVoucher } from '../lib/data'
 import { fetchPublicPortalSettings, fetchPublicPortalPackages, type PortalSettings } from '../lib/data'
 import { loadDb } from '../lib/demoStore'
 import { config } from '../lib/config'
-import type { Isp, Plan } from '../lib/types'
+import type { Plan } from '../lib/types'
 import { cn } from '../utils/cn'
 import { Alert, Button, Card, Field, Spinner, inputClass } from '../components/ui'
 
-interface PortalState { isp: Isp; plans: Plan[]; settings: PortalSettings | null }
+interface PortalState {
+  /** Only the two fields the portal actually renders. */
+  isp: { name: string; brand_color: string }
+  plans: Plan[]
+  settings: PortalSettings | null
+}
 
 export default function CaptivePortal() {
   const { slug } = useParams<{ slug: string }>()
   const [state, setState] = useState<PortalState | null>(null)
   const [missing, setMissing] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [code, setCode] = useState('')
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
   const [connected, setConnected] = useState(false)
@@ -30,22 +36,38 @@ export default function CaptivePortal() {
   useEffect(() => {
     let live = true
     void (async () => {
-      const isp = loadDb().isps.find((i) => i.slug === slug)
-      if (!isp) { setMissing(true); return }
+      setMissing(false)
+      setLoadError(null)
 
-      let settings: PortalSettings | null = null
-      let plans: Plan[]
-      try {
-        settings = await fetchPublicPortalSettings(slug!)
-      } catch {
-        // No backend, or no settings yet: fall back to the ISP defaults.
-        settings = null
-      }
-
-      // Against a live project the packages come from the public RPC, because
-      // an anonymous visitor cannot read `plans` under RLS. The demo store is
-      // read directly since it has no tenancy to enforce.
+      // ── Resolve the tenant from the slug ──────────────────────────────────
+      //
+      // Against a live project this MUST come from the database. It used to be
+      // read out of the local demo store, which only ever contains the sample
+      // ISPs, so every real tenant resolved to "not found" - the portal was
+      // permanently broken in production while looking correctly configured.
       if (config.mode === 'live') {
+        let settings: (PortalSettings & { isp_name: string; isp_slug: string; brand_color: string }) | null
+        try {
+          settings = await fetchPublicPortalSettings(slug!)
+        } catch (e) {
+          if (!live) return
+          // A transport failure is not the same as "no such portal"; saying
+          // "not found" here would send the ISP looking for a typo that does
+          // not exist.
+          setLoadError(e instanceof Error ? e.message : 'Could not load this portal.')
+          return
+        }
+
+        // The RPC returns the ISP's name and brand alongside its settings, so
+        // one round trip resolves the tenant. It returns null only when this
+        // slug genuinely has no portal configured.
+        if (!settings) {
+          if (!live) return
+          setMissing(true)
+          return
+        }
+
+        let plans: Plan[] = []
         try {
           const rows = await fetchPublicPortalPackages(slug!)
           plans = rows
@@ -55,7 +77,7 @@ export default function CaptivePortal() {
               // filled in rather than spread: a missing field must not become
               // undefined in a place the page renders as a price.
               id: r.id,
-              isp_id: isp.id,
+              isp_id: '',
               name: r.name,
               kind: r.kind as Plan['kind'],
               price: r.price,
@@ -80,14 +102,38 @@ export default function CaptivePortal() {
         } catch {
           plans = []
         }
-      } else {
-        plans = loadDb().plans
-          .filter((p) => p.isp_id === isp.id && p.kind === 'hotspot' && p.is_active)
-          .sort((a, b) => Number(a.price) - Number(b.price))
+
+        if (!live) return
+        setState({
+          isp: { name: settings.isp_name, brand_color: settings.brand_color },
+          plans,
+          settings,
+        })
+        return
       }
 
+      // ── Demo mode: no backend to ask, so read the local sample data ────────
+      const isp = loadDb().isps.find((i) => i.slug === slug)
+      if (!isp) { setMissing(true); return }
+
+      let settings: PortalSettings | null = null
+      try {
+        settings = await fetchPublicPortalSettings(slug!)
+      } catch {
+        // No backend, or no settings yet: fall back to the ISP defaults.
+        settings = null
+      }
+
+      const plans: Plan[] = loadDb().plans
+        .filter((p) => p.isp_id === isp.id && p.kind === 'hotspot' && p.is_active)
+        .sort((a, b) => Number(a.price) - Number(b.price))
+
       if (!live) return
-      setState({ isp, plans, settings })
+      setState({
+        isp: { name: isp.name, brand_color: isp.brand_color },
+        plans,
+        settings,
+      })
     })()
     return () => { live = false }
   }, [slug])
@@ -106,6 +152,24 @@ export default function CaptivePortal() {
     } finally {
       setBusy(false)
     }
+  }
+
+  if (loadError) {
+    return (
+      <CenteredShell>
+        <Card className="p-8 text-center">
+          <h1 className="text-lg font-black text-slate-900 dark:text-white">
+            Portal unavailable
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+            We could not reach the portal service. This is usually temporary.
+          </p>
+          <Button size="sm" className="mt-4" onClick={() => window.location.reload()}>
+            Try again
+          </Button>
+        </Card>
+      </CenteredShell>
+    )
   }
 
   if (missing) {
