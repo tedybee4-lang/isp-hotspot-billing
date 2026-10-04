@@ -23,13 +23,13 @@ import {
 import { Link, useParams } from 'react-router-dom'
 import {
   CheckCircle2, ChevronDown, LifeBuoy, Loader2, Phone, RefreshCw, ShieldCheck,
-  Ticket, User, Wifi,
+  Smartphone, Ticket, User, Wifi,
 } from 'lucide-react'
 import {
   fetchPortalPackages, fetchPortalPaymentStatus, fetchPortalSettings,
   loginPortalCustomer, reconnectPortalCustomer, redeemPortalVoucher,
   startPortalPayment, PortalError,
-  type PortalPackage, type PortalSettings,
+  type PortalPackage, type PortalSettings, type PortalPaymentStart,
 } from '../lib/portal'
 import { config } from '../lib/config'
 import { loadDb } from '../lib/demoStore'
@@ -184,7 +184,7 @@ function Storefront({ slug, settings, packages }: { slug: string } & PortalState
   const [buying, setBuying] = useState<PortalPackage | null>(null)
   const [phone, setPhone] = useState('')
   const [busy, setBusy] = useState(false)
-  const [payment, setPayment] = useState<{ reference: string; message: string } | null>(null)
+  const [payment, setPayment] = useState<PortalPaymentStart | null>(null)
   const [payError, setPayError] = useState<string | null>(null)
 
   const [code, setCode] = useState('')
@@ -212,7 +212,7 @@ function Storefront({ slug, settings, packages }: { slug: string } & PortalState
       // Only these three values leave the browser. The price and the payment
       // destination are the server's to decide.
       const res = await startPortalPayment({ slug, planId: buying.id, phone })
-      setPayment({ reference: res.reference, message: res.message })
+      setPayment(res)
       setBuying(null)
     } catch (err) {
       setPayError(err instanceof PortalError ? err.message : 'Could not start the payment.')
@@ -353,8 +353,17 @@ function Storefront({ slug, settings, packages }: { slug: string } & PortalState
             </p>
           )}
 
-        {/* â”€â”€ Waiting for M-Pesa â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-        {payment && <PaymentWaiting slug={slug} currency={currency} {...payment} />}
+        {/* Two collection paths, so two screens: an STK prompt is already on
+            the customer phone and only needs watching, while a Till payment has
+            not happened yet and needs telling them what to do. */}
+        {payment &&
+          (payment.mode === 'manual_till' ? (
+            <ManualTillPanel payment={payment} currency={currency} />
+          ) : (
+            // `payment` carries its own currency; the storefront label goes last so it
+            // wins rather than being silently overwritten.
+            <PaymentWaiting slug={slug} {...payment} currency={currency} />
+          ))}
 
         {/* â”€â”€ Voucher: an additional option, not the whole portal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         {settings.show_voucher && settings.login_method !== 'customer' && (
@@ -695,6 +704,82 @@ function BuySheet({
         </form>
       </div>
     </div>
+  )
+}
+
+/**
+ * Manual Till instructions.
+ *
+ * Shown when the ISP collects money by hand rather than through HashBack. No
+ * prompt was sent, so nothing is being waited on yet: the customer has to pay
+ * first. The reference is shown prominently because it is what they enter as the
+ * account name and what staff match against the Till statement.
+ *
+ * It does not claim the customer is online, and it does not poll for a
+ * settlement that only a human can confirm.
+ */
+function ManualTillPanel({ payment, currency }: { payment: PortalPaymentStart; currency: string }) {
+  const number = payment.till_number ?? payment.paybill_number
+
+  return (
+    <Panel>
+      <SectionTitle id="till-heading" icon={<Smartphone className="h-4 w-4" />}>
+        Pay with M-Pesa
+      </SectionTitle>
+      <div className="space-y-3 p-4 pt-0">
+        <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+          {payment.message}
+        </p>
+
+        {number && (
+          <div className="rounded-xl border border-slate-200 p-3 text-center dark:border-slate-700">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              {payment.till_number ? 'Till number' : 'Paybill number'}
+            </p>
+            <p className="mt-1 text-2xl font-black tracking-widest text-slate-900 dark:text-white">
+              {number}
+            </p>
+          </div>
+        )}
+
+        <div className="rounded-xl bg-slate-50 p-3 text-center dark:bg-slate-800/60">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Exact amount to send
+          </p>
+          <p className="mt-1 text-xl font-black text-slate-900 dark:text-white">
+            {currency} {Number(payment.amount).toLocaleString()}
+          </p>
+        </div>
+
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Use this as the account name
+          </p>
+          <p className="mt-1 select-all break-all rounded-lg bg-white px-3 py-2 font-mono text-sm font-bold text-slate-900 dark:bg-slate-900 dark:text-white">
+            {payment.reference}
+          </p>
+        </div>
+
+        {payment.instructions && payment.instructions.length > 0 && (
+          <ol className="list-decimal space-y-1 pl-5 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+            {payment.instructions.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        )}
+
+        {payment.notice && (
+          <p className="rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            {payment.notice}
+          </p>
+        )}
+
+        <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+          Your package activates as soon as we confirm the payment on the Till. Keep your
+          M-Pesa confirmation message.
+        </p>
+      </div>
+    </Panel>
   )
 }
 

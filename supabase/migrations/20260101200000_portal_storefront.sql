@@ -333,10 +333,29 @@ begin
   end if;
 
   -- The tenant's own channel. Never a parameter.
+  --
+  -- Two collection modes are supported, because `manual_till` is the only mode
+  -- this platform can actually run on for most ISPs: Daraja was retired and
+  -- HashBack is optional. Requiring HashBack here made the portal refuse every
+  -- sale on a correctly-configured Till, which is the one thing the product is
+  -- reliably able to collect today.
+  --
+  --   hashback     -> the automated path, and the only one that can STK.
+  --   manual_till  -> no AccountID; the customer pays the Till by hand and staff
+  --                   settle with confirm_manual_payment. Recorded as
+  --                   'till_manual', matching start_manual_payment.
   select * into v_cfg from public.isp_payment_configs where isp_id = v_isp;
-  if v_cfg.payment_provider::text <> 'hashback'
-     or v_cfg.connection_status::text <> 'connected'
-     or v_cfg.hashback_account_id is null then
+
+  if v_cfg.payment_provider::text = 'hashback' then
+    if v_cfg.connection_status::text <> 'connected'
+       or v_cfg.hashback_account_id is null then
+      raise exception 'This network is not ready to accept payments yet'
+        using errcode = 'integrity_constraint_violation';
+    end if;
+  elsif nullif(btrim(coalesce(v_cfg.till_number, '')), '') is null
+     and nullif(btrim(coalesce(v_cfg.paybill_number, '')), '') is null then
+    -- Neither an automated channel nor a number to pay by hand: there is no way
+    -- for this customer to hand over money, so say so rather than pretending.
     raise exception 'This network is not ready to accept payments yet'
       using errcode = 'integrity_constraint_violation';
   end if;
@@ -386,16 +405,24 @@ begin
   -- Unique, opaque, derived from a UUID and nothing secret.
   v_ref := 'NETISP-' || replace(extensions.gen_random_uuid()::text, '-', '');
 
+  -- The method records HOW the money is being collected, because the two modes
+  -- are settled by different paths: 'till_manual' by confirm_manual_payment,
+  -- 'mpesa' by the HashBack webhook. Both leave the row 'pending'; neither
+  -- grants anything on its own.
   insert into public.payments (
     isp_id, client_id, invoice_id, phone, amount, method, status,
     payment_provider, provider_reference, initiated_at, provider_metadata
   ) values (
-    v_isp, v_client.id, v_inv.id, v_phone, v_amount, 'mpesa', 'pending',
-    'hashback', v_ref, now(),
+    v_isp, v_client.id, v_inv.id, v_phone, v_amount,
+    case when v_cfg.payment_provider::text = 'hashback' then 'mpesa' else 'till_manual' end,
+    'pending',
+    v_cfg.payment_provider, v_ref, now(),
     jsonb_build_object('plan_id', v_plan.id,
                        'plan_name', v_plan.name,
                        'source', 'captive_portal',
-                       'isp_slug', lower(trim(p_slug)))
+                       'isp_slug', lower(trim(p_slug)),
+                       'collection_mode', case when v_cfg.payment_provider::text = 'hashback'
+                                               then 'stk' else 'manual_till' end)
   ) returning * into v_pay;
 
   return jsonb_build_object(
@@ -408,6 +435,16 @@ begin
     'plan_name', v_plan.name,
     'duration_label', v_plan.duration_label,
     'duration_hours', v_plan.duration_hours,
+    -- Which collection path this tenant is on. The Edge Function branches on
+    -- this: 'stk' prompts M-Pesa, 'manual_till' hands back instructions. Derived
+    -- server-side like everything else here, so the browser cannot ask for a
+    -- path the ISP has not configured.
+    'collection_mode', case when v_cfg.payment_provider::text = 'hashback'
+                            then 'stk' else 'manual_till' end,
+    -- Only meaningful on the manual path.
+    'till_number', v_cfg.till_number,
+    'paybill_number', v_cfg.paybill_number,
+    'customer_notice', v_cfg.customer_notice,
     -- Server-side only. Never returned to a browser.
     'hashback_account_id', v_cfg.hashback_account_id
   );

@@ -1026,6 +1026,55 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     expect(client).not.toMatch(/rpc\('redeem_voucher'/)
   })
 
+  it('settles a manual Till payment without aborting, for the period paid', () => {
+    // Found by actually running confirm_manual_payment: it referenced `p_pay`,
+    // which is not a variable in that function (the local is `v_pay`). The
+    // UPDATE therefore raised "missing FROM-clause entry", the transaction
+    // aborted, and staff could not settle ANY Till payment - and because the
+    // statement threw, the invoice and the activation below it never ran either.
+    // This had been latent because nothing could create a manual payment.
+    const sql = code('supabase', 'migrations', '20260101000300_payment_modes.sql')
+    const fn = sql.slice(sql.indexOf('create or replace function public.confirm_manual_payment'))
+
+    expect(fn).toMatch(/where id = v_pay\.id;/)
+    expect(fn).not.toMatch(/where id = p_pay\.id;/)
+
+    // The same flat-30-days defect that was fixed for settle_hashback_payment
+    // was missed here, so an hourly hotspot paid for by hand granted a month.
+    expect(fn).not.toMatch(/expires_at = v_from \+ interval '30 days'/)
+    expect(fn).toMatch(/payment_grant_hours\(v_pay\.isp_id, v_inv\.period_label, v_inv\.plan_name\)/)
+    // Tenant-scoped, so a shared plan name cannot resolve to another ISP.
+    expect(fn).toMatch(/payment_grant_hours\(v_pay\.isp_id/)
+  })
+
+  it('lets a Till-configured ISP sell, not just a HashBack-linked one', () => {
+    // `manual_till` is the product's only supported collection mode: Daraja was
+    // retired, and HashBack is optional per tenant. Requiring a connected
+    // HashBack channel meant the portal refused every sale for every ISP that
+    // had configured the one thing it can actually collect.
+    const sql = read('supabase/migrations/20260101200000_portal_storefront.sql')
+    const fn = sql.slice(sql.indexOf('create or replace function public.portal_create_payment'))
+
+    // HashBack is still required to be complete before STK is attempted...
+    expect(fn).toMatch(/if v_cfg\.payment_provider::text = 'hashback' then/)
+    expect(fn).toMatch(/connection_status::text <> 'connected'/)
+    // ...but a Till or Paybill is a legitimate alternative, not a refusal.
+    expect(fn).toMatch(/elsif nullif\(btrim\(coalesce\(v_cfg\.till_number/)
+
+    // The collection mode is decided server-side and told to the caller, so the
+    // browser cannot request a path the ISP has not configured.
+    expect(fn).toMatch(/'collection_mode', case when v_cfg\.payment_provider::text = 'hashback'/)
+
+    // The payment records HOW it will be settled, because the two modes settle
+    // through different functions.
+    expect(fn).toMatch(/then 'mpesa' else 'till_manual'/)
+
+    // And the Edge Function acts on it rather than always prompting M-Pesa.
+    const edge = read('supabase/functions/portal-stk/index.ts')
+    expect(edge).toMatch(/if \(charge\.collection_mode === 'manual_till'\)/)
+    expect(edge).toMatch(/mode: 'manual_till'/)
+  })
+
   it('badges at most one package, and only the one the ISP chose', () => {
     // plans.is_popular is a catalogue-wide flag and the seeded catalogues flag
     // more than one plan per ISP. Falling back to it painted "MOST POPULAR" on

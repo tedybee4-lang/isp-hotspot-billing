@@ -144,6 +144,42 @@ Deno.serve(async (req) => {
     currency: string
     plan_name: string
     hashback_account_id: string
+    collection_mode: 'stk' | 'manual_till'
+    till_number: string | null
+    paybill_number: string | null
+    customer_notice: string | null
+  }
+
+  // ── Manual Till: hand back instructions, do not prompt ──────────────────────
+  //
+  // `manual_till` is the product's default and, for most ISPs, its only working
+  // collection path. There is no STK here: the customer pays the Till from their
+  // own M-Pesa app and staff confirm it with confirm_manual_payment. The payment
+  // row and invoice already exist and are pending, exactly as they would be on
+  // the automated path, so settlement grants service either way.
+  if (charge.collection_mode === 'manual_till') {
+    const number = charge.till_number ?? charge.paybill_number
+    return json({
+      ok: true,
+      status: 'pending',
+      mode: 'manual_till',
+      message: 'Pay the amount below to the Till number, then send us your M-Pesa confirmation code.',
+      reference: charge.reference,
+      amount: Number(charge.amount),
+      currency: charge.currency,
+      plan: charge.plan_name,
+      till_number: charge.till_number,
+      paybill_number: charge.paybill_number,
+      notice: charge.customer_notice,
+      instructions: number
+        ? [
+            'Open M-Pesa → Send Money → To Till/Paybill',
+            `Send exactly ${charge.currency} ${Number(charge.amount).toLocaleString()} to ${number}`,
+            `Use ${charge.reference} as the account name`,
+            'Then enter your M-Pesa confirmation code so we can verify it',
+          ]
+        : [],
+    }, 200)
   }
 
   // ── Prompt the provider ────────────────────────────────────────────────────

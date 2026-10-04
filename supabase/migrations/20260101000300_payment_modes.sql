@@ -270,10 +270,16 @@ begin
     raise exception 'This payment is already %', v_pay.status;
   end if;
 
+  -- `p_pay` does not exist. The local is `v_pay`, so this raised
+  -- "missing FROM-clause entry for table p_pay" and EVERY manual Till
+  -- confirmation failed: staff could not settle a payment, and because the
+  -- statement aborts the transaction, nothing downstream (invoice, activation)
+  -- ran either. The error surfaced only once a portal purchase could actually
+  -- create a payment to confirm.
   update public.payments
      set status = 'success',
          mpesa_receipt = coalesce(p_receipt, mpesa_receipt)
-   where id = p_pay.id;
+   where id = v_pay.id;
 
   if v_pay.invoice_id is not null then
     select * into v_inv from public.invoices where id = v_pay.invoice_id;
@@ -289,10 +295,20 @@ begin
         else now()
       end;
 
-      update public.clients set
+      -- Grant the period actually paid for, not a flat 30 days. This is the same
+  -- defect settle_hashback_payment had, fixed there in
+  -- 20260101170000_payment_grant_period.sql; this function was missed, so a
+  -- customer who paid KES 10 for one hour of hotspot got 30 days of service.
+  -- Fallback stays 30 days only when the catalogue matches nothing.
+  update public.clients set
         status = 'active', balance = 0,
         plan_name = coalesce(v_inv.plan_name, plan_name),
-        expires_at = v_from + interval '30 days'
+        expires_at = v_from + make_interval(
+          secs => coalesce(
+            public.payment_grant_hours(v_pay.isp_id, v_inv.period_label, v_inv.plan_name),
+            720
+          )::numeric * 3600
+        )
       where id = v_inv.client_id;
     end if;
   end if;

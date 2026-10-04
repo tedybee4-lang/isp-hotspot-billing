@@ -129,24 +129,37 @@ export async function redeemPortalVoucher(
 }
 
 /**
- * Starts an M-Pesa payment for a package.
+ * Starts a payment for a package.
  *
- * Deliberately has no amount, ISP or account parameter. The price and the
- * destination are resolved server-side from the slug and the plan id.
+ * Deliberately has no amount, ISP or account parameter. The price, the
+ * destination AND the collection mode are all resolved server-side from the
+ * slug and the plan id.
+ *
+ * The response is one of two shapes depending on how that ISP collects money:
+ *  - `mode: 'stk'`        an M-Pesa prompt was sent; poll for settlement.
+ *  - `mode: 'manual_till'` nothing was prompted; the customer pays the Till and
+ *                         staff confirm it. `instructions` says what to do.
  */
-export async function startPortalPayment(input: {
-  slug: string
-  planId: string
-  phone: string
-}): Promise<{
+export interface PortalPaymentStart {
   ok: boolean
   status: string
+  mode?: 'stk' | 'manual_till'
   message: string
   reference: string
   amount: number
   currency: string
   plan: string
-}> {
+  till_number?: string | null
+  paybill_number?: string | null
+  notice?: string | null
+  instructions?: string[]
+}
+
+export async function startPortalPayment(input: {
+  slug: string
+  planId: string
+  phone: string
+}): Promise<PortalPaymentStart> {
   const res = await fetch(functionsUrl('portal-stk'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey },
@@ -163,7 +176,7 @@ export async function startPortalPayment(input: {
       (body as { code?: string }).code ?? null,
     )
   }
-  return body as never
+  return body as PortalPaymentStart
 }
 
 /** Polls one payment. Reports settlement; never settles anything itself. */
