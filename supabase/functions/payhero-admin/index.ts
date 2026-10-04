@@ -79,7 +79,14 @@ Deno.serve(async (req) => {
   }
 
   let body: {
-    action?: 'status' | 'save' | 'verify' | 'refresh' | 'assign' | 'disconnect'
+    action?:
+      | 'status'
+      | 'save'
+      | 'verify'
+      | 'refresh'
+      | 'assign'
+      | 'disconnect'
+      | 'isps'
     apiToken?: string
     callbackUrl?: string | null
     ispId?: string
@@ -226,6 +233,41 @@ Deno.serve(async (req) => {
       })
 
       return json({ ok: true, status: await getPayHeroStatus(admin) })
+    }
+
+    // ── isps ─────────────────────────────────────────────────────────────────
+//
+// Lists the tenants a channel may be assigned to, with whatever each one is
+// already using. An operator picking a Till needs to see which ISP each row is
+// and whether it is already taken, otherwise assigning the wrong one is easy and
+// the mistake only surfaces when a customer pays the wrong merchant.
+//
+// The name and the currently-assigned channel are not secrets; the credential
+// never appears here.
+if (action === 'isps') {
+      const { data } = await admin
+        .from('isp_payment_configs')
+        .select('isp_id, payment_provider, payhero_channel_id, connection_status')
+
+      const configs = new Map(
+        ((data ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.isp_id), r]),
+      )
+
+      const { data: isps } = await admin.from('isps').select('id, name').order('name')
+      const rows = ((isps ?? []) as Array<{ id: string; name: string }>).map((isp) => {
+        const cfg = configs.get(isp.id) ?? {}
+        return {
+          id: isp.id,
+          name: isp.name,
+          // Surfaced as text, not a selector value, so the operator can see that
+          // a tenant is already collecting elsewhere before reassigning it.
+          currentProvider: (cfg.payment_provider as string) ?? null,
+          currentChannelId: (cfg.payhero_channel_id as number | null) ?? null,
+          connectionStatus: (cfg.connection_status as string) ?? 'not_configured',
+        }
+      })
+
+      return json({ ok: true, isps: rows })
     }
 
     if (action === 'disconnect') {

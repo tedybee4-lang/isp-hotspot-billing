@@ -36,9 +36,11 @@ import {
   refreshPayHeroChannels,
   disconnectPayHero,
   assignPayHeroChannel,
+  fetchPayHeroIsps,
   PaymentError,
   type PayHeroPlatformStatus,
   type PayHeroVerificationResult,
+  type PayHeroIspOption,
 } from '../../lib/payhero'
 import {
   Alert, Badge, Button, Card, CardHeader, Field, Spinner, inputClass,
@@ -108,11 +110,19 @@ export default function PlatformPayHero() {
   // here. This is the one manual step PayHero's API requires.
   const [apiToken, setApiToken] = useState('')
   const [selectedChannel, setSelectedChannel] = useState('')
+  const [isps, setIsps] = useState<PayHeroIspOption[]>([])
   const [selectedIsp, setSelectedIsp] = useState('')
 
   const load = useCallback(async () => {
     try {
-      setStatus(await fetchPayHeroStatus())
+      const [s, tenants] = await Promise.all([
+        fetchPayHeroStatus(),
+        // A failure here must not blank the whole screen: the tenant list is an
+        // aid to assignment, while the connection state is the page's purpose.
+        fetchPayHeroIsps().catch(() => []),
+      ])
+      setStatus(s)
+      setIsps(tenants)
       setError(null)
     } catch (err) {
       setError((err as Error).message)
@@ -184,6 +194,8 @@ export default function PlatformPayHero() {
       setStatus(next)
       setNotice('Payment channel assigned to that ISP.')
       setSelectedChannel('')
+      // Reload so the tenant list reflects the new binding straight away.
+      setIsps(await fetchPayHeroIsps().catch(() => isps))
     } catch (err) {
       setError((err as PaymentError).message)
     }
@@ -397,14 +409,24 @@ export default function PlatformPayHero() {
 
             <Field
               label="ISP"
-              hint="Each channel may be assigned to exactly one ISP."
+              hint="Each channel may be assigned to exactly one ISP. Switching an ISP to PayHero takes its payments off its current provider."
             >
-              <input
+              <select
                 className={inputClass}
                 value={selectedIsp}
-                placeholder="Paste the ISP id"
-                onChange={(e) => setSelectedIsp(e.target.value.trim())}
-              />
+                onChange={(e) => setSelectedIsp(e.target.value)}
+              >
+                <option value="">Choose an ISP…</option>
+                {isps.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                    {i.currentProvider && i.currentProvider !== 'payhero'
+                      ? ` — currently ${i.currentProvider}`
+                      : ''}
+                    {i.currentChannelId ? ` · channel ${i.currentChannelId}` : ''}
+                  </option>
+                ))}
+              </select>
             </Field>
           </div>
 

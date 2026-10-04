@@ -1,0 +1,235 @@
+/**
+ * PayHero integration: deployment-shape and safety properties.
+ *
+ * These assert against the shipped SQL, TypeScript and configuration rather than
+ * against a description of them. They exist because the failures they catch are
+ * invisible until money moves: a dropped table, a tenant able to read another's
+ * channel, or a credential reaching the browser.
+ *
+ * Nothing here contacts PayHero or a database.
+ */
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const ROOT = join(import.meta.dirname, '..', '..')
+const read = (...parts: string[]) => readFileSync(join(ROOT, ...parts), 'utf8')
+const has = (...parts: string[]) => existsSync(join(ROOT, ...parts))
+/** SQL with `--` comment lines removed, so prose quoting a forbidden statement
+ *  cannot satisfy an assertion that the statement is absent. */
+const code = (...parts: string[]) =>
+  read(...parts)
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('--'))
+    .join('\n')
+
+const ENUM = 'supabase/migrations/20260101201000_payhero_provider_value.sql'
+const GATEWAY = 'supabase/migrations/20260101202000_payhero_gateway.sql'
+
+describe('PayHero migrations are additive and non-destructive', () => {
+  it('adds the provider as an enum value rather than replacing the type', () => {
+    const sql = code(ENUM)
+    expect(sql).toMatch(/add value if not exists 'payhero'/)
+    // Recreating the type would rewrite every historical payment row.
+    expect(sql).not.toMatch(/drop\s+type/i)
+    expect(sql).not.toMatch(/alter\s+type\s+\S+\s+rename/i)
+  })
+
+  it('never drops or truncates anything', () => {
+    for (const f of [ENUM, GATEWAY]) {
+      const sql = code(f)
+      expect(sql, `${f} drops something`).not.toMatch(/drop\s+(table|column|schema)/i)
+      expect(sql, `${f} truncates`).not.toMatch(/truncate/i)
+      expect(sql, `${f} deletes rows`).not.toMatch(/\bdelete\s+from\b/i)
+    }
+  })
+
+  it('uses IF NOT EXISTS so a re-run cannot fail or duplicate', () => {
+    const sql = code(GATEWAY)
+    expect(sql).toMatch(/add column if not exists payhero_api_token_ciphertext/)
+    expect(sql).toMatch(/add column if not exists payhero_channel_id/)
+  })
+
+  it('stores the credential in a table with no client SELECT policy', () => {
+    // platform_payment_config has no client SELECT policy, so adding a credential
+    // column to it cannot expose the ciphertext to the anon key. The policy
+    // comment lives in the file that creates the table, so the full text is read
+    // rather than the comment-stripped SQL.
+    expect(read('supabase/migrations/20260101000300_payment_modes.sql')).toMatch(
+      /no client SELECT policy/i,
+    )
+    expect(code(GATEWAY)).toMatch(/payhero_api_token_ciphertext text/)
+  })
+
+  it('reuses the shared settlement function instead of duplicating it', () => {
+    const sql = code(GATEWAY)
+    // A second settlement implementation is how a payments system double-renews.
+    expect(sql).toMatch(/settle_hashback_payment\(/)
+    // The wrapper must delegate rather than reimplement invoice/activation work.
+    expect(sql).not.toMatch(/update public\.invoices set status = 'paid'/)
+    expect(sql).not.toMatch(/update public\.clients set/)
+  })
+
+  it('keeps the activation, RADIUS and SMS path intact for PayHero', () => {
+    // PayHero settles through the function that already performs all of this, so
+    // the behaviour is inherited rather than reimplemented.
+    expect(code(GATEWAY)).toMatch(/v_result := public\.settle_hashback_payment\(/)
+  })
+
+  it('binds a channel to at most one ISP', () => {
+    const sql = code(GATEWAY)
+    expect(sql).toMatch(
+      /create unique index if not exists isp_payment_configs_payhero_channel_uniq[\s\S]*where payhero_channel_id is not null/,
+    )
+    expect(sql).toMatch(/channel_already_assigned/)
+  })
+
+  it('resolves the PayHero amount server-side, never from a parameter', () => {
+    const sql = code(GATEWAY)
+    expect(sql).toMatch(/resolve_chargeable\(p_invoice_id, p_client_id, p_plan_id\)/)
+    // create_payhero_payment must have no amount parameter at all. Scoped to that
+    // function's signature because the SETTLEMENT function legitimately accepts an
+    // amount — it is reading what the provider confirmed, not being told a price.
+    const createSig = sql.slice(
+      sql.indexOf('create or replace function public.create_payhero_payment'),
+      sql.indexOf('revoke all on function public.create_payhero_payment'),
+    )
+    expect(createSig).not.toMatch(/p_amount/i)
+  })
+})
+describe('PayHero credential handling in shipped code', () => {
+  it('never places a PayHero value in a public env var', () => {
+    for (const f of [
+      'src/lib/payhero.ts',
+      'src/pages/admin/PlatformPayHero.tsx',
+      'supabase/functions/_shared/payhero-credentials.ts',
+    ]) {
+      const src = code(f)
+      expect(src, `${f} exposes a secret to the client`).not.toMatch(/NEXT_PUBLIC/)
+      expect(src, `${f} exposes a VITE secret`).not.toMatch(/VITE_.*PAYHERO/)
+    }
+  })
+
+  it('never returns the credential or its ciphertext to a browser', () => {
+    const creds = code('supabase/functions/_shared/payhero-credentials.ts')
+    // getPayHeroStatus must answer from presence, not from the secret.
+    expect(creds).toMatch(/hasApiToken:[\s\S]*Boolean\(row\.payhero_api_token_ciphertext\)/)
+    // The browser-facing status shape must have nowhere to put a secret. Scoped to
+    // its type declarations only, because the interface's own doc comment
+    // legitimately discusses `hasApiToken`, and the server-side
+    // DecryptedPayHeroCredentials type holds the token for one request's lifetime.
+    const statusIface = creds.slice(
+      creds.indexOf('export interface PayHeroStatus'),
+      creds.indexOf('export interface DecryptedPayHeroCredentials'),
+    )
+    // No field is typed as a token or a ciphertext, and nothing decrypts here.
+    expect(statusIface).not.toMatch(/^\s*apiToken\s*[?:]/m)
+    expect(statusIface).not.toMatch(/^\s*\w*ciphertext\s*[?:]/m)
+
+    const client = code('src/lib/payhero.ts')
+    // The browser layer offers no getter for the token at all.
+    expect(client).not.toMatch(/export (async )?function getPayHeroApiToken/)
+  })
+
+  it('uses a key namespace separate from HashBack', () => {
+    const secrets = code('supabase/functions/_shared/secrets.ts')
+    expect(secrets).toMatch(/payhero: 'PAYHERO_CREDENTIALS_KEY'/)
+    expect(secrets).toMatch(/hashback: 'HASHBACK_CREDENTIALS_KEY'/)
+  })
+
+  it('does not log the credential or the Basic auth header', () => {
+    for (const f of [
+      'supabase/functions/_shared/payhero.ts',
+      'supabase/functions/_shared/payhero-credentials.ts',
+      'supabase/functions/payhero-admin/index.ts',
+      'supabase/functions/payhero-stk/index.ts',
+      'supabase/functions/payhero-callback/index.ts',
+    ]) {
+      const src = code(f)
+      // Any console output must not interpolate a token or an auth header.
+      expect(src, `${f} logs a token`).not.toMatch(
+        /console\.(log|info|warn|error)\([^)]*apiToken/,
+      )
+      expect(src, `${f} logs an auth header`).not.toMatch(
+        /console\.(log|info|warn|error)\([^)]*Authorization/i,
+      )
+      expect(src, `${f} logs a decrypted credential`).not.toMatch(
+        /console\.(log|info|warn|error)\([^)]*creds\./,
+      )
+    }
+  })
+
+  it('keeps the STK endpoint free of any amount parameter', () => {
+    const fn = code('supabase/functions/payhero-stk/index.ts')
+    // The whole reason this endpoint is safe: it cannot be told what to charge.
+    expect(fn).toMatch(/No `amount` is read here/)
+    expect(fn).not.toMatch(/body\.amount/)
+    expect(fn).not.toMatch(/p_amount/)
+  })
+})
+
+describe('PayHero endpoint security posture', () => {
+  it('exempts only the callback from gateway JWT verification', () => {
+    const config = code('supabase/config.toml')
+    expect(config).toMatch(/\[functions\.payhero-callback\]/)
+    expect(config).toMatch(/verify_jwt = false/)
+    // payhero-admin and payhero-stk hold credentials and tenant authority, so
+    // they must keep JWT verification on.
+    expect(config).not.toMatch(/\[functions\.payhero-admin\][\s\S]*verify_jwt = false/)
+    expect(config).not.toMatch(/\[functions\.payhero-stk\][\s\S]*verify_jwt = false/)
+  })
+
+  it('keeps a super-admin check on the admin endpoint', () => {
+    const fn = code('supabase/functions/payhero-admin/index.ts')
+    // Authorisation is enforced server-side against the caller's own profile, not
+    // left to the UI route guard.
+    expect(fn).toMatch(/role !== 'super_admin'/)
+    expect(fn).toMatch(/admin\.auth\.getUser\(token\)/)
+  })
+
+  it('never trusts the callback body for the outcome', () => {
+    const fn = code('supabase/functions/payhero-callback/index.ts')
+    // Only the reference is read; the status always comes from PayHero.
+    expect(fn).toMatch(/verifyPayHeroPayment\(\{ reference \}\)/)
+    expect(fn).not.toMatch(/payload\.status/)
+    expect(fn).not.toMatch(/body\.status/)
+  })
+
+  it('never invents a PayHero signature check', () => {
+    // PayHero documents no HMAC. Inventing one would be security theatre, and a
+    // test that "verifies" a made-up scheme would give false assurance.
+    const fn = code('supabase/functions/payhero-callback/index.ts')
+    expect(fn).not.toMatch(/createHmac|computeSignature|timingSafeEqual/)
+    const svc = code('supabase/functions/_shared/payment-service.ts')
+    expect(svc).not.toMatch(/createHmac|timingSafeEqual/)
+  })
+})
+
+describe('HashBack history is preserved while PayHero becomes active', () => {
+  it('keeps the HashBack enum value so old payments still typecheck', () => {
+    // Adding a value is additive; the original enum definition is untouched.
+    expect(code(ENUM)).not.toMatch(/hashback'::text\s*<>/)
+    const cutover = code('supabase/migrations/20260101120000_daraja_cutover.sql')
+    expect(cutover).toMatch(/labels remain/i)
+  })
+
+  it('keeps every HashBack entry point callable', () => {
+    const svc = code('supabase/functions/_shared/payment-service.ts')
+    // Removing HashBack from the ACTIVE path must not remove its history or the
+    // settlement function PayHero now also relies on.
+    for (const fn of [
+      'startPayment',
+      'processWebhookEvent',
+      'reconcilePayment',
+      'verifyPlatformConnection',
+    ]) {
+      expect(svc, `${fn} was removed`).toMatch(new RegExp(fn))
+    }
+  })
+
+  it('keeps the HashBack credential column on isp_payment_configs', () => {
+    // Historical rows still carry it; dropping it would destroy them.
+    expect(has('supabase/migrations/20260101100000_hashback_gateway.sql')).toBe(true)
+    expect(code(GATEWAY)).not.toMatch(/drop column hashback_account_id/i)
+  })
+})

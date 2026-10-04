@@ -128,6 +128,29 @@ function toVerificationResult(body: Record<string, unknown>): PayHeroVerificatio
   }
 }
 
+/** One ISP a channel may be assigned to. Carries no credential. */
+export interface PayHeroIspOption {
+  id: string
+  name: string
+  /** What this tenant collects with today, so a reassignment is a conscious act. */
+  currentProvider: string | null
+  currentChannelId: number | null
+  connectionStatus: string
+}
+
+/**
+ * Lists the tenants a channel may be assigned to.
+ *
+ * Returned so the admin screen can offer a named list instead of asking anyone to
+ * paste a UUID. Picking the wrong tenant routes a customer's money to the wrong
+ * merchant, so the current provider is surfaced alongside each option rather than
+ * hidden.
+ */
+export async function fetchPayHeroIsps(): Promise<PayHeroIspOption[]> {
+  const body = await callPayHeroAdmin({ action: 'isps' })
+  return (body.isps as PayHeroIspOption[]) ?? []
+}
+
 /**
  * Assigns one discovered channel to one ISP.
  *
