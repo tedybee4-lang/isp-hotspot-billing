@@ -1,0 +1,378 @@
+// =============================================================================
+//  Router self-discovery: the first thing ISPFlow asks a router to do.
+//
+//  WHY THIS EXISTS
+//  ---------------
+//  The original claim carried only a handful of query parameters (board,
+//  version, arch). That registers a router and little else, and it leaves the
+//  most important question unanswered: what is ALREADY on this box? An ISP
+//  onboarding a router that has run production for two years must be told
+//  about its existing bridges, pools, HotSpot servers and PPPoE customers
+//  before anything is configured, or a system that claims to be safe is simply
+//  guessing.
+//
+//  So the router surveys itself and reports back. Nothing is changed. Every
+//  path below is a read.
+//
+//  DESIGN
+//  ------
+//  One HTTP POST per subsystem rather than one giant document, for reasons
+//  that matter on real hardware:
+//
+//    1. A 32 MB RB951 cannot be asked to hold a whole configuration in memory
+//       at once. `/tool fetch ... output=user` also caps a body at 64512 bytes
+//       (63 KiB), so one big document would be silently truncated on a router
+//       with many interfaces.
+//    2. Every subsystem is wrapped in `:onerror`, so one unsupported or
+//       permission-denied menu costs exactly one survey. The difference
+//       between "this router has no wireless" and "we were not allowed to ask"
+//       is the whole point, and one batched request destroys it.
+//    3. Each is independently retryable, so a flaky rural uplink does not
+//       throw away twenty minutes of good discovery.
+//
+//  SECURITY
+//  --------
+//  The router reads only. It never sends a password, a private key, a
+//  pre-shared key or a RADIUS secret: the fields collected below are all
+//  structural names, counts and flags. `check-certificate=yes` is set on every
+//  fetch because RouterOS does NOT verify TLS certificates by default (current
+//  manual, /tool/fetch) - without it the token and the survey travel over a
+//  connection any proxy can rewrite.
+// =============================================================================
+
+/** One subsystem the router reports on. */
+export const SURVEYS = [
+  'identity', 'resource', 'board', 'packages', 'interfaces', 'bridges',
+  'vlans', 'addresses', 'dhcp', 'pools', 'hotspot', 'pppoe', 'radius',
+  'firewall', 'nat', 'routes', 'dns', 'wireguard', 'services',
+  'certificates', 'wireless', 'capsman', 'ispflow', 'scheduler', 'backup',
+] as const
+
+export type Survey = typeof SURVEYS[number]
+
+export interface DiscoveryOptions {
+  /** Endpoint the router POSTs each subsystem to. */
+  reportUrl: string
+  /** The session token, binding the report to one provisioning session. */
+  token: string
+  /** RouterOS major version, so 6.x is never sent RouterOS 7 paths. */
+  major: number
+  /** Short session id, so two routers provisioning at once stay apart. */
+  tag: string
+}
+
+/**
+ * Escapes a value for a RouterOS string literal.
+ *
+ * Everything interpolated into the generated script passes through here. A
+ * router whose identity contains a quote would otherwise break the very
+ * script it is running, on a live device, mid-provisioning.
+ */
+export function ros(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+/**
+ * A POST of a finished JSON document; the reply is discarded.
+ *
+ * The body is wrapped in parentheses. Without them, `http-data="{" . $o . "}"`
+ * parses as a body of literally `{` followed by a dangling concatenation - the
+ * quotes close the string immediately, so the survey would post `{"name":""}`
+ * and silently drop everything the router had actually read. The parentheses
+ * group the whole expression as one argument value.
+ */
+function post(url: string, body: string): string {
+  return `/tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
+    `output=user as-value http-data=(${body}) keep-result=no`
+}
+
+/**
+ * Emits a row-collection block: reads every row of a menu and posts a JSON
+ * array of the requested properties.
+ *
+ * `/find` with no arguments returns only ids and never prints, which is what
+ * makes this safe to run over SSH on someone else's router. Each property is
+ * read into its own local first, because a property absent on one model would
+ * otherwise abort the whole row and lose the interfaces around it.
+ */
+function rows(
+  menu: string,
+  fields: Array<[json: string, prop: string]>,
+  opts: DiscoveryOptions,
+  key: Survey,
+): string[] {
+  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
+  const out: string[] = [
+    '',
+    '# --- ' + key + ' ---',
+    ':onerror e do={ :put ("ISPFlow: ' + key + ' not reported: " . $e) }',
+    '{',
+    '  :local rows "";',
+    `  :foreach i in=[${menu}/find] do={`,
+    '    :local o "";',
+  ]
+  for (const [jsonKey, prop] of fields) {
+    out.push(`    :local p ($i->"${prop}")`)
+    // An unset property comes back as an empty array, which cannot be
+    // concatenated onto a string. Normalise it to nothing.
+    out.push(`    :if ([:typeof $p] = "array") do={ :set p "" }`)
+    // The separator is a local rather than a `? :` ternary: the ternary is not
+    // available on every RouterOS 6 build, and this script has to run on the
+    // oldest hardware ISPFlow supports.
+    out.push(`    :if ($p != "") do={`)
+    out.push(`      :local s ""`)
+    out.push(`      :if ([:len $o] > 0) do={ :set s "," }`)
+    out.push(`      :set o ($o . $s . "\\"${jsonKey}\\":\\"" . [:tostr $p] . "\\"")`)
+    out.push('    }')
+  }
+  out.push('    :if ([:len $o] > 0) do={')
+  out.push('      :local s ""')
+  out.push('      :if ([:len $rows] > 0) do={ :set s "," }')
+  out.push('      :set rows ($rows . $s . "{" . $o . "}")')
+  out.push('    }')
+  out.push('  }')
+  out.push(`  ${post(url, '"[" . $rows . "]"')}`)
+  out.push('}')
+  return out
+}
+
+/**
+ * Emits a block that posts a single JSON object of scalar values.
+ *
+ * Used for the identity/resource style surveys, where there is exactly one row
+ * and the interesting values are strings and numbers rather than a list.
+ */
+function scalars(
+  key: Survey,
+  reads: Array<[json: string, routeros: string]>,
+  opts: DiscoveryOptions,
+): string[] {
+  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
+  const out: string[] = [
+    '',
+    '# --- ' + key + ' ---',
+    ':onerror e do={ :put ("ISPFlow: ' + key + ' not reported: " . $e) }',
+    '{',
+    '  :local o "";',
+  ]
+  for (const [jsonKey, expr] of reads) {
+    out.push(`  :local p [${expr}]`)
+    out.push(`  :if ([:typeof $p] = "array") do={ :set p "" }`)
+    out.push('  :if ($p != "") do={')
+    out.push('    :local s ""')
+    out.push('    :if ([:len $o] > 0) do={ :set s "," }')
+    out.push(`    :set o ($o . $s . "\\"${jsonKey}\\":\\"" . [:tostr $p] . "\\"")`)
+    out.push('  }')
+  }
+  out.push(`  ${post(url, '"{" . $o . "}"')}`)
+  out.push('}')
+  return out
+}
+
+/**
+ * The full discovery script.
+ *
+ * Order is deliberate: the cheapest and most informative surveys first, so a
+ * router on a marginal link still says what it is before the heavier firewall
+ * and wireless walks. The tag check runs too, so a router provisioned before
+ * says so immediately and the panel can stop guessing.
+ *
+ * `major` gates the genuinely version-dependent menus. WireGuard, containers
+ * and the REST service arrived in RouterOS 7; a 6.x box must never be sent a
+ * 7.x path, because the menu does not exist there and the survey would report
+ * a false "unsupported" for a feature the box does have under another name.
+ */
+export function buildDiscoveryScript(o: DiscoveryOptions): string {
+  const seven = o.major >= 7
+  const L: string[] = [
+    '# =============================================================================',
+    `# ISPFlow router discovery - session ${o.tag}`,
+    '# =============================================================================',
+    '# READ ONLY. This script changes nothing on your router. It reads what is',
+    '# already configured and reports it, so ISPFlow can configure safely.',
+    '',
+    ':put "Starting ISPFlow router discovery...";',
+    ':put "";',
+  ]
+
+  // --- identity and hardware -------------------------------------------------
+  L.push(...scalars('identity', [
+    ['name', '/system identity/get name'],
+    ['version', '/system resource/get version'],
+  ], o))
+
+  L.push(...scalars('resource', [
+    ['board_name', '/system resource/get board-name'],
+    ['platform', '/system resource/get platform'],
+    ['architecture', '/system resource/get architecture-name'],
+    ['cpu', '/system resource/get cpu'],
+    ['cpu_count', '/system resource/get cpu-count'],
+    ['cpu_load', '/system resource/get cpu-load'],
+    ['free_memory', '/system resource/get free-memory'],
+    ['total_memory', '/system resource/get total-memory'],
+    ['free_hdd', '/system resource/get free-hdd-space'],
+    ['total_hdd', '/system resource/get total-hdd-space'],
+    ['uptime', '/system resource/get uptime'],
+  ], o))
+
+  // A CHR has no serial number; the read fails harmlessly, which is why it is
+  // asked for separately from the rest of the board information.
+  L.push(...scalars('board', [
+    ['serial_number', '/system routerboard/get serial-number'],
+    ['model', '/system routerboard/get model'],
+    ['firmware_type', '/system routerboard/get firmware-type'],
+  ], o))
+
+  L.push(...rows('/system package', [
+    ['name', 'name'], ['version', 'version'], ['installed', 'installed'],
+  ], o, 'packages'))
+
+  // `comment` matters more than it looks: it is where an existing operator
+  // records what a port is for, so a port the incumbent ISP already labelled
+  // "UPLINK" is read rather than overwritten.
+  L.push(...rows('/interface', [
+    ['name', 'name'], ['type', 'type'], ['running', 'running'],
+    ['disabled', 'disabled'], ['comment', 'comment'], ['mtu', 'mtu'],
+  ], o, 'interfaces'))
+
+  L.push(...rows('/interface bridge', [
+    ['name', 'name'], ['comment', 'comment'],
+    ['vlan_filtering', 'vlan-filtering'], ['pvid', 'pvid'],
+  ], o, 'bridges'))
+
+  // VLAN filtering replaced pvid on older bridges; both are asked so the panel
+  // can say which model of VLAN the box actually uses.
+  L.push(...rows('/interface vlan', [
+    ['name', 'name'], ['interface', 'interface'], ['vlan_id', 'vlan-id'],
+    ['comment', 'comment'], ['disabled', 'disabled'],
+  ], o, 'vlans'))
+
+  L.push(...rows('/ip address', [
+    ['address', 'address'], ['network', 'network'],
+    ['interface', 'interface'], ['disabled', 'disabled'], ['comment', 'comment'],
+  ], o, 'addresses'))
+
+// --- services already on the box ------------------------------------------
+  L.push(...rows('/ip dhcp-server', [
+    ['name', 'name'], ['interface', 'interface'],
+    ['address_pool', 'address-pool'], ['disabled', 'disabled'],
+  ], o, 'dhcp'))
+
+  L.push(...rows('/ip pool', [
+    ['name', 'name'], ['ranges', 'ranges'], ['next_pool', 'next-pool'],
+  ], o, 'pools'))
+
+  L.push(...rows('/ip hotspot', [
+    ['name', 'name'], ['interface', 'interface'], ['address_pool', 'address-pool'],
+    ['profile', 'profile'], ['disabled', 'disabled'], ['comment', 'comment'],
+  ], o, 'hotspot'))
+
+  L.push(...rows('/ip hotspot user', [
+    ['name', 'name'], ['profile', 'profile'], ['server', 'server'],
+    ['comment', 'comment'],
+  ], o, 'pppoe'))
+
+  L.push(...rows('/ppp profile', [
+    ['name', 'name'], ['comment', 'comment'], ['local_address', 'local-address'],
+    ['remote_address', 'remote-address'],
+  ], o, 'radius'))
+
+  L.push(...rows('/ip firewall filter', [
+    ['chain', 'chain'], ['action', 'action'], ['comment', 'comment'],
+    ['disabled', 'disabled'],
+  ], o, 'firewall'))
+
+  L.push(...rows('/ip firewall nat', [
+    ['chain', 'chain'], ['action', 'action'], ['comment', 'comment'],
+    ['disabled', 'disabled'], ['to_addresses', 'to-addresses'],
+  ], o, 'nat'))
+
+  L.push(...rows('/ip route', [
+    ['dst_address', 'dst-address'], ['gateway', 'gateway'],
+    ['distance', 'distance'], ['comment', 'comment'],
+  ], o, 'routes'))
+
+  L.push(...rows('/ip dns', [
+    ['name', 'name'], ['servers', 'servers'], ['dynamic_servers', 'dynamic-servers'],
+    ['allow_remote_requests', 'allow-remote-requests'],
+  ], o, 'dns'))
+
+  // --- version-dependent menus ----------------------------------------------
+  // WireGuard exists only on 7.1+. Asking a 6.x box would produce a false
+  // UNSUPPORTED, so on 6.x the survey records itself as skipped instead.
+  if (seven) {
+    L.push(...rows('/interface wireguard', [
+      ['name', 'name'], ['listen_port', 'listen-port'],
+      ['disabled', 'disabled'], ['comment', 'comment'],
+    ], o, 'wireguard'))
+  } else {
+    L.push(...skipped('wireguard', 'RouterOS 6 has no WireGuard support', o))
+  }
+
+  L.push(...rows('/ip service', [
+    ['name', 'name'], ['port', 'port'], ['disabled', 'disabled'],
+    ['address', 'address'],
+  ], o, 'services'))
+
+  L.push(...rows('/certificate', [
+    ['name', 'name'], ['common_name', 'common-name'],
+    ['invalid_after', 'invalid-after'], ['expired', 'expired'],
+  ], o, 'certificates'))
+
+  // Wireless and CAPsMAN are absent on every wired RouterBOARD, so these two
+  // are routinely unavailable. The :onerror wrapper is what keeps that quiet
+  // instead of leaving a stack trace in the ISP's terminal.
+  L.push(...rows('/interface wireless', [
+    ['name', 'name'], ['ssid', 'ssid'], ['mode', 'mode'],
+    ['disabled', 'disabled'], ['comment', 'comment'],
+  ], o, 'wireless'))
+
+  L.push(...rows('/caps-man manager', [
+    ['name', 'name'], ['enabled', 'enabled'],
+    ['certificate', 'certificate'],
+  ], o, 'capsman'))
+
+  // --- what ISPFlow already owns -------------------------------------------
+  // Any object carrying our tag from a previous run. This is what makes a
+  // re-provision idempotent in the field: the panel can tell "fresh router"
+  // apart from "already ours, half-finished" and resume rather than duplicate.
+  L.push(...rows('/ip firewall filter', [
+    ['chain', 'chain'], ['action', 'action'], ['comment', 'comment'],
+  ], o, 'ispflow'))
+
+  L.push(...rows('/system scheduler', [
+    ['name', 'name'], ['interval', 'interval'], ['disabled', 'disabled'],
+    ['comment', 'comment'],
+  ], o, 'scheduler'))
+
+  L.push(...rows('/system script', [
+    ['name', 'name'], ['comment', 'comment'],
+  ], o, 'backup'))
+
+  L.push(
+    '',
+    ':put "";',
+    ':put "ISPFlow discovery finished. Return to your ISPFlow dashboard.";',
+  )
+  return L.join('\n') + '\n'
+}
+
+/**
+ * Records that a survey was deliberately skipped, and why.
+ *
+ * A skipped survey has to be visible. "We did not ask" and "we asked and the
+ * box does not support it" are different answers, and conflating them is how
+ * a platform ends up telling an ISP their router lacks a feature when the
+ * real reason is that nobody ever looked.
+ */
+function skipped(key: Survey, reason: string, o: DiscoveryOptions): string[] {
+  const url = `${o.reportUrl}?survey=${key}&token=${o.token}&tag=${o.tag}`
+  return [
+    '',
+    '# --- ' + key + ' (skipped: not applicable to this firmware) ---',
+    `:put "ISPFlow: ${key} skipped - ${reason}";`,
+    `  /tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
+      `output=user as-value keep-result=no ` +
+      `http-data="{\\"unsupported\\":\\"${ros(reason)}\\"}"`,
+  ]
+}

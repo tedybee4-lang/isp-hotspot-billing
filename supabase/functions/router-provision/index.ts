@@ -27,7 +27,8 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { buildAccessScript, buildRouterScript } from '../_shared/capabilities.ts'
-import { buildCompatibility } from '../_shared/compat.ts'
+import { buildCompatibility, parseVersion, type CompatibilityProfile } from '../_shared/compat.ts'
+import { buildDiscoveryScript, SURVEYS } from '../_shared/discovery.ts'
 import { decryptSecret } from '../_shared/secrets.ts'
 import { probeMethods, type ConnectionMethod } from '../_shared/connection.ts'
 
@@ -99,7 +100,7 @@ setInterval(() => {
  * Handles the router's claim.
  *
  * Returns a RouterOS script, not JSON. The command the ISP ran fetched this
- * response to netisp-claim.rsc and then imported it, and `/import` only
+ * response to ispflow-bootstrap.rsc and then imported it, and `/import` only
  * understands RouterOS commands - so returning JSON made the step impossible by
  * construction, and it failed only after the router had already consumed its
  * one-time token.
@@ -110,12 +111,12 @@ setInterval(() => {
 async function handleCallback(req: Request, url: URL): Promise<Response> {
   const token = url.searchParams.get('token') ?? ''
   if (!token || token.length < 16) {
-    return script(':error "NETISP: missing or malformed provisioning token.";\n', 400)
+    return script(':error "ISPFlow: missing or malformed provisioning token.";\n', 400)
   }
 
   const hash = await sha256Hex(token)
   if (rateLimited(hash)) {
-    return script(':error "NETISP: too many attempts. Try again in a minute.";\n', 429)
+    return script(':error "ISPFlow: too many attempts. Try again in a minute.";\n', 429)
   }
 
   const forwarded = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null
@@ -131,7 +132,7 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
 
   if (claimErr) {
     return script(
-      `:error "NETISP: provisioning could not be verified (${claimErr.message}).";\n`, 500)
+      `:error "ISPFlow: provisioning could not be verified (${claimErr.message}).";\n`, 500)
   }
 
   const result = claim as {
@@ -145,7 +146,7 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
     const status = result?.code === 'already_used' ? 409
       : result?.code === 'expired' ? 410
       : result?.code === 'revoked' ? 403 : 404
-    return script(`:error "NETISP: ${message}";\n`, status)
+    return script(`:error "ISPFlow: ${message}";\n`, status)
   }
 
   const sessionId = result.session_id!
@@ -202,7 +203,7 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
 
   if (nodeErr || !node) {
     return script(
-      `:error "NETISP: could not register this router (${nodeErr?.message ?? 'unknown'}).";\n`,
+      `:error "ISPFlow: could not register this router (${nodeErr?.message ?? 'unknown'}).";\n`,
       500)
   }
 
@@ -280,20 +281,61 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
     },
   ])
 
+  // Mint the credential the router will post its self-survey back with, and
+  // append the survey to the script we are about to return.
+  //
+  // The claim token is single-use and is spent by this very request, so
+  // discovery needs its own short-lived credential. Minting it HERE, inside the
+  // same handler, means it only ever exists for a router that has already
+  // proved it holds a valid claim token.
+  const discovery = await buildDiscoveryTail(sessionId, tag, profile, detected.version)
+
   const body = buildAccessScript({ tag, profile, vpn: null })
 
   const trailer = [
     '',
     '# --- Report back what this router is ---',
-    ':put ("NETISP: registered as " . $identity);',
-    ':put ("NETISP: RouterOS " . $version . " on " . $board-name);',
+    ':put ("ISPFlow: registered as " . $identity);',
+    ':put ("ISPFlow: RouterOS " . $version . " on " . $board-name);',
     profile.rest
-      ? ':put "NETISP: HTTPS management is available on port 8080.";'
-      : ':put "NETISP: this firmware has no REST; the panel will use the API.";',
+      ? ':put "ISPFlow: HTTPS management is available on port 8080.";'
+      : ':put "ISPFlow: this firmware has no REST; the panel will use the API.";',
     '',
   ].join('\n')
 
-  return script(body + trailer)
+  return script(body + trailer + (discovery ? '\n' + discovery : ''))
+}
+
+/**
+ * Mints a discovery token and renders the router's self-survey.
+ *
+ * Returns an empty string when the token cannot be minted. That must NOT be
+ * fatal: the router is already registered and managed at this point, and a
+ * discovery failure degrades the wizard rather than undoing a successful
+ * onboarding. The ISP re-runs the command to retry.
+ */
+async function buildDiscoveryTail(
+  sessionId: string,
+  tag: string,
+  profile: CompatibilityProfile,
+  version: string | null,
+): Promise<string> {
+  const { data, error } = await admin.rpc('mint_discovery_token', { p_session_id: sessionId })
+  if (error || !data?.ok || !data?.token) return ''
+
+  const parsed = parseVersion(version)
+  const reportUrl = `${Deno.env.get('SUPABASE_URL')}/functions/v1/router-provision/report`
+  return buildDiscoveryScript({
+    reportUrl,
+    token: String(data.token),
+    // Prefer the version the router actually reported. When it did not report
+    // one, fall back to the compatibility profile's own verdict: `rest` is
+    // already "is this at least 7.1", which is exactly the split that decides
+    // whether WireGuard exists. Guessing 7 for an unparseable string would send
+    // a 6.x box a path it does not have.
+    major: parsed?.major ?? (profile.rest ? 7 : 6),
+    tag,
+  })
 }
 
 /** Handles a panel request (staff JWT required). */
@@ -416,7 +458,7 @@ async function handlePanel(req: Request): Promise<Response> {
     })
   }
 
-  // ── script: build the configuration without sending it ───────────────────
+  // â”€â”€ script: build the configuration without sending it â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   if (action === 'script') {
     const { data: net } = await admin
       .from('network_settings').select('*').eq('isp_id', session.isp_id).maybeSingle()
@@ -562,10 +604,77 @@ async function handlePanel(req: Request): Promise<Response> {
   return json({ error: `Unknown action: ${action}` }, 400)
 }
 
+/**
+ * Receives one self-survey from a router.
+ *
+ * Routed on `/report` so it is unmistakably separate from the claim: the claim
+ * is a GET that returns a script, this is a POST that stores data.
+ *
+ * The router authenticates with its discovery token. It does NOT get to name a
+ * session or an ISP - `record_router_survey` reads both from the token row, so
+ * a router holding ISP A's credential can only ever write into ISP A's session.
+ */
+async function handleReport(req: Request, url: URL): Promise<Response> {
+  const token = url.searchParams.get('token') ?? ''
+  const survey = url.searchParams.get('survey') ?? ''
+
+  if (!token || token.length < 32) {
+    return json({ ok: false, code: 'malformed', message: 'Missing or malformed token.' }, 400)
+  }
+  // Only the surveys this build knows how to render a panel view for. An
+  // unknown key is rejected rather than stored, so a stale router script from a
+  // newer or older release cannot grow the table without bound.
+  if (!SURVEYS.includes(survey as never)) {
+    return json({ ok: false, code: 'bad_survey', message: 'Unknown survey.' }, 400)
+  }
+  // Same limiter as the claim. A router retries; a hostile caller guessing
+  // tokens does not get unlimited attempts.
+  const hash = await sha256Hex(`report:${token}`)
+  if (rateLimited(hash, 60)) {
+    return json({ ok: false, code: 'rate_limited', message: 'Too many reports.' }, 429)
+  }
+
+  let payload: unknown = {}
+  const contentType = req.headers.get('content-type') ?? ''
+  try {
+    if (contentType.includes('application/json')) {
+      payload = await req.json()
+    } else {
+      payload = Object.fromEntries(await req.formData())
+    }
+  } catch {
+    // A router that sends an unparseable body still gets a 200: it has no way
+    // to do anything useful with an error, and failing the fetch would make it
+    // retry forever on a link that may be fine.
+    payload = {}
+  }
+
+  const forwarded = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? null
+  const { data, error } = await admin.rpc('record_router_survey', {
+    p_token_hash: await sha256Hex(token),
+    p_survey: survey,
+    // The router builds this JSON by string concatenation, so it is not
+    // guaranteed to be an object. Anything unparseable is stored as empty
+    // rather than failing the whole report.
+    p_payload: (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>,
+    p_router_ip: forwarded,
+  })
+
+  if (error) {
+    return json({ ok: false, code: 'error', message: error.message }, 500)
+  }
+  return json(data ?? { ok: true })
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS })
   try {
-    if (req.method === 'GET') return await handleCallback(req, new URL(req.url))
+    const url = new URL(req.url)
+    if (url.pathname.endsWith('/report')) {
+      if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
+      return await handleReport(req, url)
+    }
+    if (req.method === 'GET') return await handleCallback(req, url)
     if (req.method === 'POST') return await handlePanel(req)
     return json({ error: 'Method not allowed' }, 405)
   } catch (err) {

@@ -205,19 +205,25 @@ export function buildProvisioningCommand(opts: {
   token: string
 }): string {
   return [
-    '# NETISP provisioning - paste these lines into the router terminal.',
+    '# ISPFlow provisioning - paste these lines into the router terminal.',
     '# Safe to run more than once. Nothing is deleted.',
     '{',
     `  :local u "${opts.claimUrl}";`,
     `  :local t "${opts.token}";`,
-    '  :local f "netisp-claim.rsc";',
+    '  :local f "ispflow-bootstrap.rsc";',
     // output=file is REQUIRED. `output=none` tells RouterOS to discard the
     // fetched bytes instead of writing dst-path, so the file check below could
     // never succeed and every router failed with "could not reach the
     // provisioning endpoint" no matter how healthy the link was.
-    '  /tool fetch url=($u . "?token=" . $t) mode=https dst-path=$f output=file keep-result=yes;',
+    //
+    // check-certificate=yes is required too, and was previously missing.
+    // RouterOS does NOT validate TLS certificates by default (current manual,
+    // /tool/fetch), so without it the single-use token travels over a
+    // connection any proxy on the path can read and rewrite - and this fetch
+    // returns a script the router then executes as root.
+    '  /tool fetch url=($u . "?token=" . $t) mode=https check-certificate=yes dst-path=$f output=file keep-result=yes;',
     '  :if ([:len [/file find name=$f]] = 0) do={',
-    '    :error "NETISP: could not reach the provisioning endpoint.";',
+    '    :error "ISPFlow: could not reach the provisioning endpoint.";',
     '  }',
     '  /import file-name=$f;',
     '  /file remove $f;',
