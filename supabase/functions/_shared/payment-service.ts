@@ -71,6 +71,7 @@ export interface ProcessResult {
 /** Errors this service raises, as opposed to provider errors. */
 export class PaymentServiceError extends Error {
   readonly code:
+    | 'unauthorized'
     | 'not_configured'
     | 'not_connected'
     | 'invalid_phone'
@@ -138,8 +139,12 @@ export class PaymentGatewayService {
    */
   private async requireTenant(jwt: string): Promise<string> {
     const { data: userData, error: userErr } = await this.admin.auth.getUser(jwt)
+    // An invalid or expired session is an authentication failure, NOT a
+    // misconfiguration. Reporting it as `not_configured` made it surface as
+    // HTTP 503, so an expired login was indistinguishable from the platform
+    // being broken: the caller retried forever instead of re-authenticating.
     if (userErr || !userData?.user) {
-      throw new PaymentServiceError('not_configured', 'Invalid or expired session.')
+      throw new PaymentServiceError('unauthorized', 'Invalid or expired session.')
     }
 
     const { data: profile, error: profileErr } = await this.admin

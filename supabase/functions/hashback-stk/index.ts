@@ -40,6 +40,8 @@ const json = (body: unknown, status = 200) =>
 /** Maps a service error to an HTTP status the browser can act on. */
 function statusFor(err: PaymentServiceError): number {
   switch (err.code) {
+    case 'unauthorized':
+      return 401   // the caller's session is bad; retrying will not help
     case 'not_configured':
     case 'not_connected':
       return 503   // nothing the caller can fix; the platform must configure it

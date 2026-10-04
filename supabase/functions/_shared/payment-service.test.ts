@@ -15,12 +15,17 @@
  * real payment.
  */
 import { describe, expect, it, vi, beforeAll } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import {
   PaymentGatewayService,
   PaymentServiceError,
   isPaymentServiceError,
 } from './payment-service.ts'
 import { encryptFor } from './secrets.ts'
+
+// Directory holding this shared module; the STK endpoint is a sibling of it.
+const here = dirname(new URL(import.meta.url).pathname.replace(/^\//, ''))
 
 // The credential store encrypts before writing and decrypts before reading, so
 // these tests need a real AES key in the environment. The value is a throwaway
@@ -160,11 +165,23 @@ describe('tenant resolution', () => {
       .rejects.toMatchObject({ code: 'not_configured' })
   })
 
-  it('refuses an unauthenticated caller', async () => {
+  it('refuses an unauthenticated caller as unauthorized, not a server fault', async () => {
     const { admin } = fakeAdmin({ users: [] })
     const service = new PaymentGatewayService({ admin })
+    // `not_configured` maps to HTTP 503. An expired or forged session used to
+    // land there, so the client retried forever instead of re-authenticating.
     await expect(service.startPayment('nobody', { phone: '0712345678' }))
-      .rejects.toMatchObject({ code: 'not_configured' })
+      .rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
+  it('maps the STK status table so auth failure is 401, not 503', async () => {
+    // The endpoint's status mapping is the other half of this: a code that
+    // means "log in again" must not be reported as "the platform is broken".
+    const stk = readFileSync(join(here, '..', 'hashback-stk', 'index.ts'), 'utf8')
+    expect(stk).toMatch(/case 'unauthorized':\s*\n\s*return 401/)
+    // And no auth failure may still be routed to 503.
+    const authCase = /case 'unauthorized':([\s\S]*?)break/.exec(stk)?.[1] ?? ''
+    expect(authCase).not.toMatch(/503/)
   })
 })
 

@@ -855,6 +855,30 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     )
   })
 
+  it('exposes customer create and status changes, instead of discarding them', () => {
+    // The Customers page destructured addClient/setClientStatus and then threw
+    // them away with `void`, so an ISP could list customers but never create,
+    // suspend or reactivate one - the backend was complete and unreachable.
+    const panel = read('src/pages/isp/panel/index.tsx')
+    const customers = /export function CustomersPage\(\) \{[\s\S]*?\n\}/.exec(panel)?.[0] ?? ''
+
+    expect(customers, 'CustomersPage not found').not.toMatch(/void\s+setClientStatus/)
+    expect(customers, 'CustomersPage not found').not.toMatch(/void\s+addClient/)
+
+    // Both mutations must actually be invoked from this page.
+    expect(customers).toMatch(/await addClient\(/)
+    expect(customers).toMatch(/await setClientStatus\(/)
+
+    // And the page must render the controls that trigger them.
+    expect(customers).toMatch(/Add customer/)
+    expect(customers).toMatch(/Reactivate/)
+    expect(customers).toMatch(/Suspend/)
+
+    // Success must come from the backend resolving, never an optimistic guess.
+    expect(customers).toMatch(/catch\s*\(err\)/)
+    expect(customers).not.toMatch(/formError.*success/i)
+  })
+
   it('authenticates the telemetry poller, which was open to the internet', () => {
     const poll = code('supabase', 'functions', 'mikrotik-poll', 'index.ts')
     // Verified before the fix: an anonymous GET returned HTTP 200 and a summary

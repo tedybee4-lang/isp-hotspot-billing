@@ -14,7 +14,7 @@ import * as api from '../../../lib/data'
 import { usePanel } from '../../../context/PanelContext'
 import { useAuth } from '../../../context/AuthContext'
 import { ResourcePage, Money, When, StatusCell, type Column } from '../../../components/ui/ResourcePage'
-import { Card, CardHeader, StatTile, EmptyState, Spinner, Button, Alert, Badge } from '../../../components/ui'
+import { Card, CardHeader, StatTile, EmptyState, Spinner, Button, Alert, Badge, inputClass } from '../../../components/ui'
 import type {
   Client, Commission, Expense, InventoryItem, Invoice, Payment,
   Reseller, Session as NetSession, SmsMessage, Voucher,
@@ -135,7 +135,71 @@ export function DashboardPage() {
 
 // -- Customers ----------------------------------------------------------------
 export function CustomersPage() {
-  const { clients, loading, setClientStatus, addClient } = useTenant()
+  const { clients, plans, loading, setClientStatus, addClient } = useTenant()
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ full_name: '', phone: '', email: '', plan_name: '' })
+  const [formError, setFormError] = useState<string | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function createCustomer(e: React.FormEvent) {
+    e.preventDefault()
+    setFormError(null)
+    // Validate before the round trip so the ISP gets an immediate, specific
+    // reason rather than a generic database error.
+    if (!form.full_name.trim()) return setFormError('A customer name is required.')
+    if (!form.phone.trim()) return setFormError('A phone number is required.')
+    if (form.email && !/^\S+@\S+\.\S+$/.test(form.email)) {
+      return setFormError('That email address does not look valid.')
+    }
+    if (!form.plan_name.trim()) return setFormError('Choose a package for this customer.')
+
+    setAdding(true)
+    try {
+      await addClient({
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        plan_name: form.plan_name.trim(),
+      })
+      setNotice({ ok: true, text: `${form.full_name.trim()} added.` })
+      setForm({ full_name: '', phone: '', email: '', plan_name: '' })
+      setAdding(false)
+    } catch (err) {
+      // Say what actually happened. A failed insert must never read as success.
+      setFormError(err instanceof Error ? err.message : 'Could not add that customer.')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  /**
+   * Activates or suspends one customer.
+   *
+   * The control offers the transition that actually applies rather than a
+   * free-text status, so the UI cannot request a state the backend never
+   * agreed to. A pending customer has no package to act on yet.
+   */
+  async function toggleStatus(c: Client) {
+    const next = c.status === 'suspended' ? 'active' : 'suspended'
+    setBusyId(c.id)
+    setNotice(null)
+    try {
+      await setClientStatus(c.id, next)
+      setNotice({
+        ok: true,
+        text: `${c.full_name} ${next === 'active' ? 'reactivated' : 'suspended'}.`,
+      })
+    } catch (err) {
+      setNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : `Could not update ${c.full_name}.`,
+      })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const columns: Column<Client>[] = [
     { key: 'name', header: 'Customer', sort: (c) => c.full_name,
       cell: (c) => (<div><p className="font-bold text-slate-800 dark:text-white">{c.full_name}</p><p className="text-[10px] text-slate-400 font-mono">{c.account_no}</p></div>) },
@@ -146,17 +210,80 @@ export function CustomersPage() {
     { key: 'expiry', header: 'Expiry', sort: (c) => c.expires_at ?? '', cell: (c) => <When value={c.expires_at} /> },
     { key: 'status', header: 'Status', sort: (c) => c.status, cell: (c) => <StatusCell value={c.status} /> },
     { key: 'balance', header: 'Balance', sort: (c) => Number(c.balance), cell: (c) => <Money value={c.balance} /> },
+    {
+      key: 'manage',
+      header: 'Manage',
+      cell: (c) => (
+        <Button
+          size="sm"
+          disabled={busyId === c.id || c.status === 'pending'}
+          onClick={() => void toggleStatus(c)}
+        >
+          {busyId === c.id
+            ? 'Saving...'
+            : c.status === 'suspended' ? 'Reactivate' : 'Suspend'}
+        </Button>
+      ),
+    },
   ]
-  void setClientStatus; void addClient
-  return (
-    <ResourcePage
-      title="Customers" subtitle={`${clients.length} records for this ISP`}
-      icon={<Users className="w-5 h-5" />} rows={clients} columns={columns}
-      rowKey={(c) => c.id} loading={loading}
-      statusField="status" statusOptions={['active', 'expired', 'suspended', 'pending']}
-      searchFields={(c) => [c.full_name, c.phone, c.email ?? '', c.account_no, c.plan_name ?? '']}
-      emptyTitle="No customers yet" emptyHint="Customers added here appear immediately."
-    />
+return (
+    <div className="space-y-4">
+      {notice && <Alert kind={notice.ok ? 'success' : 'error'}>{notice.text}</Alert>}
+
+      {adding && (
+        <Card>
+          <form onSubmit={(e) => void createCustomer(e)} className="p-4 space-y-3">
+            <h2 className="text-sm font-black text-slate-900 dark:text-white">New customer</h2>
+            {formError && <Alert kind="error">{formError}</Alert>}
+            <div className="grid sm:grid-cols-2 gap-3">
+              <input aria-label="Customer name" placeholder="Full name"
+                value={form.full_name}
+                onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                className={inputClass} />
+              <input aria-label="Phone" placeholder="Phone"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                className={inputClass} />
+              <input aria-label="Email" type="email" placeholder="Email (optional)"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                className={inputClass} />
+              <select aria-label="Package" value={form.plan_name}
+                onChange={(e) => setForm({ ...form, plan_name: e.target.value })}
+                className={inputClass}>
+                <option value="">Select a package...</option>
+                {plans.map((p) => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" type="submit" disabled={adding}>
+                {adding ? 'Saving...' : 'Add customer'}
+              </Button>
+              <Button size="sm" type="button"
+                onClick={() => { setAdding(false); setFormError(null) }}>
+                Cancel
+              </Button>
+            </div>
+          </form>
+        </Card>
+      )}
+
+      <ResourcePage
+        title="Customers" subtitle={`${clients.length} records for this ISP`}
+        icon={<Users className="w-5 h-5" />} rows={clients} columns={columns}
+        rowKey={(c) => c.id} loading={loading}
+        statusField="status" statusOptions={['active', 'expired', 'suspended', 'pending']}
+        searchFields={(c) => [c.full_name, c.phone, c.email ?? '', c.account_no, c.plan_name ?? '']}
+        emptyTitle="No customers yet"
+        emptyHint={adding ? undefined : 'Add your first customer to get started.'}
+        actions={adding ? undefined : (
+          <Button size="sm"
+            onClick={() => { setAdding(true); setFormError(null); setNotice(null) }}>
+            Add customer
+          </Button>
+        )}
+      />
+    </div>
   )
 }
 
