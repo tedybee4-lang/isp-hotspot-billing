@@ -11,7 +11,7 @@ import { useAuth } from '../../../context/AuthContext'
 import { useEffect, useState } from 'react'
 import { fetchAuditLogs } from '../../../lib/data'
 import type {
-  AuditLog, LedgerTransaction, Node, Plan, Renewal, ServiceAccount,
+  AuditLog, LedgerTransaction, Node, Renewal, ServiceAccount,
 } from '../../../lib/types'
 
 // -- Tickets ------------------------------------------------------------------
@@ -39,29 +39,14 @@ export function TicketsRoute() {
 const ShieldIcon = () => <span className="w-5 h-5" />
 
 // -- Packages -----------------------------------------------------------------
-export function PackagesRoute() {
-  const { plans, loading } = useTenant()
-  const columns: Column<Plan>[] = [
-    { key: 'name', header: 'Package', sort: (p) => p.name, cell: (p) => <span className="font-bold text-slate-800 dark:text-white">{p.name}</span> },
-    { key: 'kind', header: 'Type', sort: (p) => p.kind, cell: (p) => <StatusCell value={p.kind} /> },
-    { key: 'duration', header: 'Duration', sort: (p) => p.duration_label, cell: (p) => p.duration_label },
-    { key: 'price', header: 'Price', sort: (p) => Number(p.price), cell: (p) => <Money value={p.price} /> },
-    { key: 'down', header: 'Download', sort: (p) => p.speed_down, cell: (p) => <span className="font-mono text-[10px]">{p.speed_down}</span> },
-    { key: 'up', header: 'Upload', sort: (p) => p.speed_up, cell: (p) => <span className="font-mono text-[10px]">{p.speed_up}</span> },
-    { key: 'users', header: 'Users', sort: (p) => Number(p.shared_users), cell: (p) => <span className="font-mono text-[10px]">{p.shared_users}</span> },
-    { key: 'data', header: 'Data', cell: (p) => <span className="text-slate-400">{p.data_limit}</span> },
-    { key: 'active', header: 'Status', cell: (p) => <StatusCell value={p.is_active ? 'active' : 'suspended'} /> },
-  ]
-  return (
-    <ResourcePage
-      title="Packages" subtitle={`${plans.length} packages for this ISP`}
-      icon={<PackageIcon />} rows={plans} columns={columns} rowKey={(p) => p.id} loading={loading}
-      searchFields={(p) => [p.name, p.kind, p.duration_label]}
-      emptyTitle="No packages defined"
-    />
-  )
-}
-const PackageIcon = () => <span className="w-5 h-5" />
+// MOVED to ./PackagesPage.tsx
+//
+// This was a read-only table: an ISP could see its catalogue but not change a
+// price, a speed, a duration, or whether a package was offered at all. The
+// replacement adds create/edit, portal visibility, active state and display
+// order, all writing to the same `plans` rows. The old version is removed
+// rather than left exported, so there is never a second, read-only package
+// page for someone to route to by mistake.
 
 // -- HotSpot ------------------------------------------------------------------
 export function HotspotRoute() {

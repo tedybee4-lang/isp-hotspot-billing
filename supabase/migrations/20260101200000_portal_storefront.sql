@@ -288,6 +288,26 @@ grant execute on function public.portal_redeem_voucher(text, text, text) to anon
 -- walking payment -> invoice -> client, so a portal purchase that created only
 -- a payment row would settle as "success" and grant nothing: a payment that
 -- looks like it worked and silently delivers no service.
+--
+-- WHY THIS IS DROPPED FIRST
+-- --------------------------
+-- This migration must be safe to RE-RUN, and `create or replace function` cannot
+-- drop a parameter default from an existing function:
+--
+--   ERROR: cannot remove parameter defaults from existing function
+--
+-- 20260101300000 later redefines this same signature with `p_msisdn default
+-- null`, so on any re-apply this file's no-default version collides with the
+-- deployed one and the whole transaction rolls back. When it rolled back before,
+-- the corrected public_portal_packages below never reached production either,
+-- and the stale copy's `package_ids` filter treated an EMPTY array as "the ISP
+-- curated this list down to nothing" rather than "no curation". Every ISP stores
+-- the default '{}', so the portal showed zero packages for every tenant.
+--
+-- The drop is inside the transaction below, so the function is never missing for
+-- even a moment, and 20260101300000 restores the default afterwards. Only the
+-- function is replaced; no table, row, plan, payment or voucher is touched.
+drop function if exists public.portal_create_payment(text, uuid, text);
 create or replace function public.portal_create_payment(
   p_slug    text,
   p_plan_id uuid,

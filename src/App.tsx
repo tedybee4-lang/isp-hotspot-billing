@@ -155,7 +155,7 @@ export default function App() {
 // Deferred imports keep the route table readable.
 import { lazy } from 'react'
 const TicketsRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.TicketsRoute })))
-const PackagesRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.PackagesRoute })))
+const PackagesRoute = lazy(() => import('./pages/isp/panel/PackagesPage').then((m) => ({ default: m.PackagesPage })))
 const HotspotRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.HotspotRoute })))
 const PppoeRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.PppoeRoute })))
 const RoutersRoute = lazy(() => import('./pages/isp/panel/legacy').then((m) => ({ default: m.RoutersRoute })))
