@@ -122,14 +122,79 @@ test('ISP owner sees their own tenant, not the admin panel', async ({ page }) =>
 })
 
 test('public captive portal is reachable without signing in', async ({ page }) => {
-  await page.goto(`${BASE}/portal/ultrafaiba`)
-  await expect(page.getByRole('heading', { name: /Ultrafaiba Networks/ })).toBeVisible()
-  await expect(page.getByText('Enter your voucher code to get online')).toBeVisible()
+  await page.goto(`${BASE}/portal/alpha-nets`)
 
-  // An invalid code is rejected gracefully
+  // Branded for this tenant, and showing the catalogue rather than only a
+  // voucher box: packages are the reason the page exists.
+  await expect(page.getByRole('heading', { name: /Alpha Nets/ })).toBeVisible()
+  await expect(page.getByText('Hourly Hotspot').first()).toBeVisible()
+
+  // The "Already Paid" control is a real link into the login section, not
+  // decoration: it is the first thing a just-paid customer reaches for.
+  await expect(page.getByRole('link', { name: /already paid/i })).toHaveAttribute(
+    'href',
+    '#login-heading',
+  )
+
+  // The secondary ways in are still offered underneath the packages.
+  await expect(page.getByRole('heading', { name: /voucher/i })).toBeVisible()
+})
+
+test('the portal collapses to one column on the narrowest phones', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 720 })
+  await page.goto(`${BASE}/portal/alpha-nets`)
+
+  const card = page.locator('section[aria-labelledby="packages-heading"] >> div').first()
+  const columns = await card.evaluate(
+    (el) => getComputedStyle(el).gridTemplateColumns.split(' ').length,
+  )
+  // Two cards at 320px leaves each one too narrow to read a price.
+  expect(columns).toBe(1)
+})
+
+test('an invalid voucher code is rejected gracefully', async ({ page }) => {
+  await page.goto(`${BASE}/portal/alpha-nets`)
+
   await page.getByPlaceholder('XXXX-0000').fill('BOGUS-1234')
-  await page.getByRole('button', { name: /connect/i }).click()
-  await expect(page.getByText(/not found on this platform/i)).toBeVisible()
+  await page.getByRole('button', { name: /activate voucher/i }).click()
+  // Deliberately worded per-network rather than the old platform-wide wording:
+  // the redemption is now scoped to the tenant the slug resolved to, so a code
+  // from another ISP is correctly reported as invalid here rather than found.
+  await expect(page.getByText(/not valid on this network/i)).toBeVisible()
+})
+
+test('buying a package never lets the browser choose the amount or the tenant', async ({
+  page,
+}) => {
+  // Drive a real purchase as far as it will go, and inspect what was actually
+  // sent. Asserting on the request body is the point: the browser must not be
+  // able to influence where its money goes, only which package it wants.
+  const sent: string[] = []
+  page.on('request', (req) => {
+    if (req.url().includes('/functions/v1/portal-stk')) sent.push(req.postData() ?? '')
+  })
+
+  await page.goto(`${BASE}/portal/alpha-nets`)
+  // The card's own call to action, labelled from the tenant's settings.
+  await page.getByRole('button', { name: /click here to connect/i }).first().click()
+  // Scoped to the dialog: the voucher section below uses the same placeholder.
+  await page
+    .getByRole('dialog')
+    .getByPlaceholder('07XXXXXXXX')
+    .fill('0712345678')
+  await page.getByRole('button', { name: 'Pay with M-Pesa' }).click()
+
+  // Wait for either the payment to be refused or the poll to start.
+  await page.waitForTimeout(6000)
+
+  expect(sent.length).toBeGreaterThan(0)
+  for (const body of sent) {
+    // Only a slug, a plan and a phone. Nothing that decides the destination.
+    expect(body).not.toMatch(/"amount"\s*:/i)
+    expect(body).not.toMatch(/"ispId"|"isp_id"/i)
+    expect(body).not.toMatch(/"accountId"|"account_id"/i)
+    expect(body).toMatch(/"slug"/)
+  }
 })
 
 test('unknown portal slug shows a friendly 404', async ({ page }) => {

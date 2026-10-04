@@ -1332,6 +1332,25 @@ export interface PortalSettings {
   social_links: Record<string, string>
   hide_routeros: boolean
   show_usage: boolean
+  // Storefront, added for the customer-facing portal.
+  header_text: string | null
+  connect_button_text: string
+  already_paid_text: string
+  packages_heading: string
+  popular_label: string
+  currency_label: string
+  /** Display order for the portal package grid. Empty = cheapest first. */
+  package_order: string[]
+  /** The package that carries the "most popular" badge. */
+  featured_plan_id: string | null
+  show_voucher: boolean
+  show_login: boolean
+  show_reconnect: boolean
+  show_contact: boolean
+  show_social: boolean
+  show_quick_links: boolean
+  show_mac: boolean
+  quick_links: Record<string, string>
   updated_at: string
 }
 
@@ -1365,6 +1384,22 @@ export async function fetchPortalSettings(): Promise<PortalSettings | null> {
       social_links: {},
       hide_routeros: true,
       show_usage: true,
+      header_text: null,
+      connect_button_text: 'Click Here To Connect',
+      already_paid_text: 'Already Paid? Click Here.',
+      packages_heading: 'AVAILABLE INTERNET PACKAGES',
+      popular_label: 'MOST POPULAR',
+      currency_label: 'KES',
+      package_order: [],
+      featured_plan_id: null,
+      show_voucher: true,
+      show_login: true,
+      show_reconnect: true,
+      show_contact: true,
+      show_social: true,
+      show_quick_links: true,
+      show_mac: true,
+      quick_links: {},
       updated_at: new Date().toISOString(),
     }
   }

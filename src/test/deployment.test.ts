@@ -780,6 +780,15 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
           /auth\.getUser\(/,                                // validate the JWT
           /verifyWebhookRequest\(|verifyWebhookSignature\(/,  // provider HMAC
           /410,/,                                            // inert cutover stub
+          // Declared anonymous by design. The captive portal has no signed-in
+          // user: the router redirects a device with no connectivity, so a
+          // session cannot exist. Such a function must instead resolve the
+          // tenant server-side and take no caller-supplied identity, and it has
+          // to SAY so with this marker. Requiring the marker rather than
+          // allow-listing a name means a new function cannot skip this check by
+          // accident - it has to state the exemption, and the test below then
+          // holds it to that claim.
+          /AUTHENTICATION:\s*anonymous/,
         ].some((re) => re.test(src))
         if (noJwt && !guard) offenders.push(name.name)
       }
@@ -863,15 +872,17 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     const portal = read('src/pages/CaptivePortal.tsx')
 
     // The live branch must go to the public RPC, and must derive the ISP it
-    // renders from that response.
-    expect(portal).toMatch(/fetchPublicPortalSettings\(slug/)
-    expect(portal).toMatch(/name:\s*settings\.isp_name/)
-    expect(portal).toMatch(/brand_color:\s*settings\.brand_color/)
+    // renders from that response. It used to call fetchPublicPortalSettings and
+    // hand-build a PortalState; the storefront now reads the same RPC through
+    // lib/portal and passes the response straight through.
+    expect(portal).toMatch(/fetchPortalSettings\(slug!?\)/)
+    expect(portal).toMatch(/fetchPortalPackages\(slug!?\)/)
+    expect(portal).toMatch(/setState\(\{\s*settings,\s*packages\s*\}\)/)
 
     // The demo lookup must not be reachable on the live path, i.e. it may only
     // appear after an early `return` on the live branch.
     const liveIdx = portal.indexOf("config.mode === 'live'")
-    const demoIdx = portal.indexOf('loadDb().isps.find')
+    const demoIdx = portal.indexOf('loadDb()')
     expect(liveIdx, 'no live branch found').toBeGreaterThan(-1)
     expect(demoIdx, 'demo lookup still present').toBeGreaterThan(-1)
     expect(demoIdx, 'demo lookup must not run before the live branch returns')
@@ -881,6 +892,178 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     // A transport failure must not masquerade as "no such portal".
     expect(portal).toMatch(/setLoadError\(/)
     expect(portal).toMatch(/Portal unavailable/)
+  })
+
+  it('sells packages on the portal instead of only listing them', () => {
+    // The reported problem: the portal rendered a voucher box with a read-only
+    // price list. Packages were fetched and then never sold, because the only
+    // STK entry point required a JWT and a captive-portal visitor cannot sign
+    // in. These fail if the buy path is removed or reverted to display-only.
+    const portal = read('src/pages/CaptivePortal.tsx')
+
+    // The grid, and a per-package button that opens a payment flow.
+    expect(portal).toMatch(/packages_heading/)
+    expect(portal).toMatch(/onBuy=/)
+    expect(portal).toMatch(/connect_button_text/)
+
+    // The voucher section still exists. It must not have replaced the
+    // marketplace, which is what the bug looked like.
+    expect(portal).toMatch(/redeemPortalVoucher/)
+    expect(portal).toMatch(/show_voucher/)
+
+    // Reconnect and existing-customer login are still reachable.
+    expect(portal).toMatch(/reconnectPortalCustomer/)
+    expect(portal).toMatch(/loginPortalCustomer/)
+    expect(portal).toMatch(/show_reconnect/)
+
+    // Footer and contact details come from settings, not from literals.
+    expect(portal).toMatch(/All rights reserved/)
+    expect(portal).toMatch(/new Date\(\)\.getFullYear\(\)/)
+  })
+
+  it('never lets the browser decide where a portal payment goes', () => {
+    // The portal is anonymous, so the only thing standing between a visitor and
+    // a misdirected payment is that the request carries no amount, no ISP id and
+    // no AccountID. Asserted at every layer that could have introduced one.
+    const client = read('src/lib/portal.ts')
+    const fn = read('supabase/functions/portal-stk/index.ts')
+    const sql = read('supabase/migrations/20260101200000_portal_storefront.sql')
+
+    // The browser helper takes a slug, a plan and a phone. Nothing else.
+    // The parameter block is what matters; the return type is sliced off
+    // deliberately, because a response may legitimately carry the amount back
+    // for display. Only what the caller SENDS is constrained.
+    const start = client.slice(client.indexOf('export async function startPortalPayment'))
+    const sig = start.slice(0, start.indexOf('): Promise<'))
+    expect(sig).toMatch(/slug: string/)
+    expect(sig).toMatch(/planId: string/)
+    expect(sig).toMatch(/phone: string/)
+    // An amount or account id here would mean the browser picks where its money
+    // goes.
+    expect(sig).not.toMatch(/amount/i)
+    expect(sig).not.toMatch(/account/i)
+    expect(sig).not.toMatch(/ispId|isp_id/i)
+
+    // The function forwards only those three.
+    const at = start.indexOf('body: JSON.stringify')
+    expect(start.slice(at, at + 200)).not.toMatch(/amount/i)
+    expect(start.slice(at, at + 200)).not.toMatch(/account/i)
+
+    // The Edge Function accepts only those three, and resolves the rest
+    // server-side via a service-role RPC.
+    expect(fn).toMatch(/admin\.rpc\('portal_create_payment'/)
+    // The AccountID comes from the RPC result, never from the request body.
+    expect(fn).not.toMatch(/body\.accountId/)
+    expect(fn).not.toMatch(/body\.amount/)
+
+    // That RPC is unreachable from a browser: service role only.
+    const create = sql.slice(sql.indexOf('create or replace function public.portal_create_payment'))
+    expect(create).toMatch(
+      /revoke all on function public\.portal_create_payment[\s\S]*?from public, anon, authenticated/,
+    )
+    expect(create).toMatch(
+      /grant execute on function public\.portal_create_payment\(text, uuid, text\) to service_role/,
+    )
+
+    // The amount is read from the plan row, scoped to the tenant the slug
+    // resolved to.
+    expect(create).toMatch(
+      /select \* into v_plan from public\.plans[\s\S]*?where id = p_plan_id and isp_id = v_isp/,
+    )
+    expect(create).toMatch(/v_amount := v_plan\.price/)
+
+    // And the signature carries no amount, tenant or account parameter, which
+    // is the only way a caller could have supplied one.
+    const params = create.slice(0, create.indexOf(') returns jsonb'))
+    expect(params).not.toMatch(/p_amount|p_isp_id|p_account/i)
+  })
+
+  it('scopes every public portal function to the tenant its slug resolved to', () => {
+    // ISP A's portal must never reach ISP B's packages, payment account,
+    // vouchers or branding. Each public function filters on a slug-derived
+    // isp_id, and none accepts a tenant id.
+    const sql = read('supabase/migrations/20260101200000_portal_storefront.sql')
+
+    const cases: Array<[string, RegExp]> = [
+      ['public_portal_settings',
+        /from public\.portal_settings s\s+join public\.isps i on i\.id = s\.isp_id\s+where i\.slug = lower\(trim\(p_slug\)\)/],
+      ['public_portal_packages',
+        /join public\.isps i on i\.id = pl\.isp_id[\s\S]*?where i\.slug = lower\(trim\(p_slug\)\)/],
+      ['portal_redeem_voucher',
+        /where lower\(code\) = lower\(btrim\(p_code\)\) and isp_id = v_isp/],
+      ['portal_create_payment',
+        /select id into v_isp from public\.isps where slug = lower\(trim\(p_slug\)\)/],
+      ['portal_payment_status',
+        /join public\.isps i on i\.id = pay\.isp_id[\s\S]*?where i\.slug = lower\(trim\(p_slug\)\)/],
+      ['portal_customer_login',
+        /where isp_id = v_isp and lower\(username\) = lower\(btrim\(p_username\)\)/],
+      ['portal_reconnect',
+        /where isp_id = v_isp[\s\S]*?and lower\(username\) = lower\(btrim\(p_username\)\)/],
+    ]
+
+    for (const [fn, pattern] of cases) {
+      expect(sql, `${fn} not found`).toContain(fn)
+      expect(sql, `${fn} does not scope by slug`).toMatch(pattern)
+    }
+
+    // No public portal function may take a tenant id from the caller. That is
+    // the parameter through which a cross-tenant request would be expressed.
+    expect(sql).not.toMatch(/p_isp_id/)
+    expect(sql).not.toMatch(/p_tenant/)
+  })
+
+  it('does not let the portal reuse the cross-tenant voucher lookup', () => {
+    // redeem_voucher(text) resolves a code across every tenant, so ISP A's
+    // portal could redeem ISP B's voucher. It still exists for the staff HotSpot
+    // preview; the public portal must not call it.
+    const sql = read('supabase/migrations/20260101200000_portal_storefront.sql')
+    const client = read('src/lib/portal.ts')
+
+    expect(sql).toMatch(/create or replace function public\.portal_redeem_voucher/)
+    expect(sql).toMatch(
+      /grant execute on function public\.portal_redeem_voucher\(text, text, text\) to anon, authenticated/,
+    )
+    expect(client).not.toMatch(/rpc\('redeem_voucher'/)
+  })
+
+  it('badges at most one package, and only the one the ISP chose', () => {
+    // plans.is_popular is a catalogue-wide flag and the seeded catalogues flag
+    // more than one plan per ISP. Falling back to it painted "MOST POPULAR" on
+    // two cards at once, so the storefront advertised two most-popular packages.
+    // featured_plan_id is the only source of the badge, and it is singular.
+    const sql = read('supabase/migrations/20260101200000_portal_storefront.sql')
+
+    const pkg = sql.slice(sql.indexOf('create or replace function public.public_portal_packages'))
+    expect(pkg).toMatch(/\(pl\.id = ps\.featured_plan_id\) as is_featured/)
+
+    // No plan-wide fallback anywhere in the projection.
+    const badge = pkg.slice(pkg.indexOf('as is_featured') - 200, pkg.indexOf('as is_featured'))
+    expect(badge).not.toMatch(/is_popular/)
+  })
+
+  it('holds a declared-anonymous function to that declaration', () => {
+    // portal-stk runs with JWT verification off, which the suite normally
+    // forbids. The exemption is a comment, and a comment is not a control, so
+    // the claim it makes is asserted here instead: the function must take only
+    // a slug, a package and a phone, and must resolve everything else
+    // server-side. If someone later adds a caller-supplied amount or tenant, this
+    // fails rather than the exemption quietly widening.
+    const fn = read('supabase/functions/portal-stk/index.ts')
+
+    // The declaration must actually be there, not assumed.
+    expect(fn).toMatch(/AUTHENTICATION:\s*anonymous/)
+
+    // Only the type declaration is inspected, not the whole function: the body
+    // legitimately mentions an amount when displaying the charge, and must not
+    // be mistaken for accepting one.
+    const typed = fn.slice(fn.indexOf('let body:'), fn.indexOf('let body:') + 120)
+    expect(typed).toMatch(/slug\?: string; planId\?: string; phone\?: string/)
+
+    // Nothing that identifies a tenant, an account or an amount is accepted.
+    expect(typed).not.toMatch(/ispId|isp_id|accountId|account_id|amount|email|userId/i)
+
+    // And the tenant and price come from the service-role RPC, not the request.
+    expect(fn).toMatch(/admin\.rpc\('portal_create_payment', \{\s*p_slug: slug,\s*p_plan_id: planId,\s*p_msisdn: msisdn/)
   })
 
 it('never claims a RouterOS fetch wrote a file it discarded', () => {
