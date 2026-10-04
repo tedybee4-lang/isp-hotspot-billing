@@ -293,7 +293,7 @@ export default function AdminDashboard({
                     {/* Disabled for an ended session: the database already
                         closed it, so there is nothing left to cut off. */}
                     <button
-                      onClick={() => onKickSession(s.id)}
+                      onClick={() => onKickSession(s.acctSessionId ?? s.id)}
                       disabled={!s.canDisconnect}
                       className={
                         s.canDisconnect

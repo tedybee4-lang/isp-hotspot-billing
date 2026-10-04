@@ -16,3 +16,5 @@ coverage/
 # Supabase CLI
 .branches/
 .temp/
+.vercel
+.env*

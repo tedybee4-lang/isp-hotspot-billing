@@ -787,6 +787,39 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
         .toEqual([])
     })
 
+  it('the Kick button goes through the queue, not a direct router call', () => {
+    const data = code('src', 'lib', 'data.ts')
+    // Bounded to this function's own body: a fixed-length slice runs into the next
+    // declaration, which has its own reasons to call invokeMikrotik.
+    const start = data.indexOf('export async function kickSession')
+    const rest = data.slice(start)
+    const end = rest.indexOf('\nexport ')
+    const fn = end > 0 ? rest.slice(0, end) : rest
+    // It must not call the mikrotik Edge Function from the browser: that is a
+    // direct router management call with no job, no retry and no audit trail.
+    expect(fn).not.toMatch(/invokeMikrotik/)
+    expect(fn).toMatch(/disconnectLiveSession/)
+    // The tenant-scoped RPC is the only path.
+    expect(fn).not.toMatch(/enqueue_router_job|from\('router_jobs'\)/)
+  })
+
+  it('the panel sends the RADIUS session id, not the row id', () => {
+    const panel = code('src', 'components', 'AdminDashboard.tsx')
+    // request_session_disconnect is keyed on acct_session_id. Passing radius_
+    // sessions.id would never match a row.
+    expect(panel).toMatch(/onKickSession\(s\.acctSessionId \?\? s\.id\)/)
+  })
+
+  it('keeps the queue path reachable in the built bundle', () => {
+    // The previous disconnect implementation was correct but unreachable, so it
+    // was tree-shaken out of the shipped JavaScript entirely. This asserts the
+    // call is actually wired, not merely present in a file nothing imports.
+    const data = code('src', 'lib', 'data.ts')
+    expect(data).toMatch(/import\s*\{[^}]*disconnectLiveSession[^}]*\}\s*from\s*'\.\/network'/)
+    const panel = code('src', 'components', 'AdminDashboard.tsx')
+    expect(panel).toMatch(/onKickSession/)
+  })
+
   it('authenticates the telemetry poller, which was open to the internet', () => {
     const poll = code('supabase', 'functions', 'mikrotik-poll', 'index.ts')
     // Verified before the fix: an anonymous GET returned HTTP 200 and a summary
