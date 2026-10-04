@@ -46,9 +46,12 @@ values ('YOUR-EMAIL@yourcompany.com', 'Platform Operator');
 
 ---
 
-## 3. HashBack (required for automated M-Pesa)
+## 3. PayHero (required for automated M-Pesa)
 
-HashBack is the only M-Pesa provider. The former Safaricom Daraja setup is gone.
+PayHero is the active M-Pesa provider. The former Safaricom Daraja setup is gone,
+and so is HashBack as an active provider (it remains for historical reconciliation).
+PayHero has no OAuth or delegated authorization, so this is a one-time paste of the
+Basic API token rather than a login flow.
 
 | # | Credential | Where it goes |
 | --- | --- | --- |

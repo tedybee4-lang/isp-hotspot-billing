@@ -341,10 +341,15 @@ export async function inviteStaff(input: {
 /**
  * How an ISP collects money.
  *
- * Only `manual_till` remains. `platform_daraja` and `own_daraja` were removed
- * when HashBack became the only M-Pesa provider: automated STK now runs through
- * HashBack (the `hashback-stk` Edge Function), configured per tenant under
- * /app/settings/payments, not through Safaricom consumer keys.
+ * Only `manual_till` remains. `platform_daraja` and `own_daraja` were removed when
+ * automated M-Pesa stopped using Safaricom consumer keys; it now runs through
+ * PayHero (the `payhero-stk` Edge Function), whose credential is platform-wide and
+ * whose channel is assigned per tenant under /app/settings/payments.
+ *
+ * This type therefore describes the legacy Till numbers an ISP edits for hand
+ * collection, NOT the automated provider. Which provider a tenant collects through
+ * is decided server-side per tenant and is never selectable here, so the browser
+ * cannot point an ISP at another tenant's channel.
  *
  * The enum values still exist in the database because `payment_mode` is a
  * Postgres enum and a row may still carry one. They are inert: nothing in the

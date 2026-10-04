@@ -101,14 +101,20 @@ create policy plans_read on public.plans for select using (
 | `isp_agent` | Own tenant; support access only |
 | `client` | Read-only access to their own account, invoices and tickets |
 
-### M-Pesa is HashBack, and no credential reaches the browser
+### M-Pesa is PayHero, and no credential reaches the browser
 
-HashBack is the only M-Pesa payment provider. Automated collection runs through
-the `hashback-stk` Edge Function; the platform API key and webhook secret live in
-the Edge Function environment and in the encrypted store, and are never returned
-by any API. Each ISP links its own HashBack channel (AccountID) under
-**Settings > Payments**, with the tenant resolved server-side from the caller's
-own profile - there is no `ispId` parameter to point at somebody else's channel.
+PayHero is the active M-Pesa payment provider. Automated collection runs through
+the `payhero-stk` Edge Function; the PayHero Basic API token lives in the Edge
+Function environment and in the encrypted store, and is never returned by any API.
+PayHero publishes no OAuth, Connect App or delegated authorization, so the
+platform admin pastes the token once into **Platform > Payment gateway > PayHero**
+rather than completing a login redirect. Channels are discovered from PayHero and
+assigned by the platform owner; a channel may back only one ISP, and the tenant is
+resolved server-side from the caller's own profile - there is no `ispId` parameter
+to point at somebody else's channel.
+
+HashBack remains available for reconciling historical payments only; its
+settlement path is still live because a callback for an old reference can arrive.
 
 The earlier Safaricom Daraja integration (consumer key, consumer secret,
 passkey) has been removed: the credential forms, the `stk-push` implementation
