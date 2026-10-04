@@ -1,0 +1,29 @@
+# Supabase configuration.
+#
+# This file exists for ONE reason: PayHero's callback cannot present a Supabase
+# JWT, so the gateway would reject every callback with 401 before our code ran.
+# verify_jwt is therefore disabled for that function alone.
+#
+# WHY THAT IS SAFE HERE (and why it would not be for most endpoints)
+# ----------------------------------------------------------------
+# Turning off gateway authentication means anyone on the internet can POST to this
+# endpoint. That is acceptable only because of what the code does with what they
+# send:
+#
+#   * The ONLY field taken from the body is the transaction reference. No amount,
+#     tenant, channel or status is read from the payload.
+#   * The reference is looked up in our own payments table. An unknown one is
+#     queued for a human and settles nothing.
+#   * The outcome is then re-read from PayHero's transaction-status endpoint over
+#     the credentialed channel. A forged "status: Success" body is never believed,
+#     so it cannot activate a customer or mark an invoice paid.
+#   * Settlement runs through the same idempotent, reference-keyed function used
+#     everywhere else, so a replay changes nothing.
+#
+# In short the endpoint's authority comes from our own database plus PayHero's API,
+# not from whoever is calling. Do NOT copy this setting to any other function:
+# payhero-admin and payhero-stk carry real credentials and tenant-scoped authority,
+# so they must keep JWT verification on.
+
+[functions.payhero-callback]
+verify_jwt = false
