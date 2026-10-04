@@ -572,19 +572,30 @@ export class PaymentGatewayService {
       }
     }
 
-    // Load the payment first, so an unknown reference never spends an API call and
-    // never reaches PayHero with a reference we do not own.
-    const { data: payment } = await this.admin
+    // Only columns that actually exist on `payments` may be selected.
+    //
+    // `payhero_channel_id` lives on isp_payment_configs, NOT here. Naming a column
+    // that does not exist makes the query ERROR, and because the result was
+    // destructured without checking, the error surfaced as a null row and every
+    // real payment was reported `unknown_reference`. That is what stopped the
+    // verified customer payment from ever reaching settlement.
+    const { data: payment, error: paymentErr } = await this.admin
       .from('payments')
-      .select('id, isp_id, status, payhero_channel_id')
+      .select('id, isp_id, status, provider_transaction_id')
       .eq('provider_reference', reference)
       .maybeSingle()
+
+    if (paymentErr) {
+      // A read failure is NOT an unknown reference. Treating the two alike is what
+      // let a real payment be quietly written off for reconciliation.
+      throw new PaymentServiceError('conflict', paymentErr.message)
+    }
 
     const row = payment as {
       id?: string
       isp_id?: string | null
       status?: string | null
-      payhero_channel_id?: number | null
+      provider_transaction_id?: string | null
     } | null
 
     if (!row?.isp_id) {
@@ -604,9 +615,43 @@ export class PaymentGatewayService {
     }
 
     const client = await this.payHeroClient()
-    // PayHero accepts either our external reference or the M-Pesa code, so the
-    // reference we minted is sufficient and no extra id has to be threaded through.
-    const status = await client.getTransactionStatus(reference)
+
+    // LOOK UP BY PAYHERO'S OWN REFERENCE, NOT OURS.
+    //
+    // This was verified against the live API after a real customer payment got
+    // stuck at 'pending' forever:
+    //
+    //   GET /api/v2/transaction-status?reference=ISPFLOW-<ours>  -> 404
+    //   GET /api/v2/transaction-status?reference=feb7-4ad8-...   -> SUCCESS
+    //
+    // PayHero resolves the query by the reference IT issued, not by the
+    // `external_reference` we sent it. Querying with our own value therefore 404s,
+    // which used to throw out of here, so settlement never ran and the customer
+    // paid for a package they were never given.
+    //
+    // `provider_transaction_id` is the reference PayHero returned when it accepted
+    // the STK push, and record_payhero_stk already stored it. Fall back to our own
+    // reference only for a payment whose STK response was never recorded.
+    const lookup = row.provider_transaction_id ?? reference
+
+    let status: Awaited<ReturnType<typeof client.getTransactionStatus>>
+    try {
+      status = await client.getTransactionStatus(lookup)
+    } catch (err) {
+      // A 404 means PayHero has no record under that reference yet. For a
+      // transaction that was only just prompted that is the normal race: the
+      // callback can arrive before the provider has indexed it. It is reported as
+      // pending so the next attempt retries, NOT as an error that abandons the
+      // payment — which is what left a paying customer stuck.
+      const e = err as { status?: number | null }
+      if (e?.status === 404) {
+        return {
+          ok: true, settled: false, duplicate: false, activated: false,
+          reason: 'pending', ispId: row.isp_id,
+        }
+      }
+      throw err
+    }
 
     if (status.state === 'pending') {
       // Genuinely still in flight. Nothing is written and nothing is activated; a
@@ -640,7 +685,10 @@ export class PaymentGatewayService {
       p_receipt: String(status.raw.receipt ?? status.raw.id ?? reference),
       p_msisdn: typeof status.raw.phone_number === 'string' ? status.raw.phone_number : null,
       p_amount: typeof status.raw.amount === 'number' ? status.raw.amount : null,
-      p_channel_id: row.payhero_channel_id ?? null,
+      // No channel id is passed: `payments` has no such column, and the provider's
+      // verbatim payload below already records which merchant took the money. This
+      // argument is only an audit label in the shared settle function.
+      p_channel_id: null,
       // PayHero's own words, kept verbatim so a disputed payment can be audited.
       p_provider_metadata: status.raw as Record<string, unknown>,
     })

@@ -355,6 +355,190 @@ describe('PayHero callbacks are never believed on their own', () => {
     expect(result.reason).toBe('unknown_reference')
   })
 })
+describe('a verified PayHero payment reaches settlement', () => {
+  // These regressions came from a real customer payment that completed at PayHero
+  // and then sat at 'pending' in ISPFLOW forever. Both defects below were in this
+  // module, and neither was visible until a real money movement was traced.
+
+  it('looks the transaction up by the reference PAYHERO issued, not ours', async () => {
+    // Verified against the live API on a real payment:
+    //   ?reference=ISPFLOW-<ours>  -> 404
+    //   ?reference=feb7-4ad8-...   -> SUCCESS
+    // Querying with our own value 404s, which threw, so settlement never ran.
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'SUCCESS', id: 'PH-1' }), { status: 200 }),
+    ) as unknown as typeof fetch
+
+    const admin = fakeAdmin({
+      payment: {
+        id: 'pay-1',
+        isp_id: 'isp-a',
+        status: 'pending',
+        // What record_payhero_stk stored when PayHero accepted the push.
+        provider_transaction_id: 'feb7-4ad8-99f0',
+      },
+      rpcResults: { settle_payhero_payment: { settled: true, activated: true } },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })
+
+    expect(result.settled).toBe(true)
+    const asked = String(vi.mocked(fetchImpl).mock.calls[0][0])
+    expect(asked).toContain('reference=feb7-4ad8-99f0')
+    expect(asked).not.toContain('ISPFLOW-abc')
+  })
+
+  it('falls back to our reference only when PayHero never issued one', async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 }),
+    ) as unknown as typeof fetch
+
+    const admin = fakeAdmin({
+      payment: { id: 'pay-1', isp_id: 'isp-a', status: 'pending', provider_transaction_id: null },
+      rpcResults: { settle_payhero_payment: { settled: true, activated: true } },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })
+
+    expect(String(vi.mocked(fetchImpl).mock.calls[0][0])).toContain('ISPFLOW-abc')
+  })
+
+  it('treats a 404 as still-pending rather than abandoning the payment', async () => {
+    // A callback can arrive before PayHero has indexed the transaction. Giving up
+    // there is what left a paying customer with nothing.
+    const fetchImpl = vi.fn(async () =>
+      new Response('', { status: 404 }),
+    ) as unknown as typeof fetch
+    const calls: string[] = []
+    const admin = fakeAdmin({
+      calls,
+      payment: {
+        id: 'pay-1', isp_id: 'isp-a', status: 'pending', provider_transaction_id: 'feb7-x',
+      },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    const result = await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })
+
+    expect(result.settled).toBe(false)
+    expect(result.reason).toBe('pending')
+    // Crucially, it did NOT settle on a lookup that failed.
+    expect(calls).not.toContain('settle_payhero_payment')
+  })
+it('selects only columns that exist on the payments table', async () => {
+    // `payhero_channel_id` lives on isp_payment_configs. Naming it here made the
+    // query ERROR, and because the error was discarded the result looked like an
+    // unknown reference, so every real payment was written off for reconciliation
+    // while the customer had already paid.
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 }),
+    ) as unknown as typeof fetch
+    const selects: string[] = []
+
+    const row = {
+      id: 'pay-1', isp_id: 'isp-a', status: 'pending', provider_transaction_id: 'feb7-x',
+    }
+    const makeChain = (table: string): unknown => {
+      const chain: Record<string, unknown> = {}
+      chain.select = (cols: string) => {
+        if (table === 'payments') selects.push(cols)
+        return chain
+      }
+      chain.eq = () => chain
+      // The platform config serves the encrypted credential; verification needs
+      // it to build a client, exactly as it does in production.
+      chain.maybeSingle = () =>
+        Promise.resolve({
+          data: table === 'platform_payment_config'
+            ? { payhero_api_token_ciphertext: STORED_CIPHERTEXT }
+            : row,
+          error: null,
+        })
+      chain.single = () => Promise.resolve({ data: null, error: null })
+      chain.limit = () => chain
+      chain.order = () => chain
+      chain.insert = () => Promise.resolve({ data: null, error: null })
+      chain.update = () => Promise.resolve({ data: null, error: null })
+      chain.upsert = () => Promise.resolve({ data: null, error: null })
+      return chain
+    }
+
+    const admin = {
+      auth: { getUser: async () => ({ data: { user: null }, error: null }) },
+      from: (table: string) => makeChain(table),
+      rpc: async () => ({ data: { settled: true, activated: true }, error: null }),
+    } as never
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    expect((await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })).settled).toBe(true)
+
+    expect(selects.length).toBeGreaterThan(0)
+    for (const cols of selects) {
+      expect(cols, 'selected a column absent from the payments table').not.toMatch(
+        /payhero_channel_id/,
+      )
+    }
+  })
+
+  it('maps PayHero SUCCESS — which it returns upper-case — to a settlement', async () => {
+    // Observed verbatim from the live API. A case-sensitive comparison would have
+    // read this as an unknown status and left the payment pending.
+    const fetchImpl = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'SUCCESS', amount: 10 }), { status: 200 }),
+    ) as unknown as typeof fetch
+
+    const admin = fakeAdmin({
+      payment: {
+        id: 'pay-1', isp_id: 'isp-a', status: 'pending', provider_transaction_id: 'feb7-x',
+      },
+      rpcResults: { settle_payhero_payment: { settled: true, activated: true } },
+    })
+
+    const service = new PaymentGatewayService({ admin, fetchImpl })
+    expect((await service.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })).settled).toBe(true)
+  })
+
+  it('is idempotent across a replayed callback', async () => {
+    const first = new PaymentGatewayService({
+      admin: fakeAdmin({
+        payment: {
+          id: 'pay-1', isp_id: 'isp-a', status: 'pending', provider_transaction_id: 'feb7-x',
+        },
+        rpcResults: { settle_payhero_payment: { settled: true, activated: true } },
+      }),
+      fetchImpl: vi.fn(async () =>
+        new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 }),
+      ) as unknown as typeof fetch,
+    })
+    expect((await first.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })).settled).toBe(true)
+
+    // Replay: the row already says success, so it short-circuits before spending
+    // an API call and settles nothing a second time.
+    const replayFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 }),
+    ) as unknown as typeof fetch
+    const calls: string[] = []
+    const replay = new PaymentGatewayService({
+      admin: fakeAdmin({
+        calls,
+        payment: {
+          id: 'pay-1', isp_id: 'isp-a', status: 'success', provider_transaction_id: 'feb7-x',
+        },
+      }),
+      fetchImpl: replayFetch,
+    })
+
+    const second = await replay.verifyPayHeroPayment({ reference: 'ISPFLOW-abc' })
+    expect(second.duplicate).toBe(true)
+    expect(second.settled).toBe(false)
+    expect(second.activated).toBe(false)
+    expect(replayFetch).not.toHaveBeenCalled()
+    expect(calls).not.toContain('settle_payhero_payment')
+  })
+})
+
 describe('PayHero tenant isolation', () => {
   it('loads the channel for the resolved tenant only', async () => {
     // The service resolves the ISP from the session; the config lookup is keyed by
