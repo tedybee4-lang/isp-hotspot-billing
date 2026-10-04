@@ -174,6 +174,35 @@ describe('tenant resolution', () => {
       .rejects.toMatchObject({ code: 'unauthorized' })
   })
 
+  it('authenticates before validating input, so an anon caller learns nothing', async () => {
+    // Validation-first meant an anonymous caller holding the public anon key
+    // got a differentiated 400 ("enter a valid Kenyan phone number"), which
+    // mapped this endpoint for anyone. Auth must resolve the tenant first.
+    const { admin } = fakeAdmin({ users: [] })
+    const service = new PaymentGatewayService({ admin })
+    // No user resolves, so the request must fail as unauthorized even though
+    // the phone is also unusable - auth is the first gate.
+    await expect(service.startPayment('nobody', { phone: 'not-a-phone' }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+
+    // And a real session still gets the phone error, not an auth error.
+    const ok = fakeAdmin({ users: [{ id: JWT }], profiles: { isp_id: 'isp-a' } })
+    const authed = new PaymentGatewayService({ admin: ok.admin })
+    await expect(authed.startPayment(JWT, { phone: '12345' }))
+      .rejects.toMatchObject({ code: 'invalid_phone' })
+  })
+
+  it('keeps the endpoint from validating input before it authenticates', () => {
+    const stk = readFileSync(join(here, '..', 'hashback-stk', 'index.ts'), 'utf8')
+    const handler = /Deno\.serve\([\s\S]*$/.exec(stk)?.[0] ?? ''
+    // The old `if (!body.phone) return 400` sat above the service call, which
+    // is what let an anonymous caller reach a validation message.
+    expect(handler).not.toMatch(/if\s*\(!body\.phone\)/)
+    // Only the bearer-token presence check may precede the service call.
+    const beforeCall = handler.split('service.startPayment')[0] ?? ''
+    expect(beforeCall).toMatch(/if\s*\(!token\)/)
+  })
+
   it('maps the STK status table so auth failure is 401, not 503', async () => {
     // The endpoint's status mapping is the other half of this: a code that
     // means "log in again" must not be reported as "the platform is broken".

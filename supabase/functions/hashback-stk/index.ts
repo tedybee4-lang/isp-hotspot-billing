@@ -79,12 +79,13 @@ Deno.serve(async (req) => {
     return json({ error: 'Malformed request' }, 400)
   }
 
-  if (!body.phone) return json({ error: 'A phone number is required' }, 400)
-
   const service = new PaymentGatewayService({ admin })
 
   try {
     const result = await service.startPayment(token, {
+      // Passed through unvalidated on purpose: the service authenticates the
+      // session first, then checks the phone. Checking it here instead meant an
+      // anonymous caller received a validation message from a payment endpoint.
       phone: body.phone,
       invoiceId: body.invoiceId ?? null,
       clientId: body.clientId ?? null,

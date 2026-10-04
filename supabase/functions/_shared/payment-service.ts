@@ -235,6 +235,15 @@ export class PaymentGatewayService {
       planId?: string | null
     },
   ): Promise<StartPaymentResult> {
+    // Authenticate BEFORE validating input.
+    //
+    // The order matters: with validation first, an unauthenticated caller got
+    // a differentiated 400 ("enter a valid Kenyan phone number") and an
+    // authenticated one got something else, which maps the endpoint's internals
+    // for anyone holding the public anon key. Resolving the tenant first means
+    // every unauthenticated request fails identically with 401.
+    const ispId = await this.requireTenant(jwt)
+
     const msisdn = normaliseMsisdn(input.phone)
     if (!msisdn) {
       throw new PaymentServiceError(
@@ -243,7 +252,6 @@ export class PaymentGatewayService {
       )
     }
 
-    const ispId = await this.requireTenant(jwt)
     const channel = await this.loadChannel(ispId)
 
     if (!channel.connected) {
