@@ -18,3 +18,9 @@ coverage/
 .temp/
 .vercel
 .env*
+
+# Captured production responses. These contain a single-use provisioning token
+# in plaintext inside every /tool fetch URL, so they are evidence to diff by
+# hand and never to commit.
+live-production-bootstrap.rsc
+
