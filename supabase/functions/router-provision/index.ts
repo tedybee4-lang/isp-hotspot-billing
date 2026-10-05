@@ -314,11 +314,27 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
   const trailer = [
     '',
     '# --- Report back what this router is ---',
-    ':put ("ISPFlow: registered as " . $identity);',
-    ':put ("ISPFlow: RouterOS " . $version . " on " . $board-name);',
+    // These three are read HERE, from the router, and only here.
+    //
+    // The previous trailer printed $identity, $version and $board-name, which
+    // nothing in the whole script had ever assigned. RouterOS does not provide
+    // variables of those names, so the confirmation line rendered as
+    // "registered as  RouterOS  on " and, worse, threw on every claim. The
+    // values that matter are already collected by the discovery survey below and
+    // recorded from there, so nothing is lost by printing what the router can
+    // actually resolve.
+    ':local ispFlowClaimName [/system/identity/get name]',
+    ':local ispFlowClaimVer [/system/resource/get version]',
+    ':local ispFlowClaimBoard [/system/resource/get board-name]',
+    ':put ("ISPFlow: registered as " . $ispFlowClaimName);',
+    ':put ("ISPFlow: RouterOS " . $ispFlowClaimVer . " on " . $ispFlowClaimBoard);',
     profile.rest
       ? ':put "ISPFlow: HTTPS management is available on port 8080.";'
-      : ':put "ISPFlow: this firmware has no REST; the panel will use the API.";',
+      // Only claim a firmware LACKS a feature when the version proves it. An
+      // unidentified router is "not configured yet", never "unsupported".
+      : profile.versionKnown
+        ? ':put "ISPFlow: this RouterOS version has no REST; the panel will use the API.";'
+        : ':put "ISPFlow: RouterOS version not reported; the panel will use the API.";',
     '',
   ].join('\n')
 

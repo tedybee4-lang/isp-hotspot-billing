@@ -43,7 +43,13 @@
 /** One subsystem the router reports on. */
 export const SURVEYS = [
   'identity', 'resource', 'board', 'packages', 'interfaces', 'bridges',
-  'vlans', 'addresses', 'dhcp', 'pools', 'hotspot', 'pppoe', 'radius',
+  'vlans', 'addresses', 'dhcp', 'pools', 'hotspot', 'pppoe',
+  // The PPPoE and RADIUS subsystems are each split across the menus RouterOS
+  // actually uses, rather than one menu being filed under another service's
+  // name. `/ppp secret` holds the customers, `/interface/pppoe-server/server`
+  // the dial-in service, `/ppp profile` the profiles, `/radius` the RADIUS
+  // client and `/ppp aaa` whether secrets use RADIUS at all.
+  'pppoe-servers', 'pppoe-profiles', 'radius', 'radius-aaa',
   'firewall', 'nat', 'routes', 'dns', 'wireguard', 'services',
   'certificates', 'wireless', 'capsman', 'ispflow', 'scheduler', 'backup',
 ] as const
@@ -70,6 +76,37 @@ export interface DiscoveryOptions {
  */
 export function ros(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+/**
+ * RouterOS lines that turn a value in `$v` into one safe to place between JSON
+ * quotes.
+ *
+ * A router's own strings - identity, board name, interface names, comments,
+ * SSIDs, profile names - are free text, and they were previously concatenated
+ * into the JSON body raw. An identity of `Bob "the builder"` produced
+ * `{"name":"Bob "the builder""}`, which is not JSON: the server could not parse
+ * it, discarded the whole survey, and the panel silently showed a router with
+ * no interfaces, no pools and no HotSpot. Silent data loss from one stray quote.
+ *
+ * Order is load-bearing. A backslash must be doubled BEFORE quotes are escaped,
+ * otherwise the backslash introduced by escaping a quote gets doubled as well
+ * and the result is wrong.
+ *
+ * These are emitted by the generator rather than typed by hand because the
+ * escaping is four levels deep - JSON, then RouterOS, then TypeScript - and a
+ * single wrong backslash corrupts every survey on every router. The unit tests
+ * assert the exact emitted source.
+ *
+ * Control characters cannot appear in the values RouterOS reports through
+ * `print` (names and comments are single-line), so the two substitutions below
+ * cover the realistic input space.
+ */
+export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
+  return [
+    `:set ${dstVar} [:replace $${srcVar} "\\\\" "\\\\\\\\"]`,
+    `:set ${dstVar} [:replace $${dstVar} "\\"" "\\\\\\""]`,
+  ]
 }
 
 /**
@@ -110,6 +147,10 @@ function rows(
     '  :local rows "";',
     `  :foreach i in=[${menu}/find] do={`,
     '    :local o "";',
+    // Declared ONCE per block, not once per property. `:set` on an undeclared
+    // variable is not valid RouterOS, and reusing one target keeps the script
+    // small enough to import on a 32 MB RB951.
+    '    :local j ""',
   ]
   for (const [jsonKey, prop] of fields) {
     out.push(`    :local p ($i->"${prop}")`)
@@ -120,9 +161,14 @@ function rows(
     // available on every RouterOS 6 build, and this script has to run on the
     // oldest hardware ISPFlow supports.
     out.push(`    :if ($p != "") do={`)
+    // `$j` MUST be declared before it is set. `:set` on an undeclared variable
+    // is not valid RouterOS, so the escape target is a real local. The
+    // indentation is kept flush with the block so the emitted script reads the
+    // way an operator would have typed it.
+    out.push(...jsonEscapeSteps('p', 'j').map((l) => '      ' + l))
     out.push(`      :local s ""`)
     out.push(`      :if ([:len $o] > 0) do={ :set s "," }`)
-    out.push(`      :set o ($o . $s . "\\"${jsonKey}\\":\\"" . [:tostr $p] . "\\"")`)
+    out.push(`      :set o ($o . $s . "\\"${jsonKey}\\":\\"" . $j . "\\"")`)
     out.push('    }')
   }
   out.push('    :if ([:len $o] > 0) do={')
@@ -154,6 +200,8 @@ function scalars(
     ':onerror e do={ :put ("ISPFlow: ' + key + ' not reported: " . $e) }',
     '{',
     '  :local o "";',
+    // One escape target for the whole block; see the row emitter.
+    '  :local j ""',
   ]
   for (const [jsonKey, expr] of reads) {
     out.push(`  :local p [${expr}]`)
@@ -161,7 +209,11 @@ function scalars(
     out.push('  :if ($p != "") do={')
     out.push('    :local s ""')
     out.push('    :if ([:len $o] > 0) do={ :set s "," }')
-    out.push(`    :set o ($o . $s . "\\"${jsonKey}\\":\\"" . [:tostr $p] . "\\"")`)
+    // Escaped for the same reason as the row surveys: the identity and the
+    // board name are free text, and one quote in either silently voided
+    // the whole survey on the server.
+    out.push(...jsonEscapeSteps('p', 'j').map((l) => '    ' + l))
+    out.push(`    :set o ($o . $s . "\\"${jsonKey}\\":\\"" . $j . "\\"")`)
     out.push('  }')
   }
   out.push(`  ${post(url, '"{" . $o . "}"')}`)
@@ -267,15 +319,58 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
     ['profile', 'profile'], ['disabled', 'disabled'], ['comment', 'comment'],
   ], o, 'hotspot'))
 
+  // HotSpot USERS belong to the hotspot subsystem, not to PPPoE. This used to
+  // read `/ip hotspot user` and file it under `pppoe`, so the panel reported
+  // prepaid HotSpot subscribers as PPPoE customers - two different services,
+  // two different billing paths, counted as one.
   L.push(...rows('/ip hotspot user', [
     ['name', 'name'], ['profile', 'profile'], ['server', 'server'],
     ['comment', 'comment'],
+  ], o, 'hotspot'))
+
+  // PPPoE customers are PPP secrets. `/interface/pppoe-server/server` is where
+  // the dial-in service itself is configured, and both are read-only prints.
+  //
+  // `service` is included because a /ppp secret can be `any`, `pppoe` or
+  // `pptp`; the panel needs the service to tell a PPPoE subscriber from another
+  // kind of PPP account rather than assuming.
+  L.push(...rows('/ppp secret', [
+    ['name', 'name'], ['service', 'service'], ['profile', 'profile'],
+    ['remote_address', 'remote-address'], ['comment', 'comment'],
+    ['disabled', 'disabled'],
   ], o, 'pppoe'))
 
+  // The PPPoE server itself. A different menu from the accounts above, so it is
+  // reported as its own rows appended to the same subsystem by a second call.
+  L.push(...rows('/interface pppoe-server server', [
+    ['name', 'name'], ['service_name', 'service-name'],
+    ['max_mtu', 'max-mtu'], ['authentication', 'authentication'],
+    ['one_session_per_host', 'one-session-per-host'],
+    ['keepalive_timeout', 'keepalive-timeout'], ['comment', 'comment'],
+    ['disabled', 'disabled'],
+  ], o, 'pppoe-servers'))
+
+  // PPP profiles drive PPPoE. `/ppp profile` was previously filed under
+  // `radius`, which is both the wrong subsystem and an incomplete RADIUS
+  // survey: the RADIUS client configuration is its own menu.
   L.push(...rows('/ppp profile', [
     ['name', 'name'], ['comment', 'comment'], ['local_address', 'local-address'],
-    ['remote_address', 'remote-address'],
+    ['remote_address', 'remote-address'], ['use_compression', 'use-compression'],
+    ['use_encryption', 'use-encryption'],
+  ], o, 'pppoe-profiles'))
+
+  // RADIUS, read from the menu that actually holds it. `secret` is deliberately
+  // NOT requested: the shared secret is written by the worker from encrypted
+  // storage and must never travel back out over a survey POST.
+  L.push(...rows('/radius', [
+    ['address', 'address'], ['port', 'port'], ['timeout', 'timeout'],
+    ['src_address', 'src-address'], ['comment', 'comment'],
   ], o, 'radius'))
+
+  // Where PPP secrets are told to authenticate against RADIUS.
+  L.push(...rows('/ppp aaa', [
+    ['use-radius', 'use-radius'], ['radius-interim-update', 'radius-interim-update'],
+  ], o, 'radius-aaa'))
 
   L.push(...rows('/ip firewall filter', [
     ['chain', 'chain'], ['action', 'action'], ['comment', 'comment'],

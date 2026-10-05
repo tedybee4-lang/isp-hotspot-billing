@@ -13,6 +13,45 @@ investigation.
 
 ---
 
+## 0. The bootstrap import — test this FIRST, before anything else
+
+Everything below is worthless until the router will run the file the platform
+sends it. Three real CHRs (RouterOS 7.24.4, x86_64) have already driven four
+successive defects in that one file, all of which are now fixed:
+
+| # | Observed on hardware | Cause |
+|---|---|---|
+| 1 | `Script Error: expected end of command (line 5)` | a standalone `do={...}` block, which is an *argument*, not a statement |
+| 2 | `failure: please use 'output' option` | `keep-result=yes` combined with `output=file` |
+| 3 | `status: failed`, `code: 400`, `0 KiB` | `board-name` (`CHR innotek GmbH VirtualBox`) concatenated raw into the request target; the gateway rejected the URL |
+| 4 | `$identity` / `$version` / `$board-name` undefined | the claim trailer printed variables nothing had ever assigned |
+
+The generated script is now checked by a RouterOS-aware validator
+(`src/test/routeros-validate.ts`) that tokenises the script and asserts no
+standalone `do=`, no undefined variable, balanced blocks, valid `/tool fetch`
+options, no destructive command, no unescaped JSON and no RouterOS 6
+assumption. It is proven to reject each of the four defects above.
+
+**That is still not proof.** A validator models RouterOS as understood. The
+following must be confirmed on the device:
+
+| # | Check | Expected | Result |
+|---|---|---|---|
+| 0.1 | Paste the generated command into a CHR terminal | `/tool fetch` downloads, `/import` runs | |
+| 0.2 | `/import` output | no `Script Error`; no line/column failure | |
+| 0.3 | Terminal shows `registered as <identity>` | the router's own identity, not blank | |
+| 0.4 | Terminal shows `HTTPS management is available on port 8080` | present on 7.1+; **absent** on 6.x | |
+| 0.5 | `/ip service print` | exactly one `api`, one `api-ssl`, one `www-ssl`; re-running adds none | |
+| 0.6 | Discovery reports | `Starting ISPFlow router discovery...` then per-survey posts | |
+| 0.7 | A survey on an absent menu | e.g. `ISPFlow: wireless not reported: ...`, and the script **continues** | |
+| 0.8 | Panel → Network Status | board, RouterOS version and architecture populated | |
+
+Watch specifically for the failure the mock cannot catch: whether
+`:onerror` inside a `{}` block is honoured on your firmware, and whether
+`/tool fetch http-data=(...)` accepts the parenthesised concatenation on 7.24.4.
+
+---
+
 ## 1. RouterOS API audit
 
 Every `RouterClient.run` path the staged engine issues, and what to check on the

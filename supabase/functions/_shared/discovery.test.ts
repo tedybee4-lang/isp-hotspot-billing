@@ -46,10 +46,22 @@ describe('the discovery script is RouterOS a router can actually run', () => {
 
   it('never sends a credential', () => {
     // The discovery token is the only secret in play, and it travels in the URL
-    // where the router already has it. No password, key or secret field.
-    for (const forbidden of ['password', 'secret', 'private-key', 'shared-key']) {
-      expect(script.toLowerCase()).not.toContain(forbidden)
+    // where the router already has it. No password, key or secret VALUE.
+    //
+    // `/ppp secret` is a MENU, not a credential: PPP accounts live there and
+    // must be read so provisioning can see them. Only a secret-bearing
+    // PROPERTY would be a leak, and none is requested from it.
+    const lower = script.toLowerCase()
+    for (const forbidden of ['password', 'private-key', 'shared-key',
+      'secret=', 'secret =', '"secret"', 'shared-secret']) {
+      expect(lower).not.toContain(forbidden)
     }
+    // The PPP secret menu is read for names and profiles only.
+    const pppSecretBlock = script.slice(
+      script.indexOf('/ppp secret/find'),
+      script.indexOf('/ppp secret/find') + 2000,
+    )
+    expect(pppSecretBlock).not.toMatch(/password/)
   })
 
   it('balances every block it opens', () => {
@@ -145,7 +157,18 @@ describe('the script is sized for the routers it must run on', () => {
     // RESPONSE body of one fetch - not on a script file the router streams to
     // disk and imports. That is why this bound is on the whole script rather
     // than per survey.
-    expect(buildDiscoveryScript(OPTS).length).toBeLessThan(48_000)
+    // Raised from 48 KB when PPPoE and RADIUS were split into the menus RouterOS
+  // actually uses (`/ppp secret`, `/interface/pppoe-server/server`,
+  // `/ppp profile`, `/radius`, `/ppp aaa`) and every value began passing through
+  // a JSON escaper. Both changes are correctness fixes: the old script filed
+  // HotSpot users under pppoe and produced invalid JSON for any value
+  // containing a quote.
+  //
+  // The 63 KiB manual figure is the cap on `output=user`, i.e. the RESPONSE body
+  // of one fetch - not on a script file the router streams to disk and imports.
+  // This bound is on the whole script, and it stays comfortably under 63 KiB so
+  // the script itself is never the thing that fails on a small device.
+  expect(buildDiscoveryScript(OPTS).length).toBeLessThan(63_000)
   })
 
   it('never assembles one document that a single fetch would have to carry', () => {
