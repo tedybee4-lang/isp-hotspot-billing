@@ -68,8 +68,36 @@ export interface DiscoveryOptions {
    * reported its version must not be told it lacks a feature nobody checked for.
    */
   major: number | null
+  /**
+   * RouterOS minor version, when known.
+   *
+   * `[:serialize to=json]` arrived in RouterOS 7.13 and is the only correct way
+   * to put a router's own free text into JSON: it escapes quotes, backslashes
+   * and control characters itself. Hand-escaping four levels deep (JSON, then
+   * RouterOS, then TypeScript) is exactly the kind of thing that is right until
+   * one device disagrees. Below 7.13 - and on every RouterOS 6 build - the
+   * script falls back to explicit `:replace` escaping, which works everywhere.
+   */
+  minor: number | null
   /** Short session id, so two routers provisioning at once stay apart. */
   tag: string
+}
+
+/**
+ * Which JSON strategy the generated script uses.
+ *
+ * `serialize` is the good path. `escape` is the fallback for RouterOS 6 and for
+ * RouterOS 7.1-7.12, and is deliberately chosen for an UNKNOWN version too:
+ * `:replace` runs on every firmware ISPFlow supports, so it is the conservative
+ * answer when we cannot prove `:serialize` exists.
+ */
+export type JsonMode = 'serialize' | 'escape'
+
+export function jsonMode(o: DiscoveryOptions): JsonMode {
+  if (o.major === null || o.major === undefined) return 'escape'
+  if (o.major > 7) return 'serialize'
+  if (o.major < 7) return 'escape'
+  return (o.minor ?? 0) >= 13 ? 'serialize' : 'escape'
 }
 
 /**
@@ -117,15 +145,35 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
 /**
  * A POST of a finished JSON document; the reply is discarded.
  *
- * The body is wrapped in parentheses. Without them, `http-data="{" . $o . "}"`
- * parses as a body of literally `{` followed by a dangling concatenation - the
- * quotes close the string immediately, so the survey would post `{"name":""}`
- * and silently drop everything the router had actually read. The parentheses
- * group the whole expression as one argument value.
+ * `method=POST` is the real RouterOS property name. (`http-method=post` appears
+ * in some reference scripts and is NOT valid RouterOS - the fetch fails and the
+ * survey is silently lost.)
+ *
+ * `check-certificate=yes` because RouterOS does not verify TLS by default, and
+ * this body carries the discovery token.
+ *
+ * `http-data` is parenthesised so the whole concatenation is one argument
+ * value; without the parentheses the quotes close the literal immediately and
+ * the body silently collapses.
+ *
+ * `keep-result=no` with `output=user` is valid on every RouterOS. It is NOT
+ * combined with `output=file`, which RouterOS rejects outright.
  */
 function post(url: string, body: string): string {
   return `/tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
     `output=user as-value http-data=(${body}) keep-result=no`
+}
+
+/** The scoped `:onerror` wrapper every survey is emitted inside. */
+function guard(key: Survey): string[] {
+  return [
+    // `in={...} do={...}` scopes the handler to this block. The older
+    // `:onerror e do={...}` followed by a bare `{ ... }` relied on the handler
+    // persisting for the rest of the script, which is not what it does.
+    `:onerror e in={`,
+    `  :put ("ISPFlow: ${key} not reported: " . $e)`,
+    `} do={`,
+  ]
 }
 
 /**
@@ -137,7 +185,85 @@ function post(url: string, body: string): string {
  * read into its own local first, because a property absent on one model would
  * otherwise abort the whole row and lose the interfaces around it.
  */
+/**
+ * NATIVE JSON. RouterOS 7.13 and later.
+ *
+ * The row is assembled as a RouterOS array literal and handed to
+ * `[:serialize to=json]`, which escapes every value itself. No value is ever
+ * concatenated into a JSON string, so a quote in a comment cannot produce
+ * malformed JSON - the failure that silently voided an entire survey.
+ *
+ * There is deliberately not one backslash in this function.
+ */
+function serializeRows(
+  menu: string,
+  fields: Array<[json: string, prop: string]>,
+  opts: DiscoveryOptions,
+  key: Survey,
+): string[] {
+  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
+  const out: string[] = ['', '# --- ' + key + ' ---', ...guard(key)]
+  out.push('  :local rows ""')
+  out.push(`  :foreach i in=[${menu}/find] do={`)
+  out.push('    :local r {}')
+  for (const [jsonKey, prop] of fields) {
+    out.push(`    :local v ($i->"${prop}")`)
+    // An unset property is an empty array. Skipping it keeps the payload to
+    // values that exist rather than a wall of empty arrays.
+    out.push(`    :if ([:typeof $v] != "array") do={ :set r ($r . "${jsonKey}"=$v) }`)
+  }
+  out.push('    :local j [:serialize to=json value=$r]')
+  out.push('    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }')
+  out.push('    :set rows ($rows . $j)')
+  out.push('  }')
+  out.push(`  ${post(url, '"[" . $rows . "]"')}`)
+  out.push('}')
+  return out
+}
+
+/** NATIVE JSON for the single-object surveys. */
+function serializeScalars(
+  key: Survey,
+  reads: Array<[json: string, routeros: string]>,
+  opts: DiscoveryOptions,
+): string[] {
+  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
+  const out: string[] = ['', '# --- ' + key + ' ---', ...guard(key)]
+  out.push('  :local r {}')
+  for (const [jsonKey, expr] of reads) {
+    out.push(`  :local v [${expr}]`)
+    out.push(`  :if ([:typeof $v] != "array") do={ :set r ($r . "${jsonKey}"=$v) }`)
+  }
+  out.push('  :local j [:serialize to=json value=$r]')
+  out.push(`  ${post(url, '$j')}`)
+  out.push('}')
+  return out
+}
+
+/** Row-collection block, using whichever JSON strategy the firmware supports. */
 function rows(
+  menu: string,
+  fields: Array<[json: string, prop: string]>,
+  opts: DiscoveryOptions,
+  key: Survey,
+): string[] {
+  return jsonMode(opts) === 'serialize'
+    ? serializeRows(menu, fields, opts, key)
+    : escapeRows(menu, fields, opts, key)
+}
+
+/** Single-object block, using whichever JSON strategy the firmware supports. */
+function scalars(
+  key: Survey,
+  reads: Array<[json: string, routeros: string]>,
+  opts: DiscoveryOptions,
+): string[] {
+  return jsonMode(opts) === 'serialize'
+    ? serializeScalars(key, reads, opts)
+    : escapeScalars(key, reads, opts)
+}
+
+function escapeRows(
   menu: string,
   fields: Array<[json: string, prop: string]>,
   opts: DiscoveryOptions,
@@ -193,7 +319,7 @@ function rows(
  * Used for the identity/resource style surveys, where there is exactly one row
  * and the interesting values are strings and numbers rather than a list.
  */
-function scalars(
+function escapeScalars(
   key: Survey,
   reads: Array<[json: string, routeros: string]>,
   opts: DiscoveryOptions,

@@ -157,8 +157,16 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
 
   it('B. never emits a standalone do={ block', () => {
     expect(script).not.toMatch(/^do=\{/m)
-    expect(script).not.toMatch(/^onerror\s/m)
+    // `:onerror e in={...} do={...}` is the VALID scoped form: `in=` names the
+    // block it guards and `do=` names the handler. What is invalid is a bare
+    // `do={` with no command, or a `:onerror` that is not attached to a block.
+    expect(script).not.toMatch(/^:onerror\s*$/m)
     expect(script).not.toMatch(/do=\{\/ip /)
+    // Every :onerror uses the scoped pair, so a failure cannot leak past its
+    // own survey.
+    for (const line of script.split('\n')) {
+      if (line.includes(':onerror')) expect(line).toMatch(/:onerror \w+ in=\{/)
+    }
   })
 
   it('C. never emits an undefined variable', () => {
@@ -227,14 +235,15 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
     }
     // Each survey is individually guarded, so one absent menu cannot stop the
     // rest. A syntax error would still stop it, which is why rule 1 exists.
-    expect((script.match(/:onerror e do=/g) ?? []).length)
+    expect((script.match(/:onerror e in={/g) ?? []).length)
       .toBeGreaterThanOrEqual(20)
   })
 
   it('M. JSON generation survives unsafe router values', () => {
-    // The escaper is applied to every value entering the document.
-    expect(script).toContain(':set j [:replace $p "\\\\" "\\\\\\\\"]')
-    expect(script).toContain(':set j [:replace $j "\\"" "\\\\\\""]')
+    // RouterOS escapes the values itself on 7.13+, so no string of the
+    // router's own making is ever concatenated into the document.
+    expect(script).toContain('[:serialize to=json')
+    expect(script).not.toContain('[:replace')
     // And the resulting document is what the server parses.
     for (const line of script.split('\n')) {
       if (line.includes('http-data')) expect(line).not.toMatch(/secret|password/i)
@@ -294,9 +303,14 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
   it('has no standalone do block, which was the line-5 failure', () => {
     expect(script).not.toMatch(/^do=\{/m)
     expect(script).not.toMatch(/^onerror\s/m)
-    // Every `do={` must belong to a command on the same line.
+    // Every `do={` must either belong to a command on the same line, or be the
+    // `do={` half of a scoped `:onerror e in={...} do={...}` pair - which closes
+    // the previous block and is not a standalone statement.
     for (const line of script.split('\n')) {
-      if (line.includes('do={')) expect(line.trim()).toMatch(/^[:/].*do=\{/)
+      const t = line.trim()
+      if (!t.includes('do={')) continue
+      if (/^\}\s*do=\{$/.test(t)) continue
+      expect(t).toMatch(/^[:/].*do=\{/)
     }
   })
 
@@ -352,9 +366,13 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
   it('escapes router values before they enter JSON', () => {
     // A comment containing a quote previously produced invalid JSON and the
     // server silently discarded the entire survey.
-    expect(script).toContain(':set j [:replace $p "\\\\" "\\\\\\\\"]')
-    expect(script).toContain(':set j [:replace $j "\\"" "\\\\\\""]')
-    // Backslash before quote, always.
+    expect(script).toContain(':local j [:serialize to=json value=$r]')
+    // On 7.13+ nothing is hand-escaped: RouterOS does it.
+    expect(script).not.toContain('[:replace')
+    // And the fallback is still exercised where it belongs - below 7.13.
+    const ros6 = bootstrap('6.49.10', 'x86_64')
+    expect(ros6).not.toContain(':serialize to=json')
+    expect(ros6).toContain('[:replace')
     const steps = jsonEscapeSteps('p', 'j')
     expect(steps[0]).toContain('$p')
     expect(steps[1]).not.toContain('$p')
@@ -432,7 +450,7 @@ describe('a router without optional packages', () => {
     for (const menu of ['/certificate', '/interface wireless', '/caps-man manager']) {
       expect(script).toContain(`${menu}/find`)
     }
-    expect((script.match(/:onerror e do=/g) ?? []).length).toBeGreaterThan(20)
+    expect((script.match(/:onerror e in={/g) ?? []).length).toBeGreaterThan(20)
   })
 
   it('names the survey that was skipped, so absence is never silent', () => {

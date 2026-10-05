@@ -1,0 +1,49 @@
+Use native RouterOS JSON (:serialize) and scoped :onerror for discovery
+
+Integrates the RouterOS 7.24.4 reference bootstrap into the production
+generator, keeping the real ISPFlow endpoint, token and session handling.
+
+The hand-written JSON builder is gone from the 7.13+ path. Every survey now
+builds a RouterOS array literal and hands it to [:serialize to=json], which
+escapes values itself. That removes three nested escaping layers - JSON, then
+RouterOS, then TypeScript - where one wrong backslash silently voided an entire
+survey. The generator's JSON output halves:
+
+    before  57895 bytes / 1647 lines
+    after   30796 bytes /  695 lines
+
+Every survey is now wrapped in the scoped form:
+
+    :onerror e in={ ... } do={ ... }
+
+The previous `:onerror e do={...}` followed by a bare `{ ... }` relied on the
+handler persisting for the rest of the script, which is not what it does. The
+scoped pair confines a failure - a missing /certificate or /caps-man package -
+to its own survey.
+
+RouterOS 6 fallback preserved and verified: `[:serialize]` does not exist below
+7.13, so those builds keep explicit :replace escaping. jsonMode() also selects
+the fallback for an UNKNOWN version, because :replace runs on every firmware
+ISPFlow supports.
+
+Two fixes found while integrating:
+
+  - `http-data=(($j))` emitted a doubled grouping. The fetch still ran, so it
+    was invisible until the argument was compared against the post() wrapper.
+  - `http-method=post` in the reference script is NOT a RouterOS property. The
+    correct name is `method=POST`, which is what is emitted. The validator now
+    rejects `http-method` explicitly.
+
+Validator extended with three rules (http-method, doubled http-data parens,
+mixed JSON strategies) and taught that `} do={` is the valid close of an
+`:onerror` pair, not a standalone statement.
+
+Unchanged: the per-survey POST contract, payload schema, survey keys, token and
+session handling, NETISP tags, tenant isolation, and every other subsystem.
+
+Tests: 968 pass, 0 failed. Root typecheck clean, frontend and worker builds
+clean, the three pre-existing PayHero errors unchanged.
+
+Physical MikroTik validation: NOT PERFORMED by me. The :serialize and
+:onerror forms are integrated on the basis of the operator's own RouterOS
+7.24.4 CHR report.

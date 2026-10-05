@@ -42,6 +42,7 @@ export function bootstrap(
     // `major` is nullable on purpose: an unidentified router must reach the
     // discovery script as unknown, not be quietly rounded down to 6.
     major: parsed?.major ?? null,
+    minor: parsed?.minor ?? null,
     tag: TAG,
   })
   return `${access}\n${trailer}\n${discovery}`

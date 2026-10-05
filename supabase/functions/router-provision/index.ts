@@ -372,6 +372,10 @@ async function buildDiscoveryTail(
     // Guessing 7 would be worse: it sends a 6.x box a path it does not have.
     // null means unknown, and the script says exactly that.
     major: parsed?.major ?? null,
+    // The minor version selects the JSON strategy: `[:serialize to=json]`
+    // exists from 7.13. Below that - and on every RouterOS 6 build - the script
+    // falls back to `:replace` escaping, which runs everywhere.
+    minor: parsed?.minor ?? null,
     tag,
   })
 }

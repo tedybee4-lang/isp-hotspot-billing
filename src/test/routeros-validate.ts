@@ -51,6 +51,9 @@ export function validateRouterOsScript(script: string): ValidationIssue[] {
   // "expected end of command". This is the exact line-5 failure.
   lines.forEach((l, i) => {
     if (isComment(raw[i])) return
+    // `} do={` closes the `in={...}` half of an `:onerror` pair and opens the
+    // `do={...}` half. That is valid and is how every survey is guarded.
+    if (/^\s*\}\s*do=\{\s*$/.test(l)) return
     if (/^\s*(do=|onerror\s)/.test(l)) {
       add(i, 'standalone-do', '`do=`/`onerror=` with no command to attach it to')
     }
@@ -159,8 +162,30 @@ export function validateRouterOsScript(script: string): ValidationIssue[] {
     if (/keep-result/.test(l) && /output=file/.test(l)) {
       add(i, 'fetch-output', 'keep-result with output=file is rejected by RouterOS')
     }
+    if (/http-method/i.test(l)) {
+      add(i, 'fetch-insecure', 'http-method is not a RouterOS property; use method=POST')
+    }
     if (/mode=http\b/.test(l) && !/mode=https/.test(l)) {
       add(i, 'fetch-insecure', 'plaintext HTTP fallback')
+    }
+    // `http-data=(($j))` - a doubled grouping on the BODY argument. Only the
+    // argument is checked; a legitimate nested call such as `[:len ($x)]` or
+    // an `https://` URL is not a doubled group.
+    if (/http-data=\(\(/.test(l)) {
+      add(i, 'fetch-body', 'doubled parentheses around the http-data body')
+    }
+  })
+
+  // --- 5b. JSON strategy ------------------------------------------------
+  // `[:serialize to=json]` is RouterOS 7.13+. Where it is used, hand-escaping
+  // is dead weight and a second, divergent way to build JSON. Where it is not
+  // available, something must escape.
+  const usesSerialize = /:serialize to=json/.test(script)
+  lines.forEach((l, i) => {
+    if (isComment(raw[i])) return
+    if (usesSerialize && /\[:replace/.test(l)) {
+      add(i, 'json-strategy',
+        'hand-escaping is present alongside :serialize; only one JSON strategy should emit')
     }
   })
 

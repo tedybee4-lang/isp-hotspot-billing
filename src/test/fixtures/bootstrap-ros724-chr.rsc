@@ -42,1602 +42,650 @@
 :put "";
 
 # --- identity ---
-:onerror e do={ :put ("ISPFlow: identity not reported: " . $e) }
-{
-  :local o "";
-  :local j ""
-  :local p [/system identity/get name]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"name\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get version]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"version\":\"" . $j . "\"")
-  }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=identity&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("{" . $o . "}") keep-result=no
+:onerror e in={
+  :put ("ISPFlow: identity not reported: " . $e)
+} do={
+  :local r {}
+  :local v [/system identity/get name]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+  :local v [/system resource/get version]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "version"=$v) }
+  :local j [:serialize to=json value=$r]
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=identity&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=($j) keep-result=no
 }
 
 # --- resource ---
-:onerror e do={ :put ("ISPFlow: resource not reported: " . $e) }
-{
-  :local o "";
-  :local j ""
-  :local p [/system resource/get board-name]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"board_name\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get platform]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"platform\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get architecture-name]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"architecture\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get cpu]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"cpu\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get cpu-count]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"cpu_count\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get cpu-load]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"cpu_load\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get free-memory]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"free_memory\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get total-memory]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"total_memory\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get free-hdd-space]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"free_hdd\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get total-hdd-space]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"total_hdd\":\"" . $j . "\"")
-  }
-  :local p [/system resource/get uptime]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"uptime\":\"" . $j . "\"")
-  }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=resource&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("{" . $o . "}") keep-result=no
+:onerror e in={
+  :put ("ISPFlow: resource not reported: " . $e)
+} do={
+  :local r {}
+  :local v [/system resource/get board-name]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "board_name"=$v) }
+  :local v [/system resource/get platform]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "platform"=$v) }
+  :local v [/system resource/get architecture-name]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "architecture"=$v) }
+  :local v [/system resource/get cpu]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "cpu"=$v) }
+  :local v [/system resource/get cpu-count]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "cpu_count"=$v) }
+  :local v [/system resource/get cpu-load]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "cpu_load"=$v) }
+  :local v [/system resource/get free-memory]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "free_memory"=$v) }
+  :local v [/system resource/get total-memory]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "total_memory"=$v) }
+  :local v [/system resource/get free-hdd-space]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "free_hdd"=$v) }
+  :local v [/system resource/get total-hdd-space]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "total_hdd"=$v) }
+  :local v [/system resource/get uptime]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "uptime"=$v) }
+  :local j [:serialize to=json value=$r]
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=resource&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=($j) keep-result=no
 }
 
 # --- board ---
-:onerror e do={ :put ("ISPFlow: board not reported: " . $e) }
-{
-  :local o "";
-  :local j ""
-  :local p [/system routerboard/get serial-number]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"serial_number\":\"" . $j . "\"")
-  }
-  :local p [/system routerboard/get model]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"model\":\"" . $j . "\"")
-  }
-  :local p [/system routerboard/get firmware-type]
-  :if ([:typeof $p] = "array") do={ :set p "" }
-  :if ($p != "") do={
-    :local s ""
-    :if ([:len $o] > 0) do={ :set s "," }
-    :set j [:replace $p "\\" "\\\\"]
-    :set j [:replace $j "\"" "\\\""]
-    :set o ($o . $s . "\"firmware_type\":\"" . $j . "\"")
-  }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=board&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("{" . $o . "}") keep-result=no
+:onerror e in={
+  :put ("ISPFlow: board not reported: " . $e)
+} do={
+  :local r {}
+  :local v [/system routerboard/get serial-number]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "serial_number"=$v) }
+  :local v [/system routerboard/get model]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "model"=$v) }
+  :local v [/system routerboard/get firmware-type]
+  :if ([:typeof $v] != "array") do={ :set r ($r . "firmware_type"=$v) }
+  :local j [:serialize to=json value=$r]
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=board&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=($j) keep-result=no
 }
 
 # --- packages ---
-:onerror e do={ :put ("ISPFlow: packages not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: packages not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/system package/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"version")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"version\":\"" . $j . "\"")
-    }
-    :local p ($i->"installed")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"installed\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"version")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "version"=$v) }
+    :local v ($i->"installed")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "installed"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=packages&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- interfaces ---
-:onerror e do={ :put ("ISPFlow: interfaces not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: interfaces not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/interface/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"type")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"type\":\"" . $j . "\"")
-    }
-    :local p ($i->"running")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"running\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"mtu")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"mtu\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"type")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "type"=$v) }
+    :local v ($i->"running")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "running"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"mtu")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "mtu"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=interfaces&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- bridges ---
-:onerror e do={ :put ("ISPFlow: bridges not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: bridges not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/interface bridge/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"vlan-filtering")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"vlan_filtering\":\"" . $j . "\"")
-    }
-    :local p ($i->"pvid")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"pvid\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"vlan-filtering")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "vlan_filtering"=$v) }
+    :local v ($i->"pvid")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "pvid"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=bridges&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- vlans ---
-:onerror e do={ :put ("ISPFlow: vlans not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: vlans not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/interface vlan/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"interface")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"interface\":\"" . $j . "\"")
-    }
-    :local p ($i->"vlan-id")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"vlan_id\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"interface")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "interface"=$v) }
+    :local v ($i->"vlan-id")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "vlan_id"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=vlans&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- addresses ---
-:onerror e do={ :put ("ISPFlow: addresses not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: addresses not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip address/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"address\":\"" . $j . "\"")
-    }
-    :local p ($i->"network")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"network\":\"" . $j . "\"")
-    }
-    :local p ($i->"interface")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"interface\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "address"=$v) }
+    :local v ($i->"network")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "network"=$v) }
+    :local v ($i->"interface")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "interface"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=addresses&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- dhcp ---
-:onerror e do={ :put ("ISPFlow: dhcp not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: dhcp not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip dhcp-server/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"interface")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"interface\":\"" . $j . "\"")
-    }
-    :local p ($i->"address-pool")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"address_pool\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"interface")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "interface"=$v) }
+    :local v ($i->"address-pool")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "address_pool"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=dhcp&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- pools ---
-:onerror e do={ :put ("ISPFlow: pools not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: pools not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip pool/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"ranges")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"ranges\":\"" . $j . "\"")
-    }
-    :local p ($i->"next-pool")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"next_pool\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"ranges")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "ranges"=$v) }
+    :local v ($i->"next-pool")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "next_pool"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pools&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- hotspot ---
-:onerror e do={ :put ("ISPFlow: hotspot not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: hotspot not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip hotspot/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"interface")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"interface\":\"" . $j . "\"")
-    }
-    :local p ($i->"address-pool")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"address_pool\":\"" . $j . "\"")
-    }
-    :local p ($i->"profile")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"profile\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"interface")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "interface"=$v) }
+    :local v ($i->"address-pool")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "address_pool"=$v) }
+    :local v ($i->"profile")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "profile"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=hotspot&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- hotspot ---
-:onerror e do={ :put ("ISPFlow: hotspot not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: hotspot not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip hotspot user/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"profile")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"profile\":\"" . $j . "\"")
-    }
-    :local p ($i->"server")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"server\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"profile")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "profile"=$v) }
+    :local v ($i->"server")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "server"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=hotspot&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- pppoe ---
-:onerror e do={ :put ("ISPFlow: pppoe not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: pppoe not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ppp secret/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"service")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"service\":\"" . $j . "\"")
-    }
-    :local p ($i->"profile")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"profile\":\"" . $j . "\"")
-    }
-    :local p ($i->"remote-address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"remote_address\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"service")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "service"=$v) }
+    :local v ($i->"profile")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "profile"=$v) }
+    :local v ($i->"remote-address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "remote_address"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- pppoe-servers ---
-:onerror e do={ :put ("ISPFlow: pppoe-servers not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: pppoe-servers not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/interface pppoe-server server/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"service-name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"service_name\":\"" . $j . "\"")
-    }
-    :local p ($i->"max-mtu")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"max_mtu\":\"" . $j . "\"")
-    }
-    :local p ($i->"authentication")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"authentication\":\"" . $j . "\"")
-    }
-    :local p ($i->"one-session-per-host")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"one_session_per_host\":\"" . $j . "\"")
-    }
-    :local p ($i->"keepalive-timeout")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"keepalive_timeout\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"service-name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "service_name"=$v) }
+    :local v ($i->"max-mtu")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "max_mtu"=$v) }
+    :local v ($i->"authentication")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "authentication"=$v) }
+    :local v ($i->"one-session-per-host")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "one_session_per_host"=$v) }
+    :local v ($i->"keepalive-timeout")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "keepalive_timeout"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe-servers&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- pppoe-profiles ---
-:onerror e do={ :put ("ISPFlow: pppoe-profiles not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: pppoe-profiles not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ppp profile/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"local-address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"local_address\":\"" . $j . "\"")
-    }
-    :local p ($i->"remote-address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"remote_address\":\"" . $j . "\"")
-    }
-    :local p ($i->"use-compression")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"use_compression\":\"" . $j . "\"")
-    }
-    :local p ($i->"use-encryption")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"use_encryption\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"local-address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "local_address"=$v) }
+    :local v ($i->"remote-address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "remote_address"=$v) }
+    :local v ($i->"use-compression")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "use_compression"=$v) }
+    :local v ($i->"use-encryption")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "use_encryption"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe-profiles&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- radius ---
-:onerror e do={ :put ("ISPFlow: radius not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: radius not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/radius/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"address\":\"" . $j . "\"")
-    }
-    :local p ($i->"port")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"port\":\"" . $j . "\"")
-    }
-    :local p ($i->"timeout")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"timeout\":\"" . $j . "\"")
-    }
-    :local p ($i->"src-address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"src_address\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "address"=$v) }
+    :local v ($i->"port")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "port"=$v) }
+    :local v ($i->"timeout")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "timeout"=$v) }
+    :local v ($i->"src-address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "src_address"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=radius&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- radius-aaa ---
-:onerror e do={ :put ("ISPFlow: radius-aaa not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: radius-aaa not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ppp aaa/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"use-radius")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"use-radius\":\"" . $j . "\"")
-    }
-    :local p ($i->"radius-interim-update")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"radius-interim-update\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"use-radius")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "use-radius"=$v) }
+    :local v ($i->"radius-interim-update")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "radius-interim-update"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=radius-aaa&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- firewall ---
-:onerror e do={ :put ("ISPFlow: firewall not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: firewall not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip firewall filter/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"chain")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"chain\":\"" . $j . "\"")
-    }
-    :local p ($i->"action")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"action\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"chain")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "chain"=$v) }
+    :local v ($i->"action")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "action"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=firewall&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- nat ---
-:onerror e do={ :put ("ISPFlow: nat not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: nat not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip firewall nat/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"chain")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"chain\":\"" . $j . "\"")
-    }
-    :local p ($i->"action")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"action\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"to-addresses")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"to_addresses\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"chain")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "chain"=$v) }
+    :local v ($i->"action")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "action"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"to-addresses")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "to_addresses"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=nat&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- routes ---
-:onerror e do={ :put ("ISPFlow: routes not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: routes not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip route/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"dst-address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"dst_address\":\"" . $j . "\"")
-    }
-    :local p ($i->"gateway")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"gateway\":\"" . $j . "\"")
-    }
-    :local p ($i->"distance")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"distance\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"dst-address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "dst_address"=$v) }
+    :local v ($i->"gateway")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "gateway"=$v) }
+    :local v ($i->"distance")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "distance"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=routes&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- dns ---
-:onerror e do={ :put ("ISPFlow: dns not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: dns not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip dns/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"servers")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"servers\":\"" . $j . "\"")
-    }
-    :local p ($i->"dynamic-servers")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"dynamic_servers\":\"" . $j . "\"")
-    }
-    :local p ($i->"allow-remote-requests")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"allow_remote_requests\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"servers")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "servers"=$v) }
+    :local v ($i->"dynamic-servers")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "dynamic_servers"=$v) }
+    :local v ($i->"allow-remote-requests")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "allow_remote_requests"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=dns&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- wireguard ---
-:onerror e do={ :put ("ISPFlow: wireguard not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: wireguard not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/interface wireguard/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"listen-port")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"listen_port\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"listen-port")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "listen_port"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=wireguard&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- services ---
-:onerror e do={ :put ("ISPFlow: services not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: services not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip service/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"port")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"port\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"address")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"address\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"port")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "port"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"address")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "address"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=services&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- certificates ---
-:onerror e do={ :put ("ISPFlow: certificates not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: certificates not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/certificate/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"common-name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"common_name\":\"" . $j . "\"")
-    }
-    :local p ($i->"invalid-after")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"invalid_after\":\"" . $j . "\"")
-    }
-    :local p ($i->"expired")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"expired\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"common-name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "common_name"=$v) }
+    :local v ($i->"invalid-after")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "invalid_after"=$v) }
+    :local v ($i->"expired")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "expired"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=certificates&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- wireless ---
-:onerror e do={ :put ("ISPFlow: wireless not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: wireless not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/interface wireless/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"ssid")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"ssid\":\"" . $j . "\"")
-    }
-    :local p ($i->"mode")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"mode\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"ssid")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "ssid"=$v) }
+    :local v ($i->"mode")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "mode"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=wireless&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- capsman ---
-:onerror e do={ :put ("ISPFlow: capsman not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: capsman not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/caps-man manager/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"enabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"enabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"certificate")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"certificate\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"enabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "enabled"=$v) }
+    :local v ($i->"certificate")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "certificate"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=capsman&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- ispflow ---
-:onerror e do={ :put ("ISPFlow: ispflow not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: ispflow not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/ip firewall filter/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"chain")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"chain\":\"" . $j . "\"")
-    }
-    :local p ($i->"action")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"action\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"chain")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "chain"=$v) }
+    :local v ($i->"action")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "action"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=ispflow&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- scheduler ---
-:onerror e do={ :put ("ISPFlow: scheduler not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: scheduler not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/system scheduler/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"interval")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"interval\":\"" . $j . "\"")
-    }
-    :local p ($i->"disabled")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"disabled\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"interval")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "interval"=$v) }
+    :local v ($i->"disabled")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "disabled"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=scheduler&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
 
 # --- backup ---
-:onerror e do={ :put ("ISPFlow: backup not reported: " . $e) }
-{
-  :local rows "";
+:onerror e in={
+  :put ("ISPFlow: backup not reported: " . $e)
+} do={
+  :local rows ""
   :foreach i in=[/system script/find] do={
-    :local o "";
-    :local j ""
-    :local p ($i->"name")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"name\":\"" . $j . "\"")
-    }
-    :local p ($i->"comment")
-    :if ([:typeof $p] = "array") do={ :set p "" }
-    :if ($p != "") do={
-      :set j [:replace $p "\\" "\\\\"]
-      :set j [:replace $j "\"" "\\\""]
-      :local s ""
-      :if ([:len $o] > 0) do={ :set s "," }
-      :set o ($o . $s . "\"comment\":\"" . $j . "\"")
-    }
-    :if ([:len $o] > 0) do={
-      :local s ""
-      :if ([:len $rows] > 0) do={ :set s "," }
-      :set rows ($rows . $s . "{" . $o . "}")
-    }
+    :local r {}
+    :local v ($i->"name")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "name"=$v) }
+    :local v ($i->"comment")
+    :if ([:typeof $v] != "array") do={ :set r ($r . "comment"=$v) }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
   }
   /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=backup&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
 }
