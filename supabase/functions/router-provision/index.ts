@@ -26,7 +26,11 @@
 // =============================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { buildAccessScript, buildRouterScript } from '../_shared/capabilities.ts'
+import {
+  buildAccessScript,
+  buildRouterScript,
+  parseClaimSelfReport,
+} from '../_shared/capabilities.ts'
 import { buildCompatibility, parseVersion, type CompatibilityProfile } from '../_shared/compat.ts'
 import { buildDiscoveryScript, SURVEYS } from '../_shared/discovery.ts'
 import { assessLockout, type DiscoveredInterface } from '../_shared/lockout.ts'
@@ -153,16 +157,27 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
   const sessionId = result.session_id!
   const ispId = result.isp_id!
 
-  // What the router chose to tell us about itself. Every field is optional: a
-  // stripped-down script on an RB941 may only send `version`.
+  // What the router chose to tell us about itself, parsed strictly.
+  //
+  // Only `vm` (major.minor) and `arch` travel in the claim URL, because only
+  // those are guaranteed free of characters that break a request target. The
+  // previous version concatenated `board-name` and the router identity into the
+  // URL raw; a CHR reports "CHR innotek GmbH VirtualBox", and the space made the
+  // request target invalid, so the edge gateway answered 400 Bad Request before
+  // this function ever ran - the router saw a dead endpoint while the endpoint
+  // was perfectly healthy. Both values still reach us, from the discovery
+  // survey appended to this very response.
+  const selfReport = parseClaimSelfReport(url.searchParams)
+
   const detected = {
     caller_ip: sourceIp,
-    identity: url.searchParams.get('id'),
-    version: url.searchParams.get('version'),
-    board: url.searchParams.get('board'),
-    architecture: url.searchParams.get('arch') ?? url.searchParams.get('arch2'),
-    uptime: url.searchParams.get('uptime'),
-    firmware: url.searchParams.get('firmware'),
+    // Left null here on purpose; filled from the discovery survey.
+    identity: null as string | null,
+    version: selfReport.version,
+    board: null as string | null,
+    architecture: selfReport.architecture,
+    uptime: null as string | null,
+    firmware: null as string | null,
     claimed_at: new Date().toISOString(),
   }
 
@@ -173,7 +188,10 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
 
   // Register the router under the session's ISP. The token is what binds it: a
   // router holding ISP A's token can only ever land under ISP A.
-  const label = detected.board || detected.identity || result.label || 'Provisioned router'
+  // A human-readable name. The board is no longer in the claim URL, so this is
+  // the ISP's own label from the session, with the identity as a fallback.
+  // board_name and identity both arrive from the discovery survey moments later.
+  const label = detected.identity || result.label || 'Provisioned router'
 
   const { data: node, error: nodeErr } = await admin
     .from('nodes')

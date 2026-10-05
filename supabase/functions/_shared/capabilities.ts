@@ -223,10 +223,33 @@ export function buildProvisioningCommand(opts: {
     // and no WireGuard - because nobody ever asked it. Reading the values here,
     // on the device that owns them, is the fix; inventing a second version
     // detector on the server would only hide the same gap differently.
-    '  :local v [/system/resource/get version];',
-    '  :local b [/system/resource/get board-name];',
-    '  :local a [/system/resource/get architecture-name];',
-    '  :local n [/system/identity/get name];',
+    //
+    // ---------------------------------------------------------------------
+    // ONLY values that are URL-safe BY CONSTRUCTION may go in the URL.
+    // ---------------------------------------------------------------------
+    // `board-name` and the router identity are free text and must never be
+    // concatenated here. A real CHR reports:
+    //
+    //     board-name = "CHR innotek GmbH VirtualBox"
+    //
+    // A literal space makes the request target invalid, and the edge gateway
+    // answers `400 Bad Request` before this function is ever entered. That is
+    // exactly what a real RouterOS 7.24.4 CHR did against a perfectly healthy
+    // endpoint: HTTP 400, 0 KiB downloaded. `&`, `?`, `#` and `%` are worse -
+    // they forge extra parameters or truncate the URL. Neither value is lost by
+    // staying out: the discovery survey appended to the claim response already
+    // reports identity and board_name, in a JSON body where arbitrary text is
+    // safe.
+    //
+    // The version is not safe either. RouterOS 6 returns "6.49.10 (long-term)"
+    // - spaces and parentheses - so the raw string breaks a 6.x router exactly
+    // the same way. Only the numeric prefix is sent, and that is all
+    // `buildCompatibility` needs to decide REST (7.1+) and WireGuard (7.0+).
+    // The server rebuilds `major.minor` from it.
+    '  :local ispFlowVer [/system/resource/get version];',
+    '  :local ispFlowArch [/system/resource/get architecture-name];',
+    '  :local ispFlowMajor [:pick $ispFlowVer 0 1];',
+    '  :local ispFlowMinor [:pick $ispFlowVer 2 2];',
     // output=file is REQUIRED. `output=none` tells RouterOS to discard the
     // fetched bytes instead of writing dst-path, so the file check below could
     // never succeed and every router failed with "could not reach the
@@ -249,7 +272,19 @@ export function buildProvisioningCommand(opts: {
     // imports the file and then deletes it. The syntax confirmed working on that
     // exact device is: url=... mode=https check-certificate=yes output=file
     // dst-path=$f
-    '  /tool fetch url=($u . "?token=" . $t . "&version=" . $v . "&board=" . $b . "&arch=" . $a . "&id=" . $n) mode=https check-certificate=yes output=file dst-path=$f;',
+    // The claim URL carries the token and NOTHING ELSE that a router controls.
+    //
+    // `vm` is major.minor, e.g. "7.24" for 7.24.4. `arch` is an architecture
+    // token from `/system/resource`, which is always `[a-z0-9_]`. Neither can
+    // contain a character that breaks a request target, so no encoding is needed
+    // and none is attempted: RouterOS has no dependable URL-encode primitive on
+    // every supported firmware, and a hand-rolled one would be another way to
+    // be wrong on a real device.
+    //
+    // board-name and identity are deliberately ABSENT. They are free text, they
+    // are what caused this 400, and the discovery survey in the same response
+    // already reports both.
+    '  /tool fetch url=($u . "?token=" . $t . "&vm=" . $ispFlowMajor . "." . $ispFlowMinor . "&arch=" . $ispFlowArch) mode=https check-certificate=yes output=file dst-path=$f;',
     '  :if ([:len [/file find name=$f]] = 0) do={',
     '    :error "ISPFlow: could not reach the provisioning endpoint.";',
     '  }',
@@ -258,6 +293,38 @@ export function buildProvisioningCommand(opts: {
     '}',
   ].join('\n')
 }
+/**
+ * Reads the router's self-report out of a claim URL's query parameters.
+ *
+ * Strictly validating, not permissively. Everything here arrives from a device
+ * the platform has not authenticated yet, and the only parameter that matters
+ * for security - the token - is handled by the caller. These values end up in
+ * `nodes.routeros_version` and `buildCompatibility`, which decides whether the
+ * router is sent RouterOS 7 commands. A crafted `vm` must not be able to talk
+ * the server into treating a RouterOS 6 box as 7.x.
+ *
+ * `vm` is major.minor, which is what `buildCompatibility` actually needs; the
+ * patch level never changes a feature gate.
+ */
+export function parseClaimSelfReport(params: URLSearchParams): {
+  version: string | null
+  architecture: string | null
+} {
+  // Exactly `N.N`. Anything else is discarded and the version stays unknown,
+  // which the compatibility engine treats as "do not send version-specific
+  // commands" - the safe direction.
+  const vm = params.get('vm') ?? ''
+  const version = /^[1-9][0-9]?\.[0-9]{1,2}$/.test(vm) ? vm : null
+
+  // `/system/resource/get architecture-name` returns a fixed token set such as
+  // x86_64, arm, mipsbe. A realistic bound, so an architecture string cannot be
+  // used as free storage.
+  const arch = params.get('arch') ?? ''
+  const architecture = /^[a-z0-9_]{1,24}$/.test(arch) ? arch : null
+
+  return { version, architecture }
+}
+
 /**
  * The tail of the configuration: the services and tunnel a router needs before
  * the worker can manage it.

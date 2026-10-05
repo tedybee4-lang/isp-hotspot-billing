@@ -17,7 +17,7 @@
  * those assertions are below, because both were wrong in the same release.
  */
 import {
-  buildAccessScript, buildProvisioningCommand, buildRouterScript,
+  buildAccessScript, buildProvisioningCommand, buildRouterScript, parseClaimSelfReport,
 } from '../../supabase/functions/_shared/capabilities.ts'
 import { buildCompatibility, type CompatibilityProfile } from '../../supabase/functions/_shared/compat.ts'
 import { describe, expect, it } from 'vitest'
@@ -265,20 +265,141 @@ describe('safety properties survived the syntax fix', () => {
   })
 })
 
+// ============================================================================
+//  The HTTP 400 on a real RouterOS 7.24.4 CHR.
+//
+//  Real values from that router:
+//    board-name = "CHR innotek GmbH VirtualBox"
+//    version    = "7.24.4"
+//    arch       = "x86_64"
+//
+//  These reproduce the exact request the generated command makes and assert the
+//  handler accepts it. An identity full of URL-significant characters is proven
+//  NOT to reach the request target at all.
+// ============================================================================
+describe('the claim URL survives a real CHR identity', () => {
+  const CLAIM = 'https://demo.supabase.co/functions/v1/router-provision'
+  const TOKEN = 'a'.repeat(48)
+
+  /**
+   * Builds the URL the generated command produces, given the values the router
+   * would substitute. The two `:pick` calls are mirrored exactly, because the
+   * point of the fix is what the ROUTER sends, not what the server accepts.
+   */
+  function claimUrl(rawVersion: string, arch: string): URL {
+    buildProvisioningCommand({ claimUrl: CLAIM, token: TOKEN })
+    const pick = (start: number, len: number) => rawVersion.slice(start, start + len)
+    const major = pick(0, 1)
+    const minor = pick(2, 2)
+    // `new URL` is the check that matters: it performs the same request-target
+    // parse the edge gateway does, and it is what rejected the raw board name.
+    return new URL(`${CLAIM}?token=${TOKEN}&vm=${major}.${minor}&arch=${arch}`)
+  }
+
+  it('accepts the exact values reported by the CHR', () => {
+    const url = claimUrl('7.24.4', 'x86_64')
+    expect(url.searchParams.get('token')).toBe(TOKEN)
+    expect(url.searchParams.get('vm')).toBe('7.24')
+    expect(url.searchParams.get('arch')).toBe('x86_64')
+
+    // And the handler reads them.
+    const report = parseClaimSelfReport(url.searchParams)
+    expect(report.version).toBe('7.24')
+    expect(report.architecture).toBe('x86_64')
+
+    // So RouterOS 7.24.4 is classified as 7.x, and REST and WireGuard are NOT
+    // falsely reported unavailable - the false claim that prompted all this.
+    const profile = buildCompatibility(report.version, report.architecture, null)
+    expect(profile.rest).toBe(true)
+    expect(profile.wireGuard).toBe(true)
+    expect(profile.versionKnown).toBe(true)
+  })
+
+  it.each([
+    ['CHR innotek GmbH VirtualBox', 'the real board-name, with spaces'],
+    ['RB & Co "quoted"', 'an ampersand and quotes'],
+    ['100% router', 'a percent sign'],
+    ['a/b?c#d', 'a slash, question mark and fragment'],
+  ])('never places the identity %s in the request target', (identity) => {
+    // board-name and identity are not sent at all, so no character of either
+    // can corrupt the URL: not a space, not an `&` forging a parameter, not a
+    // `#` truncating it.
+    const url = claimUrl('7.24.4', 'x86_64')
+    expect(url.href).not.toContain(identity)
+    expect(url.href).not.toMatch(/ /)
+    // Only the token and the two safe parameters exist. An extra `arch` smuggled
+    // in through an ampersand would show up here as a duplicate key.
+    expect([...url.searchParams.keys()].sort()).toEqual(['arch', 'token', 'vm'])
+  })
+
+  it('keeps a RouterOS 6 router reporting 6.x', () => {
+    // "6.49.10 (long-term)" contains a space and parentheses. Only the numeric
+    // prefix travels, so a 6.x box is still correctly identified, and is
+    // therefore never sent RouterOS 7 commands.
+    const url = claimUrl('6.49.10 (long-term)', 'mipsbe')
+    expect(url.href).not.toMatch(/ /)
+    const report = parseClaimSelfReport(url.searchParams)
+    expect(report.version).toBe('6.49')
+    expect(buildCompatibility(report.version, null, null).rest).toBe(false)
+  })
+
+  it('rejects a crafted vm rather than trusting it', () => {
+    // Validation, not loosening. These reach `buildCompatibility`, which decides
+    // whether the router is sent RouterOS 7 commands, so anything not plainly
+    // `N.N` is discarded and the version stays unknown.
+    for (const bad of [
+      '7.24.4', '7.', '.24', '7', 'v7.24', '7.24abc', '07.24',
+      '7.24&arch=evil', '7.24 ', '999999.999', '',
+    ]) {
+      expect(
+        parseClaimSelfReport(new URLSearchParams({ vm: bad })).version,
+        `vm=${JSON.stringify(bad)}`,
+      ).toBeNull()
+    }
+  })
+
+  it('rejects an architecture that is not a resource token', () => {
+    for (const bad of ['x86 64', 'x86_64&vm=7.24', 'A'.repeat(40), '', 'x86/64']) {
+      expect(parseClaimSelfReport(new URLSearchParams({ arch: bad })).architecture).toBeNull()
+    }
+  })
+
+  it('reports an unknown version as unknown, never as unsupported', () => {
+    // A router that sends nothing must not be told it lacks a feature. This is
+    // the RouterOS 6 / no-version fallback, and it must stay conservative.
+    const report = parseClaimSelfReport(new URLSearchParams({ token: TOKEN }))
+    expect(report.version).toBeNull()
+    const profile = buildCompatibility(report.version, null, null)
+    expect(profile.versionKnown).toBe(false)
+    expect(profile.rest).toBe(false)
+  })
+})
+
 describe('the one-command bootstrap reports the router itself', () => {
   const cmd = buildProvisioningCommand({
     claimUrl: 'https://demo.supabase.co/functions/v1/router-provision',
     token: 'x'.repeat(48),
   })
 
-  it('sends version, board, architecture and identity', () => {
+  it('sends the version and architecture, but only the URL-safe parts', () => {
     // Without these the server calls buildCompatibility(null, ...), every
     // feature flag is false, and a 7.24.4 CHR is treated as a RouterOS 6 box.
-    expect(cmd).toMatch(/:local v \[\/system\/resource\/get version\]/)
-    expect(cmd).toMatch(/:local b \[\/system\/resource\/get board-name\]/)
-    expect(cmd).toMatch(/:local a \[\/system\/resource\/get architecture-name\]/)
-    expect(cmd).toMatch(/:local n \[\/system\/identity\/get name\]/)
-    expect(cmd).toMatch(/&version=.*&board=.*&arch=.*&id=/)
+    expect(cmd).toMatch(/:local ispFlowVer \[\/system\/resource\/get version\]/)
+    expect(cmd).toMatch(/:local ispFlowArch \[\/system\/resource\/get architecture-name\]/)
+
+    // Only major.minor travels, taken on the router where the string is still
+    // in hand. RouterOS 6 returns "6.49.10 (long-term)" - a raw version would
+    // put a space in the request target and 400 the claim, exactly as the real
+    // CHR's board-name did.
+    expect(cmd).toMatch(/:local ispFlowMajor \[:pick \$ispFlowVer 0 1\]/)
+    expect(cmd).toMatch(/:local ispFlowMinor \[:pick \$ispFlowVer 2 2\]/)
+
+    // board-name and identity are NOT in the URL: they are free text, they are
+    // what caused the 400, and the discovery survey reports both.
+    expect(cmd).toMatch(/&vm=/)
+    expect(cmd).toMatch(/&arch=/)
+    expect(cmd).not.toMatch(/&board=/)
+    expect(cmd).not.toMatch(/&id=/)
   })
 
   it('keeps TLS verification, which is not optional', () => {
@@ -308,13 +429,45 @@ describe('the one-command bootstrap reports the router itself', () => {
     expect(cmd).not.toMatch(/keep-result/)
   })
 
-  it('keeps TLS verification and the self-report parameters', () => {
-    // The keep-result fix must not have disturbed either of these.
+  it('keeps TLS verification and the router self-report parameters', () => {
+    // The self-report fix must not have disturbed TLS verification.
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
     expect(fetchLine).toMatch(/mode=https/)
     expect(fetchLine).toMatch(/check-certificate=yes/)
     expect(fetchLine).toMatch(/output=file/)
-    expect(fetchLine).toMatch(/&version=.*&board=.*&arch=.*&id=/)
+  })
+
+  // ---------------------------------------------------------------------
+  // HTTP 400 on a real RouterOS 7.24.4 CHR: the self-report broke the URL.
+  // ---------------------------------------------------------------------
+  it('never concatenates free text into the claim URL', () => {
+    // A CHR reports board-name = "CHR innotek GmbH VirtualBox". That value used
+    // to be spliced into the request target raw, and the space in it made the
+    // URL invalid, so the edge gateway answered 400 Bad Request before the
+    // function was even entered - the router reported a dead endpoint while the
+    // endpoint was healthy. `&`, `?`, `#` and `%` are worse: they forge extra
+    // parameters or truncate the URL.
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).not.toMatch(/board=/)
+    expect(fetchLine).not.toMatch(/&id=/)
+    expect(fetchLine).not.toMatch(/identity/)
+    expect(fetchLine).not.toMatch(/board-name/)
+
+    // Nor may it come from a variable holding such text.
+    expect(cmd).not.toMatch(/:local ispFlowBoard/)
+    expect(cmd).not.toMatch(/:local ispFlowIdentity/)
+  })
+
+  it('sends only major.minor and arch, which cannot break a URL', () => {
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).toMatch(/vm=/)
+    expect(fetchLine).toMatch(/arch=/)
+
+    // RouterOS 6 returns "6.49.10 (long-term)" - spaces and parentheses. The
+    // raw version would break a 6.x router the same way, so only the numeric
+    // prefix is taken, on the router, where the string is still in hand.
+    expect(cmd).toMatch(/:local ispFlowMajor \[:pick \$ispFlowVer 0 1\]/)
+    expect(cmd).toMatch(/:local ispFlowMinor \[:pick \$ispFlowVer 2 2\]/)
   })
 
   it('removes only the bootstrap file it downloaded', () => {

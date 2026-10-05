@@ -129,15 +129,32 @@ describe('buildProvisioningCommand', () => {
     expect(cmd).not.toMatch(/keep-result/)
   })
 
-  it('keeps TLS verification and the router self-report parameters', () => {
-    // The keep-result fix must not have disturbed either of these.
+  it('keeps TLS verification and the safe self-report parameters', () => {
+    // The keep-result fix must not have disturbed TLS verification.
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
     expect(fetchLine).toMatch(/mode=https/)
     expect(fetchLine).toMatch(/check-certificate=yes/)
-    expect(fetchLine).toMatch(/&version=/)
-    expect(fetchLine).toMatch(/&board=/)
+    // major.minor and the architecture token, both URL-safe by construction.
+    expect(fetchLine).toMatch(/&vm=/)
     expect(fetchLine).toMatch(/&arch=/)
-    expect(fetchLine).toMatch(/&id=/)
+  })
+
+  it('keeps free text out of the request target', () => {
+    // Regression from a REAL RouterOS 7.24.4 CHR, which answers:
+    //
+    //     board-name = "CHR innotek GmbH VirtualBox"
+    //
+    // That value used to be concatenated into the URL raw. The space made the
+    // request target invalid and the edge gateway returned 400 Bad Request
+    // before the function ran, so the router reported an unreachable endpoint
+    // while the endpoint was healthy. Free text must not appear here at all:
+    // `&` would forge a parameter and `#` would truncate the URL. The discovery
+    // survey reports identity and board_name instead.
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).not.toMatch(/&board=/)
+    expect(fetchLine).not.toMatch(/&id=/)
+    expect(cmd).not.toMatch(/:local ispFlowBoard/)
+    expect(cmd).not.toMatch(/:local ispFlowIdentity/)
   })
 
   it('cannot report an unreachable endpoint when the fetch simply discarded', () => {
