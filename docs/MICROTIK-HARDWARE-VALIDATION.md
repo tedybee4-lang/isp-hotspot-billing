@@ -52,6 +52,39 @@ Watch specifically for the failure the mock cannot catch: whether
 
 ---
 
+## 0a. READ THIS BEFORE TESTING AGAIN: redeploy the function
+
+The router downloads the bootstrap from the **deployed Supabase Edge Function**,
+not from this repository. Pushing a fix here changes nothing until:
+
+```bash
+supabase functions deploy router-provision --no-verify-jwt
+```
+
+Only then does a fresh provisioning command return the corrected script. A
+provisioning session also caches nothing, but the **token is single-use**, so
+generate a new command (and therefore a new token) after deploying.
+
+**How to tell which build you are testing.** The generated script's size is a
+reliable fingerprint, because every fix changed it:
+
+| Build | Approximate size | Contains |
+|---|---|---|
+| before `96182b6` | ~38 KiB | standalone `do={/ip service`, `$identity`, "RouterOS 6 has no WireGuard" |
+| `96182b6` | ~40 KiB | `do={` fixed, capability messages fixed |
+| `7864582` | ~40 KiB | `keep-result=yes` removed |
+| `27644af` and later | **~57 KiB** | URL 400 fixed, undefined vars fixed, PPPoE/RADIUS remapped, JSON escaping added |
+
+If the downloaded file is ~38 KiB you are running pre-`96182b6` code, whatever
+this repository says. A file near 57 KiB is current.
+
+The committed golden fixture
+(`src/test/fixtures/bootstrap-ros724-chr.rsc`) is the exact output for
+RouterOS 7.24.4 / x86_64 CHR, and a test fails if it drifts from the generator,
+so it can be diffed against what the router actually downloaded.
+
+---
+
 ## 1. RouterOS API audit
 
 Every `RouterClient.run` path the staged engine issues, and what to check on the

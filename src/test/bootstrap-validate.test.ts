@@ -1,6 +1,59 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { SURVEYS, jsonEscapeSteps } from '../../supabase/functions/_shared/discovery.ts'
 import { bootstrap, rules, CLAIM, TOKEN } from './bootstrap-fixture'
+import { validateRouterOsScript } from './routeros-validate'
+
+// ============================================================================
+//  The validator itself. A validator that only ever passes proves nothing, so
+//  each construct that broke real hardware is fed back in and must be caught.
+// ============================================================================
+describe('the validator rejects what broke real hardware', () => {
+  it.each([
+    // The line-5 failure on a real CHR.
+    ['standalone-do', 'do={/ip service\n :local a [/ip service find name="api"]\n}'],
+    ['undefined-variable', ':put ("hello " . $identity)'],
+    ['destructive', '/ip firewall filter remove [find comment="x"]'],
+    ['fetch-output', '/tool fetch url="https://a/b" output=file keep-result=yes dst-path=$f'],
+    ['fetch-tls', '/tool fetch url="https://a/b" mode=https output=user as-value'],
+    ['unbalanced-brace', ':if ($a = 1) do={\n  :local b ""\n'],
+  ])('catches %s', (rule, script) => {
+    expect(validateRouterOsScript(script).map((i) => i.rule)).toContain(rule)
+  })
+
+  it('does not mistake property access for an undefined variable', () => {
+    // `$i->"name"` is a property read on the loop variable, not a variable
+    // called `i-`. Treating it as undefined once masked every real finding.
+    const script = '{ :local o ""\n :foreach i in=[/ip pool/find] do={\n'
+      + '  :local p ($i->"name")\n  :set o ($o . $p)\n }\n}'
+    expect(validateRouterOsScript(script).some((i) => i.rule === 'undefined-variable')).toBe(false)
+  })
+})
+
+// ============================================================================
+//  THE GOLDEN FIXTURE: the exact file a RouterOS 7.24.4 CHR receives.
+//  Committed so the artifact a router runs is reviewable in a diff, and pinned
+//  so it cannot silently drift from the generator that produces it.
+// ============================================================================
+describe('the committed CHR fixture', () => {
+  const committed = readFileSync(
+    new URL('./fixtures/bootstrap-ros724-chr.rsc', import.meta.url), 'utf8')
+
+  it('is exactly what the generator produces today', () => {
+    // If the generator changes, this fails until the fixture is regenerated -
+    // see src/test/fixtures/README.md. Without the pin, the fixture would rot
+    // into a file that no router is ever served.
+    expect(committed).toBe(bootstrap('7.24.4', 'x86_64'))
+  })
+
+  it('is valid RouterOS', () => {
+    expect(rules(committed)).toBe('')
+  })
+
+  it('is a plausible size for a real download', () => {
+    expect(committed.length).toBeGreaterThan(20_000)
+  })
+})
 
 // ============================================================================
 //  THE ACCEPTANCE CASE: RouterOS 7.24.4 x86_64 CHR
