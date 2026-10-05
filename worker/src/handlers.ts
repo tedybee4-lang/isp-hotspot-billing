@@ -220,7 +220,25 @@ const SURVEY = [
   '/system/scheduler/print',       // 18
   '/system/script/print',          // 19
   '/ip/hotspot/user/print',        // 20
+  '/ip/pool/print',                // 21  address pools: the PPPoE ranges
+  '/ip/address/print',             // 22  which networks exist to carve pools from
 ] as const
+
+/**
+ * The index of each probe, by name.
+ *
+ * The survey is positional and these are the indices the handler reads. Spelled
+ * out as a map rather than hardcoded numbers because a probe inserted in the
+ * middle of the array would otherwise silently shift every later index - and a
+ * capability that reports the WRONG section is worse than one that reports
+ * nothing, because the operator has no way to tell it is wrong.
+ */
+const PROBE = {
+  services: 0, interfaces: 1, bridges: 2, vlans: 3, wireguard: 4, wireless: 5,
+  dhcp: 6, routes: 7, hotspot: 8, hotspotProfiles: 9, pppoe: 10, pppProfiles: 11,
+  pppSecrets: 12, simpleQueues: 13, treeQueues: 14, radius: 15, firewall: 16,
+  nat: 17, scheduler: 18, scripts: 19, hotspotUsers: 20, pools: 21, addresses: 22,
+} as const
 
 /**
  * capabilities: survey the hardware and every service the platform cares about.
@@ -313,8 +331,13 @@ const data: Record<string, unknown> = {
       wireless: probes[5].rows,
       bridges: probes[2].rows,
       vlans: probes[3].rows,
-      dhcp_servers: probes[6].rows,
-      routes: probes[7].rows,
+      dhcp_servers: probes[PROBE.dhcp].rows,
+      routes: probes[PROBE.routes].rows,
+      // The address ranges the router already has. These are what PPPoE and
+      // HotSpot are allocated from, so persisting them is what lets the wizard
+      // stop asking the operator to type ranges the router already knows.
+      pools: probes[PROBE.pools].rows,
+      addresses: probes[PROBE.addresses].rows,
       hotspot_servers: probes[8].rows,
       hotspot_profiles: probes[9].rows,
       // Capped so a large HotSpot table cannot stall the survey on a device

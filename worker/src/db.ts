@@ -15,7 +15,8 @@ import { decryptSecret } from './crypto.ts'
 import type { JobStore, RouterJob } from './runner.ts'
 import type { RouterTarget } from './router-client.ts'
 import type { HandlerContext, ProvisioningWork } from './handlers.ts'
-import type { StageStatus } from './stages.ts'
+import type { StageStatus, DiscoveredPool } from './stages.ts'
+import { resolvePppPools, resolveHotspotPool } from './stages.ts'
 
 export interface DbConfig {
   url: string
@@ -320,13 +321,19 @@ export class Db implements JobStore {
     if (sErr) throw new Error(`loading provisioning session failed: ${sErr.message}`)
     if (!session) return null
 
-    const [stagesRes, plansRes, orderRes] = await Promise.all([
+    const [stagesRes, plansRes, orderRes, capsRes] = await Promise.all([
       c.from('provisioning_stages')
         .select('stage, status').eq('session_id', sessionId),
       c.from('plans')
         .select('id, name, kind, speed_down, speed_up, shared_users, data_limit, is_active')
         .eq('isp_id', session.isp_id),
       c.rpc('provisioning_stage_order'),
+      // The pools and networks the WORKER's own capability survey found. This is
+      // the authoritative source for address allocation: the operator does not
+      // retype ranges the router already has, and does not get asked to.
+      session.node_id
+        ? c.from('router_capabilities').select('pools, addresses').eq('node_id', session.node_id).maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
     ])
     if (stagesRes.error) throw new Error(`loading stages failed: ${stagesRes.error.message}`)
     if (plansRes.error) throw new Error(`loading plans failed: ${plansRes.error.message}`)
@@ -361,6 +368,40 @@ export class Db implements JobStore {
 
     const answers = (session.wizard_answers ?? {}) as Record<string, string>
 
+    // ── Address allocation ─────────────────────────────────────────────────
+    //
+    // Precedence, and the reason for it:
+    //
+    //   1. The router's OWN discovered pools. These are what the device actually
+    //      has, and using them is what stops the operator being asked to retype
+    //      ranges the router already knows - and what stops provisioning failing
+    //      with "assign an address range" on a router that has perfectly good
+    //      ones.
+    //   2. An explicit wizard answer OVERRIDES discovery, because the operator
+    //      knows about a network the survey cannot see (a routed prefix coming
+    //      from upstream, for instance) and their choice wins.
+    //
+    // Nothing is invented. If neither source yields a usable range the stage
+    // fails with a reason, which is the correct outcome: a guessed range that
+    // overlaps the LAN takes the router down.
+    const caps = capsRes.data as unknown as {
+      pools?: Array<Record<string, string>> | null
+      addresses?: Array<Record<string, string>> | null
+    } | null
+
+    const pools: DiscoveredPool[] = (caps?.pools ?? []).map((row) => ({
+      name: row.name ?? '',
+      ranges: row.ranges ?? '',
+      nextPool: row['next-pool'] ?? null,
+    })).filter((p) => p.name !== '')
+
+    const discoveredPpp = resolvePppPools(pools)
+    const discoveredHs = resolveHotspotPool(pools, { exclude: discoveredPpp.source })
+
+    const pppLocal = answers['ppp_local'] || discoveredPpp.local
+    const pppRemote = answers['ppp_remote'] || discoveredPpp.remote
+    const hotspotPool = answers['hotspot_pool'] || discoveredHs.pool
+
     return {
       session: {
         id: session.id,
@@ -380,9 +421,9 @@ export class Db implements JobStore {
         radiusSecret: null,
         sessionTimeoutMin: Number(answers['session_timeout_min'] ?? 30),
         idleTimeoutMin: Number(answers['idle_timeout_min'] ?? 5),
-        pppLocal: answers['ppp_local'] ?? null,
-        pppRemote: answers['ppp_remote'] ?? null,
-        hotspotPool: answers['hotspot_pool'] ?? null,
+        pppLocal: pppLocal ?? null,
+        pppRemote: pppRemote ?? null,
+        hotspotPool: hotspotPool ?? null,
       },
       stageStatuses,
       stageOrder: order,

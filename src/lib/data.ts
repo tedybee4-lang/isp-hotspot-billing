@@ -1851,6 +1851,47 @@ export async function configureRouter(args: {
   return provisionAction(args.sessionId, 'configure', args)
 }
 
+/** An address pool the survey found on the router. */
+export interface DiscoveredPoolOption {
+  name: string
+  ranges: string
+  usable: boolean
+}
+
+/** A router of THIS ISP that packages may be copied from. */
+export interface CopySourceRouter {
+  id: string
+  name: string
+  routeros_version: string | null
+  board_name: string | null
+  status: string | null
+}
+
+/**
+ * The address pools this router already has.
+ *
+ * Shown so the operator can pick rather than retype. The worker resolves the
+ * actual ranges independently, and an explicit choice here overrides both.
+ */
+export async function fetchPoolOptions(sessionId: string): Promise<{
+  discovered: DiscoveredPoolOption[]
+  count: number
+}> {
+  const body = await provisionAction(sessionId, 'pools')
+  return body as unknown as { discovered: DiscoveredPoolOption[]; count: number }
+}
+
+/**
+ * Routers of THIS ISP whose packages may be copied.
+ *
+ * The list is scoped server-side to the session's own tenant, so another ISP's
+ * routers are not merely hidden - they are not in the response at all.
+ */
+export async function fetchCopySources(sessionId: string): Promise<CopySourceRouter[]> {
+  const body = await provisionAction(sessionId, 'copy_sources')
+  return (body as { sources?: CopySourceRouter[] }).sources ?? []
+}
+
 /** Copies a package catalogue from another router of the same ISP. */
 export async function copyPlansFromRouter(
   sessionId: string,
@@ -1868,7 +1909,7 @@ export async function copyPlansFromRouter(
 export async function provisionAction(
   sessionId: string,
   action: 'detect' | 'script' | 'register' | 'stages' | 'configure'
-    | 'copy_plans' | 'refresh',
+    | 'copy_plans' | 'copy_sources' | 'pools' | 'refresh',
   extra: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
   const sb = requireSupabase()

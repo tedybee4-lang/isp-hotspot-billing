@@ -76,7 +76,173 @@ export function findOwned(
 }
 
 // =============================================================================
-//  The context a stage runs in.
+//  Address pools.
+//
+//  PPPoE needs a local-address AND a remote-address range; a HotSpot server
+//  needs a pool. Without them the ISP either types ranges into a wizard (and
+//  gets them wrong, or overlaps them with the LAN) or provisioning fails with
+//  "assign an address range" on a router that already has perfectly good ones.
+//
+//  So the pools are DISCOVERED, not asked for. This turns what the router
+//  reported into a pair that is safe to use, and refuses rather than inventing.
+// =============================================================================
+
+export interface DiscoveredPool {
+  name: string
+  ranges: string
+  nextPool?: string | null
+}
+
+/** A usable pair of ranges for PPPoE, or HotSpot's single pool. */
+export interface ResolvedPools {
+  local: string | null
+  remote: string | null
+  source: string | null
+  /** The pools considered and rejected, so a failure explains itself. */
+  rejected: Array<{ name: string; reason: string }>
+}
+
+/** "10.0.0.2-10.0.0.254" -> its endpoints, or null when unreadable. */
+function splitRange(range: string): [string, string] | null {
+  const parts = range.trim().split('-')
+  if (parts.length !== 2) return null
+  return [parts[0].trim(), parts[1].trim()]
+}
+
+/** IPv4 dotted quad to integer. Only dotted quad; RouterOS emits nothing else. */
+function toInt(ip: string): number | null {
+  const octets = ip.split('.')
+  if (octets.length !== 4) return null
+  let n = 0
+  for (const o of octets) {
+    const v = Number(o)
+    if (!Number.isInteger(v) || v < 0 || v > 255) return null
+    n = n * 256 + v
+  }
+  return n
+}
+
+/** Integer back to a dotted quad. */
+function toIp(n: number): string {
+  return [
+    Math.floor(n / 16777216) % 256,
+    Math.floor(n / 65536) % 256,
+    Math.floor(n / 256) % 256,
+    n % 256,
+  ].join('.')
+}
+
+/** How many addresses a range spans, or null when that cannot be told. */
+export function rangeSize(range: string): number | null {
+  const parts = splitRange(range)
+  if (!parts) return null
+  const a = toInt(parts[0])
+  const b = toInt(parts[1])
+  if (a === null || b === null || b < a) return null
+  return b - a + 1
+}
+
+// APPEND_POOLS
+/**
+ * PPPoE needs enough addresses for its subscribers, and enough that the local
+ * and remote ranges stay disjoint.
+ *
+ * The floor is deliberately small. Refusing a 3-address pool for a small branch
+ * is correct, not a limitation: PPPoE cannot work with fewer addresses than it
+ * has subscribers, and finding that out now beats handing the operator a router
+ * that authenticates three customers and drops the fourth.
+ */
+export const MIN_PPP_ADDRESSES = 4
+
+/**
+ * Chooses the PPPoE local and remote ranges from what the router already has.
+ *
+ * Selection, in order:
+ *   1. A pool this platform already owns wins outright. Re-provisioning must land
+ *      on the SAME ranges, or every subscriber's address changes and their lease
+ *      and any IP-bound firewall rule break with it.
+ *   2. Otherwise the largest qualifying pool, preferring one not already serving
+ *      HotSpot.
+ *   3. The chosen range is split in half: local on the first, remote on the
+ *      second. That is the convention every MikroTik deployment uses and it
+ *      guarantees the two are disjoint.
+ *
+ * Returns nulls rather than a guess when nothing qualifies. A wrong range here
+ * overlaps the LAN or the upstream and takes the router down, which is strictly
+ * worse than asking the operator to supply one.
+ */
+export function resolvePppPools(
+  pools: DiscoveredPool[],
+  opts: { minimum?: number } = {},
+): ResolvedPools {
+  const minimum = opts.minimum ?? MIN_PPP_ADDRESSES
+  const rejected: Array<{ name: string; reason: string }> = []
+
+  const usable = pools
+    .map((pool) => {
+      const size = rangeSize(pool.ranges)
+      if (size === null) {
+        rejected.push({ name: pool.name, reason: 'the range could not be read' })
+        return null
+      }
+      if (size < minimum) {
+        rejected.push({
+          name: pool.name,
+          reason: `only ${size} address(es); PPPoE needs at least ${minimum}`,
+        })
+        return null
+      }
+      return { pool, size }
+    })
+    .filter((x): x is { pool: DiscoveredPool; size: number } => x !== null)
+
+  if (usable.length === 0) return { local: null, remote: null, source: null, rejected }
+
+  // Ours first, so a re-provisioning is stable.
+  const chosen = usable.find((u) => u.pool.name.startsWith(OWNER))
+    ?? usable.sort((a, b) => b.size - a.size)[0]
+
+  const half = Math.floor(chosen.size / 2)
+  const parts = splitRange(chosen.pool.ranges)!
+  const start = toInt(parts[0])
+  if (start === null || half < 2) {
+    return { local: null, remote: null, source: chosen.pool.name, rejected }
+  }
+
+  return {
+    // An odd size gives the extra address to local.
+    local: `${toIp(start)}-${toIp(start + half - 1)}`,
+    remote: `${toIp(start + half)}-${toIp(start + chosen.size - 1)}`,
+    source: chosen.pool.name,
+    rejected,
+  }
+}
+
+/**
+ * Chooses the HotSpot pool.
+ *
+ * Prefers a platform-owned pool, then the largest one that is not the PPPoE
+ * source. HotSpot and PPPoE sharing a range is a common cause of "the session
+ * drops every time someone dials in", so they are kept apart wherever the router
+ * allows it.
+ */
+export function resolveHotspotPool(
+  pools: DiscoveredPool[],
+  opts: { exclude?: string | null } = {},
+): { pool: string | null; source: string | null } {
+  const usable = pools
+    .filter((p) => (p.nextPool ?? null) === null)
+    .filter((p) => p.name !== (opts.exclude ?? null))
+    .map((p) => ({ pool: p, size: rangeSize(p.ranges) ?? 0 }))
+    .filter((x) => x.size >= 2)
+    .sort((a, b) => b.size - a.size)
+
+  if (usable.length === 0) return { pool: null, source: null }
+  const ours = usable.find((u) => u.pool.name.startsWith(OWNER))
+  return { pool: (ours ?? usable[0]).pool.name, source: (ours ?? usable[0]).pool.name }
+}
+
+// APPEND_POOLS_2
 //
 //  Every value comes from the database or from the router. Nothing is hardcoded:
 //  no IP ranges, no DNS, no package speeds. An ISP who edits a package gets the
@@ -159,6 +325,27 @@ export type StageFn = (
 ) => Promise<StageOutcome>
 
 /**
+ * The parameters that address ONE existing row for a `/set` or `/remove`.
+ *
+ * THIS IS THE SINGLE MOST IMPORTANT CONVENTION IN THIS FILE, and getting it
+ * wrong is invisible to every test here because the mock accepts any key.
+ *
+ * RouterOS's API encodes parameters as `=key=value` words. To address a
+ * specific row you pass `.id` as the KEY: `.id=*A` means "the row whose id is
+ * *A". There is no `numbers` parameter - `numbers` is a VALUE property that
+ * appears in `print` output, and passing it as a key asks RouterOS to set a
+ * property called "numbers", which either errors or matches more rows than you
+ * meant. That is why every `/set` here goes through this helper.
+ *
+ * `worker/src/handlers.ts` already used `'.id'` for `/radius/incoming/set`;
+ * this makes it a rule rather than a coincidence.
+ */
+export function addressing(row: Record<string, string>): Record<string, string> {
+  const id = row['.id']
+  return id ? { '.id': id } : {}
+}
+
+/**
  * Runs a command and keeps the error instead of throwing.
  *
  * A stage must be able to say WHICH probe failed. Swallowing an error and
@@ -178,6 +365,116 @@ export async function attempt(
     return {
       ok: false, rows: [],
       error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+// =============================================================================
+//  Call recording, for hardware diagnosis.
+//
+//  When a real router is finally available and a stage fails at 2am on a device
+//  400 km away, the only useful question is "what exactly did we send it".
+//
+//  NEVER LOGGED, from any path: passwords, API secrets, RADIUS shared secrets,
+//  WireGuard private keys, subscriber credentials, provisioning/discovery tokens.
+//  The rule is enforced by REDACTING here rather than by trusting each call site
+//  to pass something safe, because a call site added later will not remember.
+// =============================================================================
+
+/** Parameter names whose VALUE is replaced before anything is recorded. */
+const SECRET_PARAMS = new Set([
+  'password', 'passwd', 'secret', 'shared-secret', 'old-secret', 'new-secret',
+  'private-key', 'public-key', 'pre-shared-key', 'psk', 'token', 'api-key',
+  'apikey', 'pass', 'user-password', 'radius-secret', 'authentication-key',
+  'private_key', 'shared_secret', 'passphrase', 'wpa2-pre-shared-key',
+])
+
+/** True when a parameter's value must never be recorded. */
+export function isSecretParam(name: string): boolean {
+  return SECRET_PARAMS.has(name.toLowerCase())
+}
+
+/**
+ * A copy of `params` with every credential replaced by a marker.
+ *
+ * The KEY is kept on purpose: knowing that `password` was sent tells an operator
+ * far more about a failure than seeing it silently missing.
+ */
+export function redactParams(params: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(params)) {
+    out[key] = isSecretParam(key) ? '[redacted]' : value
+  }
+  return out
+}
+
+/** One recorded command: enough to diagnose, nothing sensitive. */
+export interface RouterOsCall {
+  at: string
+  command: string
+  operation: string
+  /** Sanitised: a credential key is present, its value is [redacted]. */
+  params: Record<string, string>
+  ok: boolean
+  rows?: number
+  durationMs: number
+  error?: string
+}
+
+/**
+ * Classifies a RouterOS path so "did this stage try to REMOVE anything" is
+ * answerable from the recorded calls alone, without reading the stage source.
+ * That question has to be answerable on a live router after the fact.
+ */
+export function operationOf(command: string): string {
+  const last = command.split('/').pop() ?? ''
+  if (['print', 'add', 'set', 'remove', 'enable', 'disable', 'save']
+    .includes(last)) return last
+  return 'other'
+}
+
+/**
+ * The RouterOS calls a stage made, sanitised.
+ *
+ * Returned in the stage detail so `provisioning_events` carries the evidence.
+ * A stage that fails on hardware and has no record of what it sent is the
+ * hardest kind of bug to fix, and the record is the cheapest insurance there is.
+ */
+export async function recordCalls(
+  client: RouterClient,
+  target: RouterTarget,
+  command: string,
+  params: Record<string, string> = {},
+): Promise<{ ok: boolean; rows: Record<string, string>[]; error: string | null; call: RouterOsCall }> {
+  const started = Date.now()
+  const safeParams = redactParams(params)
+  try {
+    const res = await client.run(target, command, params)
+    return {
+      ok: true, rows: res.rows, error: null,
+      call: {
+        at: new Date().toISOString(),
+        command,
+        operation: operationOf(command),
+        params: safeParams,
+        ok: true,
+        rows: res.rows.length,
+        durationMs: Date.now() - started,
+      },
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      ok: false, rows: [], error: message,
+      call: {
+        at: new Date().toISOString(),
+        command,
+        operation: operationOf(command),
+        params: safeParams,
+        ok: false,
+        durationMs: Date.now() - started,
+        error: message,
+      },
     }
   }
 }
@@ -490,7 +787,10 @@ export const secureTunnelStage: StageFn = async (client, target, ctx) => {
 
   const added = await attempt(client, target, '/interface/wireguard/add', {
     name,
-    listen_port: '13231',
+    // RouterOS spells this with a HYPHEN. `listen_port` is silently ignored by
+    // the API on some firmware and rejected on others, which produces a tunnel
+    // that exists but listens on nothing.
+    'listen-port': '13231',
     comment: tag(ctx.session.tag),
   })
   if (!added.ok) {
@@ -569,7 +869,7 @@ export const radiusStage: StageFn = async (client, target, ctx) => {
 
   if (existing) {
     const set = await attempt(client, target, '/radius/set', {
-      ...(existing['.id'] ? { numbers: existing['.id'] } : {}),
+      ...addressing(existing),
       ...params,
     })
     if (!set.ok) {
@@ -666,7 +966,7 @@ export const hotspotStage: StageFn = async (client, target, ctx) => {
 
     if (existing) {
       const set = await attempt(client, target, '/ip/hotspot/set', {
-        ...(existing['.id'] ? { numbers: existing['.id'] } : {}),
+        ...addressing(existing),
         ...params,
       })
       if (!set.ok) {
@@ -728,9 +1028,10 @@ export const pppoeStage: StageFn = async (client, target, ctx) => {
   if (!ctx.session.pppLocal || !ctx.session.pppRemote) {
     return {
       status: 'failed',
-      error: 'PPPoE was selected but no address pool has been assigned to it. '
-        + 'Give PPPoE a local and remote range in the wizard, then retry. '
-        + 'No address range is ever guessed here.',
+      error: 'PPPoE was selected but no address pool could be resolved for it. '
+        + 'The router reported no usable address range, so there is nowhere to '
+        + 'allocate subscriber addresses. No range is ever guessed here: add one '
+        + 'in IP > Addresses on the router, or give PPPoE a range in the wizard.',
       retryable: false,
     }
   }
@@ -756,7 +1057,7 @@ export const pppoeStage: StageFn = async (client, target, ctx) => {
 
     if (existing) {
       const set = await attempt(client, target, '/interface/pppoe-server/set', {
-        ...(existing['.id'] ? { numbers: existing['.id'] } : {}),
+        ...addressing(existing),
         ...params,
       })
       if (!set.ok) {
@@ -841,7 +1142,7 @@ export const firewallNatStage: StageFn = async (client, target, ctx) => {
       && (row.action ?? '') === 'masquerade')
   if (existing) {
     const set = await attempt(client, target, '/ip/firewall/nat/set', {
-      ...(existing['.id'] ? { numbers: existing['.id'] } : {}),
+      ...addressing(existing),
       'out-interface': wan,
       action: 'masquerade',
       comment: tag(ctx.session.tag),
@@ -1002,7 +1303,7 @@ export const packageSyncStage: StageFn = async (client, target, ctx) => {
     const existing = findOwned(hotspotProfiles.rows, name)
     if (existing) {
       const set = await attempt(client, target, '/ip/hotspot/user/profile/set', {
-        ...(existing['.id'] ? { numbers: existing['.id'] } : {}),
+        ...addressing(existing),
         ...params,
       })
       if (!set.ok) {
@@ -1042,7 +1343,7 @@ export const packageSyncStage: StageFn = async (client, target, ctx) => {
         const existing = findOwned(pppProfiles.rows, name)
         const res = existing
           ? await attempt(client, target, '/ppp/profile/set', {
-            ...(existing['.id'] ? { numbers: existing['.id'] } : {}), ...params,
+            ...addressing(existing), ...params,
           })
           : await attempt(client, target, '/ppp/profile/add', params)
         if (!res.ok) {

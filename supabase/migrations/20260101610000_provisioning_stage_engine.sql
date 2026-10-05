@@ -457,4 +457,67 @@ grant execute on function public.copy_router_plans(uuid, uuid, text[], boolean)
   to authenticated, service_role;
 
 -- APPEND_HERE
+-- ── 6b. Persist the address pools the survey found ───────────────────────
+--
+-- Pools were never being stored, which is the real reason PPPoE failed with
+-- "assign an address range" on routers that already had perfectly good ones:
+-- the information existed on the device and was thrown away by the survey.
+--
+-- Additive columns only. Nothing is rewritten, dropped or retyped.
+alter table public.router_capabilities
+  add column if not exists pools jsonb not null default '[]'::jsonb,
+  add column if not exists addresses jsonb not null default '[]'::jsonb;
+
+comment on column public.router_capabilities.pools is
+  'Address pools the router reported (/ip pool print). These are what PPPoE and '
+  'HotSpot are allocated from, so the wizard never asks the operator to retype a '
+  'range the device already has.';
+
+-- ── 7. The pools the wizard can offer for a session ──────────────────────
+--
+-- Resolved server-side from the survey, so the browser is shown the ranges that
+-- will ACTUALLY be used rather than a blank field. The browser never decides;
+-- it renders this and the worker recomputes the same answer independently.
+--
+-- An explicit wizard answer still wins, which is why this is a preview and not
+-- an assignment.
+create or replace function public.provisioning_pool_options(p_session_id uuid)
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  with sess as (
+    select ps.* from public.provisioning_sessions ps where ps.id = p_session_id
+  ), caps as (
+    select c.pools
+      from sess s
+      join public.router_capabilities c on c.node_id = s.node_id
+  ), usable as (
+    -- A pool must have a name and a readable two-ended range.
+    select p->>'name' as name,
+           p->>'ranges' as ranges,
+           (p->>'next-pool') is null or (p->>'next-pool') = '' as terminal
+      from caps, jsonb_array_elements(coalesce(caps.pools, '[]'::jsonb)) p
+     where nullif(p->>'name', '') is not null
+       and p->>'ranges' like '%-%'
+  )
+  select jsonb_build_object(
+    'ok', true,
+    'role', (select role from sess),
+    'discovered', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'name', u.name, 'ranges', u.ranges, 'usable', u.terminal))
+        from usable u), '[]'::jsonb),
+    -- What the survey currently has, so an operator can see it is not empty.
+    'count', (select count(*) from usable)
+  )
+  from sess;
+$$;
+
+comment on function public.provisioning_pool_options(uuid) is
+  'The address pools the survey found for this session''s router, for the wizard '
+  'to offer. A preview only: the worker resolves the ranges independently and an '
+  'explicit operator choice overrides both.';
+
+revoke all on function public.provisioning_pool_options(uuid) from public, anon;
+grant execute on function public.provisioning_pool_options(uuid) to authenticated, service_role;
+
 commit;

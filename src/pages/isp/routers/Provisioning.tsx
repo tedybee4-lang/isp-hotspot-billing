@@ -399,10 +399,61 @@ function WizardModal({
   const [hs, setHs] = useState<string[]>(session.hotspot_interfaces ?? [])
   const [pp, setPp] = useState<string[]>(session.pppoe_interfaces ?? [])
   const [mgmt, setMgmt] = useState<string[]>([])
+  // Address pools the router ALREADY has. Prefilled from the survey so the
+  // operator picks rather than retypes; blank means "use what the router has".
+  const [pools, setPools] = useState<api.DiscoveredPoolOption[]>([])
+  const [hotspotPool, setHotspotPool] = useState('')
+  const [pppLocal, setPppLocal] = useState('')
+  const [pppRemote, setPppRemote] = useState('')
+  const [radiusServer, setRadiusServer] = useState('')
+  const [radiusEnabled, setRadiusEnabled] = useState(false)
+  const [tunnel, setTunnel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [remedy, setRemedy] = useState<string | null>(null)
   const [queued, setQueued] = useState(false)
+  const [sources, setSources] = useState<api.CopySourceRouter[]>([])
+  const [copyFrom, setCopyFrom] = useState('')
+  const [copyNote, setCopyNote] = useState<string | null>(null)
+
+  // The pools and eligible copy sources are READS over what the platform already
+  // knows. Fetched when the wizard opens, so the operator never has to invent a
+  // range the router has already reported.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const p = await api.fetchPoolOptions(session.id)
+        if (!cancelled) setPools(p.discovered)
+      } catch { /* the fields below simply stay empty and the stage explains */ }
+      try {
+        const s = await api.fetchCopySources(session.id)
+        if (!cancelled) setSources(s)
+      } catch { /* Copy Plans stays unavailable rather than half-working */ }
+    })()
+    return () => { cancelled = true }
+  }, [session.id])
+
+  /**
+   * Copy packages from another router of the same ISP.
+   *
+   * The browser decides nothing: it sends the source id and the backend applies
+   * its own tenant check and its own copy logic. A refusal here comes back with
+   * the server's reason rather than a local guess.
+   */
+  async function copyPackages() {
+    if (!copyFrom) return
+    setBusy(true); setCopyNote(null); setError(null)
+    try {
+      const r = await api.copyPlansFromRouter(session.id, copyFrom, ['hotspot', 'pppoe'])
+      setCopyNote(r.message ?? `${r.plans} package(s) copied.`)
+    } catch (e) {
+      const err = e as { message?: string }
+      setCopyNote(err.message ?? 'Could not copy the packages.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const toggle = (list: string[], set: (v: string[]) => void, n: string) =>
     set(list.includes(n) ? list.filter((x) => x !== n) : [...list, n])
@@ -430,6 +481,15 @@ function WizardModal({
         hotspotInterfaces: role === 'pppoe' ? [] : hs,
         pppoeInterfaces: role === 'hotspot' ? [] : pp,
         managementInterfaces: mgmt,
+        // Empty means "use what the router already has". The worker resolves the
+        // real ranges, so an operator who leaves these blank is not left with a
+        // broken PPPoE stage.
+        hotspotPool: hotspotPool || undefined,
+        pppLocal: pppLocal || undefined,
+        pppRemote: pppRemote || undefined,
+        radiusServer: radiusServer || undefined,
+        radiusEnabled,
+        tunnel: tunnel || undefined,
       })
       setQueued(true)
       await onDone()
@@ -579,6 +639,129 @@ function WizardModal({
                 it has been taken off the customer side.
               </Alert>
             )}
+
+            {/* ── HotSpot pool: only when HotSpot is on ── */}
+            {role !== 'pppoe' && (
+              <div>
+                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                  HotSpot address pool
+                </span>
+                <select className={cn(inputClass, 'mt-1')} value={hotspotPool}
+                  onChange={(e) => setHotspotPool(e.target.value)}>
+                  <option value="">
+                    {pools.length > 0
+                      ? 'Use the largest pool found on the router'
+                      : 'No pool found - the router reported none'}
+                  </option>
+                  {pools.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name} ({p.ranges})
+                    </option>
+                  ))}
+                </select>
+                {pools.length === 0 && (
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    HotSpot will run without a pool until one is added on the
+                    router under IP &gt; Pools.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── PPPoE ranges: only when PPPoE is on ── */}
+            {role !== 'hotspot' && (
+              <div>
+                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                  PPPoE address ranges
+                </span>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Leave blank to use a range found on the router.
+                </p>
+                <input className={cn(inputClass, 'mt-1 font-mono')} value={pppLocal}
+                  placeholder="10.0.0.2-10.0.127"
+                  onChange={(e) => setPppLocal(e.target.value)} />
+                <input className={cn(inputClass, 'mt-1 font-mono')} value={pppRemote}
+                  placeholder="10.0.128.2-10.0.255"
+                  onChange={(e) => setPppRemote(e.target.value)} />
+              </div>
+            )}
+
+            {/* ── RADIUS ── */}
+            <div>
+              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                RADIUS
+              </span>
+              <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                <input type="checkbox" checked={radiusEnabled}
+                  onChange={(e) => setRadiusEnabled(e.target.checked)} />
+                Authenticate subscribers through RADIUS
+              </label>
+              {radiusEnabled && (
+                <input className={cn(inputClass, 'mt-1 font-mono')} value={radiusServer}
+                  placeholder="radius.yourisp.co.ke"
+                  onChange={(e) => setRadiusServer(e.target.value)} />
+              )}
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                FreeRADIUS stays where it is. If this is on and the router cannot
+                reach the server, the run stops at the RADIUS stage rather than
+                reporting the router healthy.
+              </p>
+            </div>
+
+            {/* ── Secure tunnel ── */}
+            <div>
+              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                Management tunnel
+              </span>
+              <select className={cn(inputClass, 'mt-1')} value={tunnel}
+                onChange={(e) => setTunnel(e.target.value)}>
+                <option value="">Manage over the LAN (no tunnel)</option>
+                <option value="wireguard">WireGuard (RouterOS 7.1+)</option>
+              </select>
+              {tunnel === 'wireguard' && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
+                  If this firmware has no WireGuard the run FAILS rather than being
+                  marked unsupported. Without the tunnel the router cannot be
+                  reached, so it must not be reported as healthy.
+                </p>
+              )}
+            </div>
+
+            {/* ── Copy plans from another of this ISP's routers ── */}
+            <div>
+              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                Copy packages from another router
+              </span>
+              {sources.length === 0 ? (
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  No other routers on your account to copy from.
+                </p>
+              ) : (
+                <div className="flex gap-1 mt-1">
+                  <select className={cn(inputClass, 'flex-1')} value={copyFrom}
+                    onChange={(e) => setCopyFrom(e.target.value)}>
+                    <option value="">Choose a router...</option>
+                    {sources.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}{s.board_name ? ` - ${s.board_name}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <Button size="sm" variant="secondary" type="button"
+                    disabled={!copyFrom || busy}
+                    onClick={() => void copyPackages()}>
+                    Copy
+                  </Button>
+                </div>
+              )}
+              {copyNote && (
+                <p className="text-[10px] text-slate-500 mt-1">{copyNote}</p>
+              )}
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Copies your package definitions only. Prices, payments and past
+                invoices are never copied or changed.
+              </p>
+            </div>
           </>
         )}
 

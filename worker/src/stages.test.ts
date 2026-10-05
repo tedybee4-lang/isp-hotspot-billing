@@ -9,8 +9,10 @@
  */
 import { describe, expect, it, beforeEach } from 'vitest'
 import {
-  OWNER, LEGACY_OWNER, isOwned, safeName,
+  OWNER, LEGACY_OWNER, isOwned, safeName, addressing,
   parseSpeedMbps, rateLimit, runStage,
+  redactParams, isSecretParam, operationOf,
+  resolvePppPools, resolveHotspotPool, rangeSize, MIN_PPP_ADDRESSES,
   STAGE_IMPLEMENTATIONS, WORKER_STAGE_NAMES,
   backupStage, connectivityStage, secureTunnelStage, radiusStage,
   hotspotStage, pppoeStage, firewallNatStage, packageSyncStage,
@@ -632,5 +634,217 @@ describe('object names cannot change what a script means', () => {
     for (const w of r.writes()) {
       expect(w.params.comment).toBe(`${OWNER}:ab12cd34`)
     }
+  })
+})
+
+// ── Row addressing ────────────────────────────────────────────────────────
+
+describe('RouterOS row addressing', () => {
+  // The single most dangerous thing to get wrong in this file, and completely
+  // invisible to a mock: the mock accepts any parameter key.
+  //
+  // RouterOS encodes parameters as `=key=value` words. To address ONE row you
+  // pass `.id` AS THE KEY. `numbers` is a VALUE property that appears in print
+  // output - passing it as a key asks RouterOS to set a property called
+  // "numbers", which either errors or matches more rows than intended.
+  it('addressing() produces a .id parameter, never numbers', () => {
+    expect(addressing({ '.id': '*A' })).toEqual({ '.id': '*A' })
+    expect(addressing({ '.id': '*A' }).numbers).toBeUndefined()
+  })
+
+  it('addressing() omits the key entirely when there is no id', () => {
+    // An empty `.id` would match nothing, which on `set` is a silent no-op.
+    expect(addressing({})).toEqual({})
+  })
+
+  it('every /set in every stage addresses its row with .id', async () => {
+    r.rows['/ip/hotspot/print'] = [{ '.id': '*1', name: 'x', interface: 'ether2' }]
+    r.rows['/interface/pppoe-server/print'] = [{ '.id': '*2', name: 'y', service: 'ether3' }]
+    r.rows['/ip/firewall/nat/print'] = [
+      { '.id': '*3', name: 'n', 'out-interface': 'ether1', action: 'masquerade' },
+    ]
+    r.rows['/ip/firewall/filter/print'] = [{ '.id': '*4', name: 'f' }]
+    r.rows['/ip/hotspot/user/profile/print'] = [{ '.id': '*5', name: 'Home_5M' }]
+    r.rows['/ppp/profile/print'] = [{ '.id': '*6', name: 'Home_5M' }]
+    r.rows['/radius/print'] = [{ '.id': '*7', name: `${OWNER}-ab12cd34` }]
+
+    const c = ctx({
+      session: session({
+        pppoeInterfaces: ['ether3'], pppLocal: '10.0.0.2-10.0.0.254',
+        pppRemote: '10.0.1.2-10.0.1.254', radiusEnabled: true,
+        radiusServer: '10.9.9.9',
+      }),
+      plans: [plan({ name: 'Home_5M' })],
+    })
+    await hotspotStage(r.client, target, c)
+    await pppoeStage(r.client, target, c)
+    await firewallNatStage(r.client, target, c)
+    await packageSyncStage(r.client, target, c)
+    await radiusStage(r.client, target, c)
+
+    const sets = r.calls.filter((x) => x.command.endsWith('/set'))
+    expect(sets.length).toBeGreaterThan(0)
+    for (const s of sets) {
+      expect(s.params['.id'], `${s.command} has no .id`).toBeTruthy()
+      expect('numbers' in s.params, `${s.command} used numbers`).toBe(false)
+    }
+  })
+
+  it('uses the RouterOS spelling listen-port, not listen_port', async () => {
+    r.rows['/interface/wireguard/print'] = []
+    await secureTunnelStage(r.client, target, ctx())
+    const add = r.writes().find((c) => c.command === '/interface/wireguard/add')
+    expect(add?.params['listen-port']).toBe('13231')
+    // An underscore is silently ignored by some firmware, producing a tunnel that
+    // exists and listens on nothing.
+    expect(add?.params['listen_port']).toBeUndefined()
+  })
+})
+
+// ── Secret redaction ──────────────────────────────────────────────────────
+
+describe('nothing sensitive is ever recorded', () => {
+  it('redacts every credential-shaped parameter', () => {
+    const red = redactParams({
+      name: 'ISPFlow-ab12', password: 'hunter2', secret: 'radius-secret-value',
+      'private-key': 'a-key', token: 'tok_abcdef', 'shared-secret': 'sh',
+    })
+    expect(red.name).toBe('ISPFlow-ab12')          // harmless, kept
+    for (const k of ['password', 'secret', 'private-key', 'token', 'shared-secret']) {
+      expect(red[k]).toBe('[redacted]')
+    }
+  })
+
+  it('keeps the KEY so a failure is diagnosable', () => {
+    // Knowing a password was sent is useful; seeing its value is not acceptable.
+    expect(redactParams({ password: 'x' })).toHaveProperty('password')
+  })
+
+  it('recognises the credential spellings RouterOS actually uses', () => {
+    for (const name of [
+      'password', 'PASSWORD', 'secret', 'shared-secret', 'private-key',
+      'pre-shared-key', 'token', 'api-key', 'user-password',
+    ]) {
+      expect(isSecretParam(name), name).toBe(true)
+    }
+    // And leaves the ordinary configuration alone, so logs stay useful.
+    for (const name of ['name', 'rate-limit', 'comment', 'interface', 'profile']) {
+      expect(isSecretParam(name), name).toBe(false)
+    }
+  })
+
+  it('a stage that writes a subscriber password does not record it', async () => {
+    r.rows['/ip/hotspot/user/print'] = []
+    await customerSyncStage(r.client, target, ctx({
+      customers: [{
+        id: 'c1', username: 'alice', password_plain: 'subscriber-pw',
+        plan_name: 'Home 5M', is_active: true,
+      }],
+    }))
+    // The value reached the router...
+    expect(r.writes()[0]?.params.password).toBe('subscriber-pw')
+    // ...but would never reach a log.
+    const record = redactParams(r.writes()[0]?.params ?? {})
+    expect(record.password).toBe('[redacted]')
+    expect(JSON.stringify(record)).not.toContain('subscriber-pw')
+  })
+
+  it('classifies the operation so a removal is visible after the fact', () => {
+    expect(operationOf('/ip/pool/print')).toBe('print')
+    expect(operationOf('/ip/hotspot/add')).toBe('add')
+    expect(operationOf('/system/backup/save')).toBe('save')
+    expect(operationOf('/system/backup/save')).not.toBe('remove')
+  })
+})
+
+// ── Address pools ─────────────────────────────────────────────────────────
+
+describe('pools are resolved from the router, not asked for', () => {
+  const pools = [
+    { name: 'dynamic', ranges: '10.0.0.2-10.0.255.254' },
+    { name: 'static-only', ranges: '192.168.88.10-192.168.88.50' },
+    { name: 'tiny', ranges: '10.9.9.2-10.9.9.3' },
+  ]
+
+  it('splits a discovered pool into disjoint local and remote halves', () => {
+    // 10.0.0.2 - 10.0.255.254 is 65533 addresses; half is 32766.
+    const out = resolvePppPools([{ name: 'branch', ranges: '10.0.0.2-10.0.255.254' }])
+    expect(out.local).toBe('10.0.0.2-10.0.127.255')
+    expect(out.remote).toBe('10.0.128.0-10.0.255.254')
+    expect(out.source).toBe('branch')
+  })
+
+  it('the two halves never overlap', () => {
+    // The property that actually matters: an overlap means a PPPoE client can be
+    // handed an address the server already owns. Parsed independently of the
+    // implementation so the test is not just agreeing with itself.
+    const toInt = (ip: string): number =>
+      ip.split('.').reduce((n, o) => n * 256 + Number(o), 0)
+    const out = resolvePppPools([{ name: 'b', ranges: '10.0.0.2-10.0.255.254' }])
+    const localEnd = toInt((out.local ?? '').split('-')[1])
+    const remoteStart = toInt((out.remote ?? '').split('-')[0])
+    // Strictly greater: the address after the last local one is the first remote.
+    expect(remoteStart).toBe(localEnd + 1)
+  })
+
+  it('counts the addresses in a range correctly', () => {
+    expect(rangeSize('10.0.0.2-10.0.0.253')).toBe(252)
+    expect(rangeSize('10.0.0.2-10.0.0.2')).toBe(1)
+    expect(rangeSize('nonsense')).toBeNull()
+    expect(rangeSize('10.0.0.9-10.0.0.1')).toBeNull()   // reversed
+    expect(rangeSize('10.0.0.1-999.0.0.1')).toBeNull()   // invalid octet
+  })
+
+  it('refuses a pool too small for PPPoE and says why', () => {
+    const out = resolvePppPools([{ name: 'tiny', ranges: '10.9.9.2-10.9.9.3' }])
+    expect(out.local).toBeNull()
+    // The rejection is reported, not swallowed: the operator sees why.
+    expect(out.rejected[0].reason).toMatch(/needs at least/)
+  })
+
+  it('prefers a platform-owned pool so a re-run is stable', () => {
+    const out = resolvePppPools([
+      { name: 'dynamic', ranges: '10.0.0.2-10.0.255.254' },
+      { name: `${OWNER}-ab12cd34-ppp`, ranges: '10.5.0.2-10.5.0.253' },
+    ])
+    // Re-provisioning onto a different range changes every subscriber's address.
+    expect(out.source).toBe(`${OWNER}-ab12cd34-ppp`)
+  })
+
+  it('returns nothing rather than guessing when no pool qualifies', () => {
+    const out = resolvePppPools([])
+    expect(out.local).toBeNull()
+    expect(out.remote).toBeNull()
+    // A guessed range that overlaps the LAN takes the router down.
+  })
+
+  it('keeps the HotSpot pool away from the PPPoE one', () => {
+    const ppp = resolvePppPools(pools)
+    const hs = resolveHotspotPool(pools, { exclude: ppp.source })
+    expect(hs.pool).not.toBe(ppp.source)
+  })
+
+  it('never picks a HotSpot pool chained to another', () => {
+    // A chained pool inherits its parent's ranges; using it directly gives a
+    // HotSpot server addresses that overlap whatever the parent serves.
+    const hs = resolveHotspotPool([
+      { name: 'chained', ranges: '10.0.0.2-10.0.0.10', nextPool: 'parent' },
+      { name: 'standalone', ranges: '10.1.0.2-10.1.0.50' },
+    ])
+    expect(hs.pool).toBe('standalone')
+  })
+
+  it('PPPoE succeeds from a resolved pool instead of asking for one', async () => {
+    r.rows['/interface/pppoe-server/print'] = []
+    const resolved = resolvePppPools(pools)
+    const out = await pppoeStage(r.client, target, ctx({
+      session: session({
+        role: 'pppoe', hotspotInterfaces: [], pppoeInterfaces: ['ether3'],
+        pppLocal: resolved.local, pppRemote: resolved.remote,
+      }),
+    }))
+    expect(out.status).toBe('success')
+    expect(r.writes().find((c) => c.command === '/interface/pppoe-server/add')
+      ?.params['local-address']).toBeTruthy()
   })
 })

@@ -589,6 +589,38 @@ async function handlePanel(req: Request): Promise<Response> {
     })
   }
 
+  // -- pools / copy_sources: what the wizard needs to offer real choices -----
+  //
+  // Both are READS over data the platform already has, so the wizard never
+  // asks the operator to type a range the router has already reported.
+  if (action === 'pools') {
+    const { data, error } = await admin.rpc('provisioning_pool_options', {
+      p_session_id: sessionId,
+    })
+    if (error) return json({ error: error.message }, 500)
+    return json(data ?? { ok: true, discovered: [], count: 0 })
+  }
+
+  if (action === 'copy_sources') {
+    const nodeId = session.node_id
+    // Scoped to this session's OWN tenant, which is the point: an ISP may only
+    // ever copy from a router of their own. A cross-tenant id simply is not in
+    // the result set, so it cannot be selected even by a crafted request.
+    const { data, error } = await admin
+      .from('nodes')
+      .select('id, name, routeros_version, board_name, status')
+      .eq('isp_id', session.isp_id)
+      .neq('id', nodeId ?? '')
+      .eq('enabled', true)
+      .order('name')
+    if (error) return json({ error: error.message }, 500)
+
+    return json({
+      ok: true,
+      sources: (data ?? []) as Array<Record<string, unknown>>,
+    })
+  }
+
   // -- stages: the live stage list the wizard renders ------------------------
   //
   // One RPC so the panel cannot assemble "is this finished" itself and get it
