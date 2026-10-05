@@ -1,3 +1,5 @@
+# ISPFlow-BOOTSTRAP-GENERATOR-528C90
+# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR
 # NETISP access - session NETISP:abcd1234
 # Enables management access. Additive and idempotent; deletes nothing.
 
@@ -32,6 +34,8 @@
 :put ("ISPFlow: registered as " . $ispFlowClaimName);
 :put ("ISPFlow: RouterOS " . $ispFlowClaimVer . " on " . $ispFlowClaimBoard);
 :put "ISPFlow: HTTPS management is available on port 8080.";
+# ISPFlow-BOOTSTRAP-GENERATOR-528C90
+# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR
 # =============================================================================
 # ISPFlow router discovery - session abcd1234
 # =============================================================================
@@ -51,7 +55,7 @@
   :local v [/system resource/get version]
   :if ([:typeof $v] != "array") do={ :set r ($r . "version"=$v) }
   :local j [:serialize to=json value=$r]
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=identity&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=($j) keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=identity&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=($j)
 }
 
 # --- resource ---
@@ -82,7 +86,7 @@
   :local v [/system resource/get uptime]
   :if ([:typeof $v] != "array") do={ :set r ($r . "uptime"=$v) }
   :local j [:serialize to=json value=$r]
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=resource&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=($j) keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=resource&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=($j)
 }
 
 # --- board ---
@@ -97,7 +101,7 @@
   :local v [/system routerboard/get firmware-type]
   :if ([:typeof $v] != "array") do={ :set r ($r . "firmware_type"=$v) }
   :local j [:serialize to=json value=$r]
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=board&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=($j) keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=board&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=($j)
 }
 
 # --- packages ---
@@ -117,7 +121,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=packages&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=packages&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- interfaces ---
@@ -143,7 +147,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=interfaces&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=interfaces&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- bridges ---
@@ -165,7 +169,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=bridges&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=bridges&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- vlans ---
@@ -189,7 +193,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=vlans&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=vlans&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- addresses ---
@@ -213,7 +217,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=addresses&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=addresses&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- dhcp ---
@@ -235,7 +239,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=dhcp&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=dhcp&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- pools ---
@@ -255,7 +259,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pools&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pools&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- hotspot ---
@@ -281,7 +285,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=hotspot&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=hotspot&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- hotspot ---
@@ -303,7 +307,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=hotspot&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=hotspot&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- pppoe ---
@@ -329,7 +333,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- pppoe-servers ---
@@ -359,7 +363,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe-servers&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe-servers&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- pppoe-profiles ---
@@ -385,7 +389,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe-profiles&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=pppoe-profiles&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- radius ---
@@ -409,7 +413,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=radius&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=radius&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- radius-aaa ---
@@ -427,7 +431,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=radius-aaa&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=radius-aaa&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- firewall ---
@@ -449,7 +453,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=firewall&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=firewall&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- nat ---
@@ -473,7 +477,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=nat&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=nat&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- routes ---
@@ -495,7 +499,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=routes&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=routes&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- dns ---
@@ -517,7 +521,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=dns&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=dns&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- wireguard ---
@@ -539,7 +543,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=wireguard&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=wireguard&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- services ---
@@ -561,7 +565,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=services&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=services&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- certificates ---
@@ -583,7 +587,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=certificates&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=certificates&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- wireless ---
@@ -607,7 +611,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=wireless&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=wireless&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- capsman ---
@@ -627,7 +631,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=capsman&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=capsman&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- ispflow ---
@@ -647,7 +651,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=ispflow&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=ispflow&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- scheduler ---
@@ -669,7 +673,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=scheduler&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=scheduler&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 # --- backup ---
@@ -687,7 +691,7 @@
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
-  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=backup&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes output=user as-value http-data=("[" . $rows . "]") keep-result=no
+  /tool fetch url="https://demo.supabase.co/functions/v1/router-provision/report?survey=backup&token=dddddddddddddddddddddddddddddddddddddddddddddddd&tag=abcd1234" method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=user as-value http-data=("[" . $rows . "]")
 }
 
 :put "";

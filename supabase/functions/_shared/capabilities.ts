@@ -349,6 +349,12 @@ export function buildAccessScript(opts: {
 }): string {
   const tag = opts.tag
   const L: string[] = [
+    // MARKERS. If these are missing from what a router downloaded, the endpoint
+    // is serving a stale build and nothing below can be trusted. They are cheap
+    // and they turn "is production current?" into a one-second check instead of
+    // an argument about deployment timestamps.
+    '# ISPFlow-BOOTSTRAP-GENERATOR-528C90',
+    '# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR',
     `# NETISP access - session NETISP:${tag}`,
     '# Enables management access. Additive and idempotent; deletes nothing.',
     '',

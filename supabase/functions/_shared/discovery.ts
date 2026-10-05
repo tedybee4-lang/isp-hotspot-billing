@@ -156,12 +156,20 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
  * value; without the parentheses the quotes close the literal immediately and
  * the body silently collapses.
  *
- * `keep-result=no` with `output=user` is valid on every RouterOS. It is NOT
- * combined with `output=file`, which RouterOS rejects outright.
+ * `http-header-field` is REQUIRED, not decoration. The report endpoint branches
+ * on content-type: with `application/json` it calls `req.json()`, otherwise it
+ * calls `req.formData()`. RouterOS does not set an application/json content-type
+ * on its own, so without this header every survey body failed to parse and was
+ * stored as `{}` - surveys counted as reported, with no data in them.
+ *
+ * `keep-result` is NOT emitted. It only means anything for `output=file`, and
+ * RouterOS rejects the combination; with `output=user as-value` it is dead
+ * weight and a second thing to be wrong about.
  */
 function post(url: string, body: string): string {
   return `/tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
-    `output=user as-value http-data=(${body}) keep-result=no`
+    `http-header-field="Content-Type:application/json" ` +
+    `output=user as-value http-data=(${body})`
 }
 
 /** The scoped `:onerror` wrapper every survey is emitted inside. */
@@ -368,6 +376,10 @@ function escapeScalars(
 export function buildDiscoveryScript(o: DiscoveryOptions): string {
   const seven = o.major !== null && o.major >= 7
   const L: string[] = [
+    // MARKERS (see capabilities.ts). Present in the HTTP response, not just in a
+    // fixture, so a stale deployment is visible in the downloaded bytes alone.
+    '# ISPFlow-BOOTSTRAP-GENERATOR-528C90',
+    '# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR',
     '# =============================================================================',
     `# ISPFlow router discovery - session ${o.tag}`,
     '# =============================================================================',
@@ -607,7 +619,8 @@ function skipped(key: Survey, reason: string, o: DiscoveryOptions): string[] {
     '# --- ' + key + ' (skipped: not applicable to this firmware) ---',
     `:put "ISPFlow: ${key} skipped - ${reason}";`,
     `  /tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
-      `output=user as-value keep-result=no ` +
+      `http-header-field="Content-Type:application/json" ` +
+      `output=user as-value ` +
       `http-data="{\\"unsupported\\":\\"${ros(reason)}\\"}"`,
   ]
 }

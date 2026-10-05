@@ -37,7 +37,24 @@ function mask(line: string): string {
 
 const isComment = (l: string) => l.trim().startsWith('#')
 
-export function validateRouterOsScript(script: string): ValidationIssue[] {
+export interface ValidateOptions {
+  /**
+   * Which JSON strategy the build is SUPPOSED to emit.
+   *
+   * Left out, the validator infers it from whether `:serialize` appears. That is
+   * enough to catch two strategies mixed in one file, but it CANNOT catch a
+   * build that quietly fell back to the hand-escaping path - inferring the
+   * expectation from the output proves nothing about the output. Production
+   * served exactly that failure after a deploy reported success, so callers
+   * that know the target version must pass it.
+   */
+  mode?: 'serialize' | 'escape'
+}
+
+export function validateRouterOsScript(
+  script: string,
+  opts: ValidateOptions = {},
+): ValidationIssue[] {
   const issues: ValidationIssue[] = []
   const raw = script.split('\n')
   const lines = raw.map(mask)
@@ -181,6 +198,7 @@ export function validateRouterOsScript(script: string): ValidationIssue[] {
   // is dead weight and a second, divergent way to build JSON. Where it is not
   // available, something must escape.
   const usesSerialize = /:serialize to=json/.test(script)
+  const isRos7 = opts.mode ? opts.mode === 'serialize' : usesSerialize
   lines.forEach((l, i) => {
     if (isComment(raw[i])) return
     if (usesSerialize && /\[:replace/.test(l)) {
@@ -199,6 +217,85 @@ export function validateRouterOsScript(script: string): ValidationIssue[] {
         'a raw value is concatenated into JSON without passing through the escaper')
     }
   })
+
+  // --- 5c. static fingerprint -------------------------------------------
+  // NOT a RouterOS parser: rules 1-4 do the structural work. This is the list
+  // of strings whose presence in a download proves the wrong generator served
+  // the request. Every one of them has actually shipped from production.
+  lines.forEach((l, i) => {
+    if (isComment(raw[i])) return
+    if (/JSON\.(stringify|parse)/.test(l)) {
+      add(i, 'json-js', 'JSON.stringify/JSON.parse is JavaScript; RouterOS cannot run it')
+    }
+    if (/http-method\s*=/i.test(l)) {
+      add(i, 'fetch-insecure', 'http-method is not a RouterOS fetch property; use method=POST')
+    }
+    if (/keep-result\s*=\s*no/.test(l)) {
+      add(i, 'fetch-keep-result',
+        'keep-result=no is not emitted; `output=user as-value` is the validated form')
+    }
+    // Hand-escaping in a build that must be using native serialization.
+    if (isRos7 && /:replace/.test(l)) {
+      add(i, 'json-strategy',
+        'hand-escaping in a build that should emit :serialize to=json')
+    }
+    // RouterOS interpolates these inside string literals too, so the raw line is
+    // checked rather than the masked one. None of them exist as variables: the
+    // old generator read them and produced literal `$identity` in the JSON.
+    if (/\$(identity|version|board-name)\b/.test(raw[i])) {
+      add(i, 'undefined-variable',
+        '$identity/$version/$board-name are not RouterOS variables')
+    }
+    // A query parameter that can contain a space, a quote or a newline aborts
+    // the whole download. Only token/vm/arch are safe, and only the outer
+    // bootstrap URL carries them.
+    if (/\burl=/.test(l)
+      && /[?&](identity|board|version|id|name|sysname)=/.test(l)) {
+      add(i, 'unsafe-url-param',
+        'bootstrap URL carries identity/board/version; only token, vm and arch are safe')
+    }
+  })
+
+  // --- 5d. required to be present ----------------------------------------
+  // Absence is the failure mode that actually shipped, so presence is asserted
+  // rather than assumed.
+  const hasFetch = /\/tool fetch\b/.test(script)
+  if (!script.includes('# ISPFlow-BOOTSTRAP-GENERATOR-528C90')
+    || !script.includes('# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR')) {
+    issues.push({
+      line: 1, rule: 'missing-marker',
+      message: 'generator markers absent - this is not the current generator',
+      text: raw[0] ?? '',
+    })
+  }
+  if (opts.mode === 'serialize' && !usesSerialize) {
+    issues.push({
+      line: 1, rule: 'missing-serialize',
+      message: 'expected `:serialize to=json` (RouterOS 7.13+) but none was emitted',
+      text: raw[0] ?? '',
+    })
+  }
+  if (opts.mode === 'escape' && usesSerialize) {
+    issues.push({
+      line: 1, rule: 'unexpected-serialize',
+      message: 'expected the hand-escaping fallback but `:serialize to=json` was emitted',
+      text: raw[0] ?? '',
+    })
+  }
+  if (hasFetch && !/method=POST/.test(script)) {
+    issues.push({
+      line: 1, rule: 'missing-post',
+      message: 'fetch present but no `method=POST`',
+      text: raw[0] ?? '',
+    })
+  }
+  if (hasFetch && !/check-certificate=yes/.test(script)) {
+    issues.push({
+      line: 1, rule: 'missing-cert',
+      message: 'fetch present but no `check-certificate=yes`',
+      text: raw[0] ?? '',
+    })
+  }
 
   // --- 7. RouterOS 6 compatibility --------------------------------------
   // The ternary is not available on every RouterOS 6 build.
