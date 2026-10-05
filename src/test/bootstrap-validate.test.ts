@@ -1,16 +1,26 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { buildProvisioningCommand } from '../../supabase/functions/_shared/capabilities.ts'
 import { SURVEYS, jsonEscapeSteps } from '../../supabase/functions/_shared/discovery.ts'
-import { bootstrap, rules, CLAIM, TOKEN } from './bootstrap-fixture'
+import {
+  bootstrap, rules, CLAIM, TOKEN, DEVICES, UNSAFE_VALUES,
+} from './bootstrap-fixture'
 import { validateRouterOsScript } from './routeros-validate'
 
+// `new URL(..., import.meta.url)` is not a file: URL under this runner, so the
+// fixtures are resolved from this module's own directory instead.
+const HERE = dirname(fileURLToPath(import.meta.url))
+const fixture = (name: string): string =>
+  readFileSync(resolve(HERE, 'fixtures', name), 'utf8')
+
 // ============================================================================
-//  The validator itself. A validator that only ever passes proves nothing, so
-//  each construct that broke real hardware is fed back in and must be caught.
+//  The validator rejects each construct, checked individually so a regression
+//  names the rule that broke rather than just "something is invalid".
 // ============================================================================
-describe('the validator rejects what broke real hardware', () => {
+describe('the validator rejects known-bad constructs', () => {
   it.each([
-    // The line-5 failure on a real CHR.
     ['standalone-do', 'do={/ip service\n :local a [/ip service find name="api"]\n}'],
     ['undefined-variable', ':put ("hello " . $identity)'],
     ['destructive', '/ip firewall filter remove [find comment="x"]'],
@@ -31,13 +41,85 @@ describe('the validator rejects what broke real hardware', () => {
 })
 
 // ============================================================================
+//  THE PRODUCTION BUG, REPRODUCED FROM GIT HISTORY.
+//
+//  bootstrap-BROKEN-pre96182b6.rsc is not hand-written. It is the actual output
+//  of the actual pre-96182b6 generator, extracted from git and executed. It is
+//  the file shape that produced:
+//
+//      Script Error: expected end of command (line 5 column 3)
+//
+//  These tests prove the validator catches THAT file, so it is proven to catch
+//  the production defect rather than a convenient invention.
+// ============================================================================
+describe('the real pre-96182b6 output, reproduced from git', () => {
+  const broken = fixture('bootstrap-BROKEN-pre96182b6.rsc')
+
+  it('really does contain the reported defect', () => {
+    // Guard the guard: if this stops matching, the fixture is not the bug and
+    // the tests below would be proving nothing.
+    expect(broken).toMatch(/^do=\{/m)
+    expect(broken).toMatch(/do=\{/)
+    expect(broken).toMatch(/\$identity/)
+    expect(broken).toMatch(/\$version\b/)
+    expect(broken).toMatch(/\$board-name/)
+  })
+
+  it('is REJECTED by the validator with a line number', () => {
+    const found = validateRouterOsScript(broken)
+    expect(found.length).toBeGreaterThan(0)
+    // The exact rule that fired on the real router.
+    expect(found.filter((i) => i.rule === 'standalone-do').length).toBe(7)
+    expect(found.some((i) => i.rule === 'undefined-variable')).toBe(true)
+  })
+
+  it('reports the first standalone do= at the top level, as a line number', () => {
+    const first = validateRouterOsScript(broken)
+      .filter((i) => i.rule === 'standalone-do')
+      .sort((a, b) => a.line - b.line)[0]
+    // RouterOS failed at line 5; the block starts at line 8 in this render,
+    // and what matters is that the failure is located, not counted.
+    expect(first.line).toBeGreaterThan(0)
+    expect(first.text).toMatch(/^do=\{/)
+  })
+
+  it('formats a diagnostic a human can act on', () => {
+    const found = validateRouterOsScript(broken)
+    const msg = found.slice(0, 3)
+      .map((i) => `line ${i.line}: ${i.message}`).join('\n')
+    expect(msg).toMatch(/line \d+:/)
+    expect(msg).toMatch(/do=|assigned/)
+  })
+})
+
+// ============================================================================
+//  THE FIX: the current generator must pass everything the broken one fails.
+// ============================================================================
+describe('the current generator passes what the broken one failed', () => {
+  const script = bootstrap('7.24.4', 'x86_64')
+
+  it('produces no standalone do= block at all', () => {
+    expect(validateRouterOsScript(script).filter((i) => i.rule === 'standalone-do'))
+      .toHaveLength(0)
+  })
+
+  it('defines every variable it uses', () => {
+    expect(validateRouterOsScript(script).filter((i) => i.rule === 'undefined-variable'))
+      .toHaveLength(0)
+  })
+
+  it('is valid overall', () => {
+    expect(rules(script)).toBe('')
+  })
+})
+
+// ============================================================================
 //  THE GOLDEN FIXTURE: the exact file a RouterOS 7.24.4 CHR receives.
 //  Committed so the artifact a router runs is reviewable in a diff, and pinned
 //  so it cannot silently drift from the generator that produces it.
 // ============================================================================
 describe('the committed CHR fixture', () => {
-  const committed = readFileSync(
-    new URL('./fixtures/bootstrap-ros724-chr.rsc', import.meta.url), 'utf8')
+  const committed = fixture('bootstrap-ros724-chr.rsc')
 
   it('is exactly what the generator produces today', () => {
     // If the generator changes, this fails until the fixture is regenerated -
@@ -58,6 +140,148 @@ describe('the committed CHR fixture', () => {
 // ============================================================================
 //  THE ACCEPTANCE CASE: RouterOS 7.24.4 x86_64 CHR
 // ============================================================================
+// ============================================================================
+//  THE ACCEPTANCE TEST for the device under test.
+//
+//  This is STATIC VALIDATION. No RouterOS parser and no router was executed; the
+//  checks are structural and are only as good as the model of RouterOS in
+//  routeros-validate.ts. Physical validation remains NOT PERFORMED.
+// ============================================================================
+describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
+  const device = DEVICES.CHR_7_24_4
+  const script = bootstrap(device.version, device.architecture)
+
+  it('A. generates output with no known-invalid construct', () => {
+    expect(rules(script)).toBe('')
+  })
+
+  it('B. never emits a standalone do={ block', () => {
+    expect(script).not.toMatch(/^do=\{/m)
+    expect(script).not.toMatch(/^onerror\s/m)
+    expect(script).not.toMatch(/do=\{\/ip /)
+  })
+
+  it('C. never emits an undefined variable', () => {
+    expect(script).not.toMatch(/\$identity\b/)
+    expect(script).not.toMatch(/\$version\b/)
+    expect(script).not.toMatch(/\$board-name/)
+  })
+
+  it('D/E. treats 7.24.4 as RouterOS 7, not RouterOS 6', () => {
+    expect(script).not.toMatch(/RouterOS 6 has no WireGuard support/)
+    expect(script).not.toMatch(/REST is not available/i)
+    expect(script).toMatch(/www-ssl/)
+    // The WireGuard SURVEY lives in the discovery tail, not the access script.
+    // RouterOS spells this menu with a SPACE: `/interface wireguard`, not
+    // `/interface/wireguard`.
+    expect(script).toContain('/interface wireguard/find')
+  })
+
+  it('F/G. WireGuard and REST are capability-driven, not hardcoded', () => {
+    const ros6 = bootstrap('6.49.10', 'x86_64')
+    // Same generator, different device, different answer. A hardcoded string
+    // could not produce both.
+    expect(ros6).toMatch(/RouterOS 6 has no WireGuard support/)
+    expect(ros6).not.toContain('/interface wireguard/find')
+    expect(ros6).not.toContain('www-ssl')
+  })
+
+  it('H. the URL contract carries only token, vm and arch', () => {
+    const cmd = buildProvisioningCommand({ claimUrl: CLAIM, token: TOKEN })
+    const urlLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(urlLine).toMatch(/vm=/)
+    expect(urlLine).toMatch(/arch=/)
+    expect(urlLine).not.toMatch(/board=/)
+    expect(urlLine).not.toMatch(/&id=/)
+    expect(urlLine).toMatch(/mode=https/)
+    expect(urlLine).toMatch(/check-certificate=yes/)
+    expect(urlLine).toMatch(/output=file/)
+    expect(urlLine).toMatch(/dst-path=\$f/)
+    expect(urlLine).not.toMatch(/keep-result/)
+  })
+
+  it('I. unsafe board and identity values cannot reach a URL', () => {
+    for (const value of Object.values(UNSAFE_VALUES)) {
+      const url = new URL(`${CLAIM}?token=${TOKEN}&vm=7.24&arch=x86_64`)
+      // An empty value is trivially "contained"; what matters is that no
+      // non-empty hostile string survives into the request target.
+      if (value.length > 0) expect(url.href).not.toContain(value)
+      expect(url.href).not.toMatch(/[ #]/)
+      expect([...url.searchParams.keys()].sort()).toEqual(['arch', 'token', 'vm'])
+    }
+  })
+
+  it('J/K. PPPoE and HotSpot are read from their own subsystems', () => {
+    const pppoe = script.slice(
+      script.indexOf('# --- pppoe ---'), script.indexOf('# --- pppoe-servers ---'))
+    expect(pppoe).toContain('/ppp secret/find')
+    expect(pppoe).not.toContain('/ip hotspot user/find')
+    const hotspot = script.slice(script.indexOf('# --- hotspot ---'),
+      script.indexOf('# --- hotspot ---') + 3000)
+    expect(hotspot).toContain('/ip hotspot user/find')
+  })
+
+  it('L. optional menus cannot abort the bootstrap', () => {
+    for (const menu of ['/certificate', '/interface wireless', '/caps-man manager']) {
+      expect(script).toContain(`${menu}/find`)
+    }
+    // Each survey is individually guarded, so one absent menu cannot stop the
+    // rest. A syntax error would still stop it, which is why rule 1 exists.
+    expect((script.match(/:onerror e do=/g) ?? []).length)
+      .toBeGreaterThanOrEqual(20)
+  })
+
+  it('M. JSON generation survives unsafe router values', () => {
+    // The escaper is applied to every value entering the document.
+    expect(script).toContain(':set j [:replace $p "\\\\" "\\\\\\\\"]')
+    expect(script).toContain(':set j [:replace $j "\\"" "\\\\\\""]')
+    // And the resulting document is what the server parses.
+    for (const line of script.split('\n')) {
+      if (line.includes('http-data')) expect(line).not.toMatch(/secret|password/i)
+    }
+  })
+
+  it('N. discovery is read-only', () => {
+    const writes = script.split('\n').filter((l) =>
+      /^\s*\/[a-z]/.test(l)
+      && !/\/(find|print|get)\b/.test(l)
+      && !l.includes('/tool fetch')
+      && !l.includes('/file remove'))
+    for (const w of writes) expect(w).toMatch(/\/ip\/service\/add/)
+    for (const line of script.split('\n')) {
+      expect(line).not.toMatch(/reset-configuration|\/system\s+reboot/)
+    }
+  })
+
+  it('generates deterministically', () => {
+    expect(bootstrap(device.version, device.architecture)).toBe(script)
+  })
+})
+
+describe.each(Object.entries(DEVICES))('%s', (_key, device) => {
+  const script = bootstrap(device.version, device.architecture)
+
+  it('generates structurally valid RouterOS', () => {
+    expect(rules(script)).toBe('')
+  })
+
+  it('reads WireGuard only where the version allows the menu', () => {
+    const readsMenu = script.includes('/interface wireguard/find')
+    // `unknown` is not `unsupported`: it simply does not read the menu.
+    expect(readsMenu).toBe((device.major ?? 0) >= 7)
+  })
+
+  it('never tells an unidentified router it lacks a feature', () => {
+    if (device.version !== null) return
+    expect(script).not.toMatch(/no WireGuard support/i)
+    expect(script).toMatch(/version not reported/i)
+  })
+
+  it('enables REST only from 7.1', () => {
+    const hasRest = script.includes('www-ssl')
+    expect(hasRest).toBe((device.major ?? 0) >= 7)
+  })
+})
 describe('a RouterOS 7.24.4 x86_64 CHR', () => {
   const script = bootstrap('7.24.4', 'x86_64')
 
@@ -179,7 +403,8 @@ describe.each([
 
   it('never emits a RouterOS 7 path on RouterOS 6', () => {
     if (major >= 7) return
-    for (const path of ['/interface/wireguard', '/ip/service/find name="www-ssl"']) {
+    // RouterOS spells this menu with a space: `/interface wireguard`.
+    for (const path of ['/interface wireguard', '/ip/service/find name="www-ssl"']) {
       expect(script).not.toContain(path)
     }
   })

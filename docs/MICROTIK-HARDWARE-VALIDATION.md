@@ -32,6 +32,22 @@ standalone `do=`, no undefined variable, balanced blocks, valid `/tool fetch`
 options, no destructive command, no unescaped JSON and no RouterOS 6
 assumption. It is proven to reject each of the four defects above.
 
+That proof is not a hand-written sample. `src/test/fixtures/bootstrap-BROKEN-pre96182b6.rsc`
+is the **actual output of the actual pre-96182b6 generator**, extracted from git
+(`96182b6~1`) and executed (`src/test/gen-old-bootstrap.ts`). It is 41091 bytes
+with **7 standalone `do={` blocks** and undefined `$identity`, `$version` and
+`$board-name` - the reported failure, reproduced. A test asserts the validator
+rejects it with line numbers, and that the current generator passes.
+
+To regenerate both fixtures:
+
+```bash
+npx vite-node src/test/gen-old-bootstrap.ts \
+  src/test/fixtures/bootstrap-BROKEN-pre96182b6.rsc
+npx vite-node src/test/gen-bootstrap.ts 7.24.4 x86_64 \
+  src/test/fixtures/bootstrap-ros724-chr.rsc
+```
+
 **That is still not proof.** A validator models RouterOS as understood. The
 following must be confirmed on the device:
 

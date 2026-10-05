@@ -363,12 +363,15 @@ async function buildDiscoveryTail(
   return buildDiscoveryScript({
     reportUrl,
     token: String(data.token),
-    // Prefer the version the router actually reported. When it did not report
-    // one, fall back to the compatibility profile's own verdict: `rest` is
-    // already "is this at least 7.1", which is exactly the split that decides
-    // whether WireGuard exists. Guessing 7 for an unparseable string would send
-    // a 6.x box a path it does not have.
-    major: parsed?.major ?? (profile.rest ? 7 : 6),
+    // Pass the real major version, or null when the router never reported one.
+    //
+    // This used to fall back to `profile.rest ? 7 : 6`, which invented a
+    // RouterOS 6 box out of a router that had simply stayed silent, and the
+    // discovery script then told it "RouterOS 6 has no WireGuard support". A
+    // fact nobody established, presented to the operator as established.
+    // Guessing 7 would be worse: it sends a 6.x box a path it does not have.
+    // null means unknown, and the script says exactly that.
+    major: parsed?.major ?? null,
     tag,
   })
 }
