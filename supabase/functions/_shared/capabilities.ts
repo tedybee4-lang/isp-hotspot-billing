@@ -237,7 +237,19 @@ export function buildProvisioningCommand(opts: {
     // /tool/fetch), so without it the single-use token travels over a
     // connection any proxy on the path can read and rewrite - and this fetch
     // returns a script the router then executes as root.
-    '  /tool fetch url=($u . "?token=" . $t . "&version=" . $v . "&board=" . $b . "&arch=" . $a . "&id=" . $n) mode=https check-certificate=yes dst-path=$f output=file keep-result=yes;',
+    //
+    // keep-result is NOT set here, and that is deliberate and hardware-verified.
+    // On a real RouterOS 7.24.4 CHR, combining it with output=file is rejected
+    // outright:
+    //
+    //     failure: please use 'output' option
+    //
+    // The download still lands in dst-path; keep-result only controls whether the
+    // RESULT is also held after the fetch, which this command has no use for. It
+    // imports the file and then deletes it. The syntax confirmed working on that
+    // exact device is: url=... mode=https check-certificate=yes output=file
+    // dst-path=$f
+    '  /tool fetch url=($u . "?token=" . $t . "&version=" . $v . "&board=" . $b . "&arch=" . $a . "&id=" . $n) mode=https check-certificate=yes output=file dst-path=$f;',
     '  :if ([:len [/file find name=$f]] = 0) do={',
     '    :error "ISPFlow: could not reach the provisioning endpoint.";',
     '  }',

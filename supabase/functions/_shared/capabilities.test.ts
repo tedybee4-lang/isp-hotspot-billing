@@ -114,6 +114,32 @@ describe('buildProvisioningCommand', () => {
     expect(fetchLine).toMatch(/dst-path=\$f/)
   })
 
+  it('does not combine output=file with keep-result, which RouterOS rejects', () => {
+    // Regression from a REAL RouterOS 7.24.4 CHR. Combining them fails the
+    // fetch outright with:
+    //
+    //     failure: please use 'output' option
+    //
+    // so the bootstrap never downloaded, and every router looked unreachable
+    // when the endpoint was in fact answering correctly.
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).toMatch(/output=file/)
+    expect(fetchLine).not.toMatch(/keep-result/)
+    // And nowhere else in the command either.
+    expect(cmd).not.toMatch(/keep-result/)
+  })
+
+  it('keeps TLS verification and the router self-report parameters', () => {
+    // The keep-result fix must not have disturbed either of these.
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).toMatch(/mode=https/)
+    expect(fetchLine).toMatch(/check-certificate=yes/)
+    expect(fetchLine).toMatch(/&version=/)
+    expect(fetchLine).toMatch(/&board=/)
+    expect(fetchLine).toMatch(/&arch=/)
+    expect(fetchLine).toMatch(/&id=/)
+  })
+
   it('cannot report an unreachable endpoint when the fetch simply discarded', () => {
     // Guard the exact failure mode: the error below must be reachable only
     // because the file genuinely is absent.

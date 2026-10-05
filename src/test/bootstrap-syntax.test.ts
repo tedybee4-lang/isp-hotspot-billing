@@ -290,8 +290,31 @@ describe('the one-command bootstrap reports the router itself', () => {
   })
 
   it('writes the fetched file and imports it', () => {
-    expect(cmd).toMatch(/dst-path=\$f output=file/)
+    expect(cmd).toMatch(/output=file/)
+    expect(cmd).toMatch(/dst-path=\$f/)
     expect(cmd).toMatch(/\/import file-name=\$f/)
+  })
+
+  it('does NOT combine output=file with keep-result', () => {
+    // Regression from a REAL RouterOS 7.24.4 CHR. The two options together are
+    // rejected outright with:
+    //
+    //     failure: please use 'output' option
+    //
+    // The fetch never ran, so the file check below failed and every router was
+    // reported unreachable while the endpoint was in fact answering correctly.
+    // keep-result only controls whether the RESULT is also held after the fetch,
+    // which this command has no use for: it imports the file and deletes it.
+    expect(cmd).not.toMatch(/keep-result/)
+  })
+
+  it('keeps TLS verification and the self-report parameters', () => {
+    // The keep-result fix must not have disturbed either of these.
+    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
+    expect(fetchLine).toMatch(/mode=https/)
+    expect(fetchLine).toMatch(/check-certificate=yes/)
+    expect(fetchLine).toMatch(/output=file/)
+    expect(fetchLine).toMatch(/&version=.*&board=.*&arch=.*&id=/)
   })
 
   it('removes only the bootstrap file it downloaded', () => {
