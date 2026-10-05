@@ -246,10 +246,45 @@ export function buildProvisioningCommand(opts: {
     // the same way. Only the numeric prefix is sent, and that is all
     // `buildCompatibility` needs to decide REST (7.1+) and WireGuard (7.0+).
     // The server rebuilds `major.minor` from it.
-    '  :local ispFlowVer [/system/resource/get version];',
+    '  :local ispFlowVerRaw [/system/resource/get version];',
+    // --------------------------------------------------------------------------------
+    // WHY THIS LOOKS THE WAY IT DOES - `vm` is the reason a correct deploy still
+    // downloaded 55 KiB of hand-escaped script.
+    // --------------------------------------------------------------------------------
+    // RouterOS `:pick <string> <start> <end>` is start-INCLUSIVE, end-EXCLUSIVE.
+    // It is not (start, length). Confirmed on real hardware by the community:
+    //
+    //     :put [:pick "abcde" 1 3]   ->  bc      (not "bcd")
+    //     :put [:pick "abcde" 2 2]   ->  ""      (always empty)
+    //
+    // This command used to say `[:pick $ispFlowVer 2 2]`, which yields "" for
+    // EVERY version. `vm` therefore arrived as "7.", the server could not read a
+    // version from it, and every router was served the conservative fallback -
+    // ~55 KiB of `[:replace]`-escaped script - no matter which generator was
+    // deployed. The endpoint answered HTTP 200 the whole time, which is why the
+    // deploy was blamed first and looked correct.
+    //
+    // `..` is appended so a SECOND dot always exists. `:find`'s third argument
+    // searches strictly AFTER that index (RouterOS default is -1, meaning from
+    // the start), so the second call cannot re-find the first dot, and `:pick`
+    // then cuts at it - starting from 0, where start/end and start/length
+    // cannot be confused. There is no nil case and no conditional to get wrong.
+    //
+    //   "7.24.4.."        -> dot1=1  dot2=4  -> "7.24"
+    //   "7.9.2.."         -> dot1=1  dot2=3  -> "7.9"
+    //   "7.24.."          -> dot1=1  dot2=4  -> "7.24"
+    //   "6.49.10 (l-t).." -> dot1=1  dot2=4  -> "6.49"   (no space in the URL)
+    //
+    // board-name and identity are deliberately NOT read here: they are free text,
+    // and a literal space in them already produced an HTTP 400 from the edge
+    // gateway before this function was ever entered. The discovery survey in the
+    // same response reports both, in a JSON body where arbitrary text is safe.
+    // --------------------------------------------------------------------------------
+    '  :local ispFlowVer ($ispFlowVerRaw . "..");',
     '  :local ispFlowArch [/system/resource/get architecture-name];',
-    '  :local ispFlowMajor [:pick $ispFlowVer 0 1];',
-    '  :local ispFlowMinor [:pick $ispFlowVer 2 2];',
+    '  :local ispFlowDot1 [:find $ispFlowVer "."];',
+    '  :local ispFlowDot2 [:find $ispFlowVer "." $ispFlowDot1];',
+    '  :local ispFlowVm [:pick $ispFlowVer 0 $ispFlowDot2];',
     // output=file is REQUIRED. `output=none` tells RouterOS to discard the
     // fetched bytes instead of writing dst-path, so the file check below could
     // never succeed and every router failed with "could not reach the
@@ -284,7 +319,7 @@ export function buildProvisioningCommand(opts: {
     // board-name and identity are deliberately ABSENT. They are free text, they
     // are what caused this 400, and the discovery survey in the same response
     // already reports both.
-    '  /tool fetch url=($u . "?token=" . $t . "&vm=" . $ispFlowMajor . "." . $ispFlowMinor . "&arch=" . $ispFlowArch) mode=https check-certificate=yes output=file dst-path=$f;',
+    '  /tool fetch url=($u . "?token=" . $t . "&vm=" . $ispFlowVm . "&arch=" . $ispFlowArch) mode=https check-certificate=yes output=file dst-path=$f;',
     '  :if ([:len [/file find name=$f]] = 0) do={',
     '    :error "ISPFlow: could not reach the provisioning endpoint.";',
     '  }',

@@ -82,17 +82,109 @@ provisioning session also caches nothing, but the **token is single-use**, so
 generate a new command (and therefore a new token) after deploying.
 
 **How to tell which build you are testing.** The generated script's size is a
-reliable fingerprint, because every fix changed it:
+reliable fingerprint, because every fix changed it — but size alone is a
+heuristic, so the generator now emits two marker comments that are not:
 
-| Build | Approximate size | Contains |
+| Build | Approximate size | Marker / contains |
 |---|---|---|
 | before `96182b6` | ~38 KiB | standalone `do={/ip service`, `$identity`, "RouterOS 6 has no WireGuard" |
 | `96182b6` | ~40 KiB | `do={` fixed, capability messages fixed |
 | `7864582` | ~40 KiB | `keep-result=yes` removed |
-| `27644af` and later | **~57 KiB** | URL 400 fixed, undefined vars fixed, PPPoE/RADIUS remapped, JSON escaping added |
+| `27644af` – `528c90a` | **~55–57 KiB** | URL 400 fixed, escaping added — and the hand-escaping path |
+| `6158b2d` and later | **~31 KiB** | `# ISPFlow-BOOTSTRAP-GENERATOR-528C90`, `# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR`, `:serialize to=json` |
 
-If the downloaded file is ~38 KiB you are running pre-`96182b6` code, whatever
-this repository says. A file near 57 KiB is current.
+So:
+
+| Downloaded | Meaning |
+|---|---|
+| no markers, any size | a deploy that predates `6158b2d` |
+| ~31 KiB + both markers | current generator, RouterOS 7.13+ serialize path |
+| ~31 KiB + markers, `[:replace` present | a build that took the ROS6/unknown fallback — the `vm` did not parse |
+| ~55–57 KiB | hand-escaping path, pre-`6158b2d` **or** a `vm` the server could not read |
+
+### The 55 KiB incident: the deploy was not the bug
+
+A correct deploy continued to return ~55 KiB of `[:replace]`-escaped script,
+HTTP 200 the whole time, and the router failed with
+`Script Error: syntax error (line 56 column 36)` on `/import file-name=$f`.
+Three separate things had to be established before the cause was visible:
+
+1. **The endpoint was fine.** Fetching it directly with a good `vm` returned
+   32,471 bytes of the new generator. Fetching it with `vm=7.` returned 58,413
+   bytes of the escape path. The generator was not stale — the *input* was.
+2. **The router sent `vm=7.`** because the command contained
+   `:local ispFlowMinor [:pick $ispFlowVer 2 2]`. RouterOS `:pick <s> <start>
+   <end>` is start-inclusive and **end-exclusive**, not `(start, length)`:
+
+   ```
+   :put [:pick "abcde" 1 3]   ->  bc      (not "bcd")
+   :put [:pick "abcde" 2 2]   ->  ""      always empty
+   ```
+
+   So the minor was `""` for every version, `vm` arrived as `"7."`, and the
+   server — correctly — found no version in it and served the conservative
+   fallback regardless of which generator was deployed.
+3. **The test agreed with the bug.** `claimUrl()` in `bootstrap-syntax.test.ts`
+   modelled `:pick` as `(start, len) => slice(start, start + len)`. Mirroring
+   the generated code is what makes it a test; mirroring the same *wrong
+   assumption* made it a restatement. Both sides computed minor = `24` and the
+   case passed.
+
+The fix pads the version with `..` so a second dot always exists, then cuts at
+it with `:find`'s search-after-index argument — no conditional, no nil case,
+and `:pick` always starts at 0, where the two interpretations cannot differ:
+
+```
+:local ispFlowVerRaw [/system/resource/get version];
+:local ispFlowVer ($ispFlowVerRaw . "..");
+:local ispFlowDot1 [:find $ispFlowVer "."];
+:local ispFlowDot2 [:find $ispFlowVer "." $ispFlowDot1];
+:local ispFlowVm [:pick $ispFlowVer 0 $ispFlowDot2];
+```
+
+| `version` | `vm` sent |
+|---|---|
+| `7.24.4` | `7.24` |
+| `7.9.2` | `7.9` |
+| `7.24` | `7.24` |
+| `6.49.10 (long-term)` | `6.49` — no space reaches the URL |
+
+The validator now rejects a zero-width `[:pick x N N]` outright, so this class
+of defect fails in CI rather than on a customer's terminal.
+
+### Live verification
+
+Proven against production with a freshly minted single-use token, on
+`router-provision` v18 (project `dcqcunmdhyonaewwuama`), requesting
+`?token=…&vm=7.24&arch=x86_64` exactly as the CHR command does:
+
+| Check | Result |
+|---|---|
+| HTTP status | `200`, `content-type: text/plain` |
+| Size | **32,471 bytes / 700 lines (31.7 KiB)** |
+| `# ISPFlow-BOOTSTRAP-GENERATOR-528C90` | present |
+| `# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR` | present |
+| `:serialize to=json` | present |
+| `method=POST` | present |
+| `check-certificate=yes` | present |
+| `http-header-field="Content-Type:application/json"` | present |
+| `[:replace`, `:replace` | **absent** |
+| `JSON.stringify`, `JSON.parse` | **absent** |
+| `http-method` | **absent** |
+| `keep-result=no` | **absent** |
+| `$identity`, `$version`, `$board-name` | **absent** |
+| `validateRouterOsScript(…, { mode: 'serialize' })` | **clean** |
+
+Control probes against the same deployment: `vm=7.` and an absent `vm` both
+return **58,413 bytes of the escape path containing `:replace`**, which is the
+failure that was being reported. That is how the cause was localised to the
+command's `vm` rather than to the deploy.
+
+**The survey payload fix.** Every discovery POST now carries
+`http-header-field="Content-Type:application/json"`. The report endpoint
+branches on content-type and calls `req.formData()` otherwise, which threw for
+every RouterOS survey body and was caught as `payload = {}` — surveys were
+recorded as reported with no data in them.
 
 The committed golden fixture
 (`src/test/fixtures/bootstrap-ros724-chr.rsc`) is the exact output for

@@ -248,11 +248,20 @@ export function validateRouterOsScript(
     }
     // A query parameter that can contain a space, a quote or a newline aborts
     // the whole download. Only token/vm/arch are safe, and only the outer
-    // bootstrap URL carries them.
+    // bootstrap URL carries them. The URL sits inside a string literal, which
+    // `mask` blanks out, so the raw line is the one that can be checked here.
     if (/\burl=/.test(l)
-      && /[?&](identity|board|version|id|name|sysname)=/.test(l)) {
+      && /[?&](identity|board|version|id|name|sysname)=/.test(raw[i])) {
       add(i, 'unsafe-url-param',
         'bootstrap URL carries identity/board/version; only token, vm and arch are safe')
+    }
+    // `[:pick <s> N N]` is a zero-width range and returns "" on every RouterOS,
+    // because :pick's end is exclusive, not a length. This single pattern is
+    // what made every router send an unparseable `vm=7.` and silently take the
+    // hand-escaping path while the deployment itself was correct.
+    if (/\[:pick\s+[^\]:]*?(\d+)\s+\1\s*\]/.test(l)) {
+      add(i, 'zero-width-pick',
+        '[:pick x N N] has an exclusive end, so it always returns an empty string')
     }
   })
 

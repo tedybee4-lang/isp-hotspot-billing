@@ -27,8 +27,40 @@ describe('the validator rejects known-bad constructs', () => {
     ['fetch-output', '/tool fetch url="https://a/b" output=file keep-result=yes dst-path=$f'],
     ['fetch-tls', '/tool fetch url="https://a/b" mode=https output=user as-value'],
     ['unbalanced-brace', ':if ($a = 1) do={\n  :local b ""\n'],
+    // The single construct behind the 55 KiB download: :pick's end is
+    // EXCLUSIVE, so equal bounds always return "" and `vm` arrives as "7.".
+    ['zero-width-pick', ':local v "7.24.4"\n:put [:pick $v 2 2]'],
+    ['fetch-keep-result',
+      '/tool fetch url="https://a/b" method=POST check-certificate=yes output=user as-value keep-result=no'],
+    ['json-js', ':local x ""\n:put (JSON.stringify $x)'],
+    ['fetch-insecure', '/tool fetch url="https://a/b" method=POST http-method=post'],
+    ['unsafe-url-param', '/tool fetch url="https://a?identity=x" method=POST'],
   ])('catches %s', (rule, script) => {
     expect(validateRouterOsScript(script).map((i) => i.rule)).toContain(rule)
+  })
+
+  it('does NOT flag a correctly bounded :pick', () => {
+    // The guard must not be a blanket ban on :pick, or the next script that
+    // legitimately slices one will fail for no reason.
+    const ok = ':local v "7.24.4"\n:put [:pick $v 0 $end]\n:put [:pick $v 1 3]'
+    expect(validateRouterOsScript(ok).map((i) => i.rule)).not.toContain('zero-width-pick')
+  })
+
+  it('fails a build that silently fell back to hand-escaping', () => {
+    // Infer nothing from the output. If the caller says this is a RouterOS 7.13+
+    // build, the absence of :serialize is a failure even though the file is
+    // perfectly valid RouterOS - which is exactly how the stale deployment
+    // passed every check while serving the escape path.
+    const escaped = '/tool fetch url="https://a/b" method=POST'
+    const rules = validateRouterOsScript(escaped, { mode: 'serialize' }).map((i) => i.rule)
+    expect(rules).toContain('missing-marker')
+    expect(rules).toContain('missing-serialize')
+    expect(rules).toContain('missing-cert')
+  })
+
+  it('requires the generator markers to be present', () => {
+    const rules = validateRouterOsScript(':put "hi"').map((i) => i.rule)
+    expect(rules).toContain('missing-marker')
   })
 
   it('does not mistake property access for an undefined variable', () => {

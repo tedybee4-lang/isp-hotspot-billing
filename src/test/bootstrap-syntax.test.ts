@@ -283,17 +283,38 @@ describe('the claim URL survives a real CHR identity', () => {
 
   /**
    * Builds the URL the generated command produces, given the values the router
-   * would substitute. The two `:pick` calls are mirrored exactly, because the
-   * point of the fix is what the ROUTER sends, not what the server accepts.
+   * would substitute.
+   *
+   * Mirrored against REAL RouterOS semantics, because mirroring the generated
+   * code is what makes this a test rather than a restatement. The previous
+   * version modelled `:pick` as `(start, length) => slice(start, start+len)`,
+   * which is NOT what RouterOS does, so it reproduced `[:pick $v 2 2]` as
+   * "minor = 24" while the router returns "". Both sides agreed, the test
+   * passed, and every router silently received an unparseable `vm=7.` - which
+   * is how a correct deploy still served 55 KiB of escaped script.
+   *
+   * RouterOS, verified on hardware:
+   *   :pick <s> <start> <end>  start inclusive, END EXCLUSIVE
+   *     [:pick "abcde" 1 3] -> "bc"
+   *     [:pick "abcde" 2 2] -> ""
+   *   :find <s> <needle> [<after>]  searches strictly AFTER `after`;
+   *                                 default -1 == from index 0
    */
   function claimUrl(rawVersion: string, arch: string): URL {
     buildProvisioningCommand({ claimUrl: CLAIM, token: TOKEN })
-    const pick = (start: number, len: number) => rawVersion.slice(start, start + len)
-    const major = pick(0, 1)
-    const minor = pick(2, 2)
+    const pick = (s: string, start: number, end: number) => s.slice(start, end)
+    const find = (s: string, needle: string, after: number) => {
+      const i = s.indexOf(needle, after + 1)
+      if (i < 0) throw new Error(`no second dot in ${JSON.stringify(s)}`)
+      return i
+    }
+    const padded = `${rawVersion}..`
+    const dot1 = find(padded, '.', -1)
+    const dot2 = find(padded, '.', dot1)
+    const vm = pick(padded, 0, dot2)
     // `new URL` is the check that matters: it performs the same request-target
     // parse the edge gateway does, and it is what rejected the raw board name.
-    return new URL(`${CLAIM}?token=${TOKEN}&vm=${major}.${minor}&arch=${arch}`)
+    return new URL(`${CLAIM}?token=${TOKEN}&vm=${vm}&arch=${arch}`)
   }
 
   it('accepts the exact values reported by the CHR', () => {
@@ -343,6 +364,35 @@ describe('the claim URL survives a real CHR identity', () => {
     expect(buildCompatibility(report.version, null, null).rest).toBe(false)
   })
 
+  it('produces a vm the server can parse, for every real version', () => {
+    // THE regression this file missed. The generated command said
+    // `[:pick $ispFlowVer 2 2]`, and RouterOS `:pick` is (start, END-EXCLUSIVE),
+    // so minor came back as "" on every device. `vm` arrived as "7.", the
+    // server correctly found no version in it, and every router was served the
+    // conservative hand-escaped fallback - ~55 KiB of `[:replace]` - while the
+    // deploy itself was fine and answered HTTP 200 the whole time.
+    //
+    // The test had passed because its own `:pick` was modelled as (start,
+    // length). Correcting the mirror is what makes this case able to fail.
+    const cases: [raw: string, vm: string][] = [
+      ['7.24.4', '7.24'],
+      ['7.9.2', '7.9'],
+      ['7.24', '7.24'],
+      ['7.16.1 (stable)', '7.16'],
+      ['6.49.10 (long-term)', '6.49'],
+      ['6.45.8', '6.45'],
+    ]
+    for (const [raw, expected] of cases) {
+      const url = claimUrl(raw, 'x86_64')
+      const vm = url.searchParams.get('vm')
+      // An empty vm or one ending in "." is exactly the failure.
+      expect(vm, `vm for ${JSON.stringify(raw)}`).toBe(expected)
+      expect(vm, `vm for ${JSON.stringify(raw)}`).not.toMatch(/(^$|\.$)/)
+      expect(parseClaimSelfReport(url.searchParams).version, raw).toBe(expected)
+      expect(url.href, raw).not.toMatch(/ /)
+    }
+  })
+
   it('rejects a crafted vm rather than trusting it', () => {
     // Validation, not loosening. These reach `buildCompatibility`, which decides
     // whether the router is sent RouterOS 7 commands, so anything not plainly
@@ -384,15 +434,21 @@ describe('the one-command bootstrap reports the router itself', () => {
   it('sends the version and architecture, but only the URL-safe parts', () => {
     // Without these the server calls buildCompatibility(null, ...), every
     // feature flag is false, and a 7.24.4 CHR is treated as a RouterOS 6 box.
-    expect(cmd).toMatch(/:local ispFlowVer \[\/system\/resource\/get version\]/)
+    expect(cmd).toMatch(/:local ispFlowVerRaw \[\/system\/resource\/get version\]/)
     expect(cmd).toMatch(/:local ispFlowArch \[\/system\/resource\/get architecture-name\]/)
 
     // Only major.minor travels, taken on the router where the string is still
     // in hand. RouterOS 6 returns "6.49.10 (long-term)" - a raw version would
     // put a space in the request target and 400 the claim, exactly as the real
     // CHR's board-name did.
-    expect(cmd).toMatch(/:local ispFlowMajor \[:pick \$ispFlowVer 0 1\]/)
-    expect(cmd).toMatch(/:local ispFlowMinor \[:pick \$ispFlowVer 2 2\]/)
+    //
+    // The cut is at the SECOND dot, found with :find's search-after-index
+    // argument. It must never be a fixed pair of numbers: `[:pick $v 2 2]` was,
+    // and a zero-width range returns "" on every RouterOS.
+    expect(cmd).toMatch(/:local ispFlowDot1 \[:find \$ispFlowVer "\."\]/)
+    expect(cmd).toMatch(/:local ispFlowDot2 \[:find \$ispFlowVer "\." \$ispFlowDot1\]/)
+    expect(cmd).toMatch(/:local ispFlowVm \[:pick \$ispFlowVer 0 \$ispFlowDot2\]/)
+    expect(cmd).not.toMatch(/:pick \$ispFlowVer 2 2/)
 
     // board-name and identity are NOT in the URL: they are free text, they are
     // what caused the 400, and the discovery survey reports both.
@@ -466,8 +522,9 @@ describe('the one-command bootstrap reports the router itself', () => {
     // RouterOS 6 returns "6.49.10 (long-term)" - spaces and parentheses. The
     // raw version would break a 6.x router the same way, so only the numeric
     // prefix is taken, on the router, where the string is still in hand.
-    expect(cmd).toMatch(/:local ispFlowMajor \[:pick \$ispFlowVer 0 1\]/)
-    expect(cmd).toMatch(/:local ispFlowMinor \[:pick \$ispFlowVer 2 2\]/)
+    expect(cmd).toMatch(/:local ispFlowVm \[:pick \$ispFlowVer 0 \$ispFlowDot2\]/)
+    // The zero-width range that made every download take the escape path.
+    expect(cmd).not.toMatch(/\[:pick\s+\$ispFlowVer\s+\d+\s+\d+\s*\]/)
   })
 
   it('removes only the bootstrap file it downloaded', () => {
