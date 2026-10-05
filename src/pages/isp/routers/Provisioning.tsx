@@ -407,6 +407,10 @@ function WizardModal({
   const [pppRemote, setPppRemote] = useState('')
   const [radiusServer, setRadiusServer] = useState('')
   const [radiusEnabled, setRadiusEnabled] = useState(false)
+  // Write-only. Cleared the moment it is sent, and never fetched back.
+  const [radiusSecret, setRadiusSecret] = useState('')
+  const [secretSet, setSecretSet] = useState(false)
+  const [secretNote, setSecretNote] = useState<string | null>(null)
   const [tunnel, setTunnel] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -415,6 +419,9 @@ function WizardModal({
   const [sources, setSources] = useState<api.CopySourceRouter[]>([])
   const [copyFrom, setCopyFrom] = useState('')
   const [copyNote, setCopyNote] = useState<string | null>(null)
+  // Which package kinds to copy. Static is included because the schema now
+  // models it as a package kind, so it needs no separate copy path.
+  const [copyKinds, setCopyKinds] = useState<string[]>(['hotspot', 'pppoe'])
 
   // The pools and eligible copy sources are READS over what the platform already
   // knows. Fetched when the wizard opens, so the operator never has to invent a
@@ -430,6 +437,10 @@ function WizardModal({
         const s = await api.fetchCopySources(session.id)
         if (!cancelled) setSources(s)
       } catch { /* Copy Plans stays unavailable rather than half-working */ }
+      try {
+        const sec = await api.fetchRadiusSecretStatus(session.id)
+        if (!cancelled) setSecretSet(sec.configured)
+      } catch { /* the field simply stays "no secret stored yet" */ }
     })()
     return () => { cancelled = true }
   }, [session.id])
@@ -445,11 +456,34 @@ function WizardModal({
     if (!copyFrom) return
     setBusy(true); setCopyNote(null); setError(null)
     try {
-      const r = await api.copyPlansFromRouter(session.id, copyFrom, ['hotspot', 'pppoe'])
+      const r = await api.copyPlansFromRouter(session.id, copyFrom, copyKinds)
       setCopyNote(r.message ?? `${r.plans} package(s) copied.`)
     } catch (e) {
       const err = e as { message?: string }
       setCopyNote(err.message ?? 'Could not copy the packages.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * Store this router's RADIUS shared secret.
+   *
+   * The value is never fetched back: the panel can only learn THAT one exists.
+   * It is cleared from component state the moment it has been sent, so it does
+   * not sit in a React tree or a devtools inspector afterwards.
+   */
+  async function saveSecret() {
+    setBusy(true); setSecretNote(null)
+    try {
+      const r = await api.saveRadiusSecret(session.id, radiusSecret)
+      setSecretSet(true)
+      setSecretNote(r.message)
+      // Out of the tree immediately.
+      setRadiusSecret('')
+    } catch (e) {
+      const err = e as { message?: string }
+      setSecretNote(err.message ?? 'Could not store the secret.')
     } finally {
       setBusy(false)
     }
@@ -697,9 +731,26 @@ function WizardModal({
                 Authenticate subscribers through RADIUS
               </label>
               {radiusEnabled && (
-                <input className={cn(inputClass, 'mt-1 font-mono')} value={radiusServer}
-                  placeholder="radius.yourisp.co.ke"
-                  onChange={(e) => setRadiusServer(e.target.value)} />
+                <>
+                  <input className={cn(inputClass, 'mt-1 font-mono')} value={radiusServer}
+                    placeholder="radius.yourisp.co.ke"
+                    onChange={(e) => setRadiusServer(e.target.value)} />
+                  <input className={cn(inputClass, 'mt-1 font-mono')} type="password"
+                    value={radiusSecret} placeholder="Shared secret (write-only)"
+                    onChange={(e) => setRadiusSecret(e.target.value)} />
+                  <div className="mt-1 flex items-center gap-2">
+                    <Button size="sm" variant="secondary" type="button"
+                      disabled={radiusSecret.length < 8 || busy}
+                      onClick={() => void saveSecret()}>
+                      Save secret
+                    </Button>
+                    <span className="text-[10px] text-slate-400">
+                      {secretNote ?? (secretSet
+                        ? 'A secret is stored for this router.'
+                        : 'No secret stored yet.')}
+                    </span>
+                  </div>
+                </>
               )}
               <p className="text-[10px] text-slate-400 mt-0.5">
                 FreeRADIUS stays where it is. If this is on and the router cannot
@@ -737,7 +788,8 @@ function WizardModal({
                   No other routers on your account to copy from.
                 </p>
               ) : (
-                <div className="flex gap-1 mt-1">
+                <>
+                  <div className="flex gap-1 mt-1">
                   <select className={cn(inputClass, 'flex-1')} value={copyFrom}
                     onChange={(e) => setCopyFrom(e.target.value)}>
                     <option value="">Choose a router...</option>
@@ -753,6 +805,20 @@ function WizardModal({
                     Copy
                   </Button>
                 </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {(['hotspot', 'pppoe', 'static'] as const).map((k) => (
+                    <button key={k} type="button"
+                      onClick={() => setCopyKinds(
+                        copyKinds.includes(k)
+                          ? copyKinds.filter((x) => x !== k)
+                          : [...copyKinds, k],
+                      )}
+                      className={chip(copyKinds.includes(k))}>
+                      {k}
+                    </button>
+                  ))}
+                  </div>
+                </>
               )}
               {copyNote && (
                 <p className="text-[10px] text-slate-500 mt-1">{copyNote}</p>

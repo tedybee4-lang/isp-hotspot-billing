@@ -18,6 +18,30 @@ import type { HandlerContext, ProvisioningWork } from './handlers.ts'
 import type { StageStatus, DiscoveredPool } from './stages.ts'
 import { resolvePppPools, resolveHotspotPool } from './stages.ts'
 
+/**
+ * Which network service a customer's plan delivers.
+ *
+ * Read from the PLAN, never from the router's role. A router configured for both
+ * HotSpot and PPPoE does not make every subscriber a subscriber of both: doing
+ * that hands a prepaid HotSpot customer a PPPoE dial-in account, which is an
+ * unpaid service on someone else's router.
+ *
+ * An unknown or missing plan resolves to 'none', so the account is simply not
+ * created rather than being created on a guess.
+ */
+export function serviceFor(
+  planName: string | null,
+  plans: Array<{ name: string; kind: string }> | null,
+): 'hotspot' | 'pppoe' | 'none' {
+  if (!planName || !plans) return 'none'
+  const plan = plans.find((p) => p.name === planName)
+  if (!plan) return 'none'
+  if (plan.kind === 'pppoe' || plan.kind === 'fiber') return 'pppoe'
+  if (plan.kind === 'hotspot') return 'hotspot'
+  // 'static' is a fixed-address service: no per-session account is created.
+  return 'none'
+}
+
 export interface DbConfig {
   url: string
   serviceRoleKey: string
@@ -306,7 +330,8 @@ export class Db implements JobStore {
     const { data: sessionRow, error: sErr } = await c
       .from('provisioning_sessions')
       .select('id, isp_id, node_id, role, wan_interface, hotspot_interfaces, '
-        + 'pppoe_interfaces, management_interfaces, wizard_answers')
+        + 'pppoe_interfaces, management_interfaces, wizard_answers, '
+        + 'routeros_version')
       .eq('id', sessionId)
       .maybeSingle()
     // The select is the contract; the cast only tells the compiler so. supabase-js
@@ -317,6 +342,7 @@ export class Db implements JobStore {
       hotspot_interfaces: string[]; pppoe_interfaces: string[]
       management_interfaces: string[] | null
       wizard_answers: Record<string, string> | null
+      routeros_version: string | null
     }
     if (sErr) throw new Error(`loading provisioning session failed: ${sErr.message}`)
     if (!session) return null
@@ -368,6 +394,35 @@ export class Db implements JobStore {
 
     const answers = (session.wizard_answers ?? {}) as Record<string, string>
 
+    // ── The RADIUS shared secret ────────────────────────────────────────────
+    //
+    // Fetched HERE, by the worker, from the service-role-only RPC, and decrypted
+    // in memory for the duration of this pass. It never travels through a
+    // session row, a stage detail, a job result, an event row or a log line.
+    //
+    // A missing secret is NOT fatal here: RADIUS may simply be switched off for
+    // this ISP, and the radius stage skips cleanly in that case. When RADIUS IS
+    // required, the stage fails with a precise message rather than writing an
+    // empty secret the router would silently reject every packet against.
+    let radiusSecret: string | null = null
+    if (session.node_id) {
+      try {
+        const { data: cipher } = await c.rpc('radius_nas_secret_for_node', {
+          p_node_id: session.node_id,
+          p_isp_id: session.isp_id,
+        })
+        if (typeof cipher === 'string' && cipher.length > 0) {
+          radiusSecret = await decryptSecret(cipher, this.cfg.credentialKey)
+        }
+      } catch {
+        // A credential that will not decrypt is treated as absent, exactly as
+        // router_credentials already is. Guessing would be worse than missing:
+        // a wrong secret produces an authentication failure that looks like a
+        // subscriber problem rather than a platform problem.
+        radiusSecret = null
+      }
+    }
+
     // ── Address allocation ─────────────────────────────────────────────────
     //
     // Precedence, and the reason for it:
@@ -414,11 +469,17 @@ export class Db implements JobStore {
         pppoeInterfaces: session.pppoe_interfaces ?? [],
         managementInterfaces: session.management_interfaces ?? [],
         tunnelRequired: answers['tunnel'] === 'wireguard',
+        // Read from the router row, not the capabilities jsonb: the capabilities
+        // survey may not have run yet on a router that has only just claimed, and
+        // "unknown version" must never be read as "supports everything".
+        routerosVersion: session.routeros_version ?? null,
+        // A secret is never stored in the session row and never travels through
+        // the browser. It is fetched by the worker, decrypted in memory, handed
+        // to the router, and dropped.
+        radiusSecret: radiusSecret,
         dns: answers['dns'] ? String(answers['dns']).split(',').filter(Boolean) : [],
         radiusServer: answers['radius_server'] ?? null,
         radiusEnabled: answers['radius_enabled'] === 'true',
-        // A secret is never stored in the session row, and none is read here.
-        radiusSecret: null,
         sessionTimeoutMin: Number(answers['session_timeout_min'] ?? 30),
         idleTimeoutMin: Number(answers['idle_timeout_min'] ?? 5),
         pppLocal: pppLocal ?? null,
@@ -443,11 +504,16 @@ export class Db implements JobStore {
       })),
       // No credential is read: subscribers authenticate through RADIUS, so the
       // platform never needs a subscriber password to create the account.
+      //
+      // `service` comes from the PLAN's kind, which is what stops a prepaid
+      // HotSpot subscriber being handed a PPPoE dial-in account on a router that
+      // happens to run both services.
       customers: active.map((row) => ({
         id: row.id,
         username: row.username,
         password_plain: null,
         plan_name: row.plan_name,
+        service: serviceFor(row.plan_name, plansRes.data as Array<{ name: string; kind: string }> | null),
         is_active: true,
       })),
     }

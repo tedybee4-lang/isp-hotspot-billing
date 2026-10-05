@@ -89,20 +89,79 @@ export function findOwned(
 
 export interface DiscoveredPool {
   name: string
+  /** Verbatim from `/ip/pool/print`. Never rewritten, so nothing is fabricated. */
   ranges: string
   nextPool?: string | null
 }
 
-/** A usable pair of ranges for PPPoE, or HotSpot's single pool. */
-export interface ResolvedPools {
-  local: string | null
-  remote: string | null
-  source: string | null
-  /** The pools considered and rejected, so a failure explains itself. */
-  rejected: Array<{ name: string; reason: string }>
+/**
+ * One range inside a pool's `ranges` string.
+ *
+ * RouterOS stores a pool's ranges as a COMMA-separated list, not a single
+ * range: `10.0.0.2-10.0.0.100,10.0.0.200-10.0.0.250`. Treating that whole string
+ * as one range is the bug that made a perfectly good pool look unusable, and a
+ * pool silently rejected for that reason is a pool the ISP is told to add again
+ * on a router that already has one.
+ */
+export interface ParsedRange {
+  from: string
+  to: string
+  /** Addresses spanned, inclusive. */
+  size: number
 }
 
-/** "10.0.0.2-10.0.0.254" -> its endpoints, or null when unreadable. */
+/**
+ * Parses one RouterOS range into an inclusive address count.
+ *
+ * Handles the shapes RouterOS actually emits:
+ *   * `10.0.0.2-10.0.0.100`  a two-ended range
+ *   * `10.0.0.5`             a single address
+ *
+ * Returns null for anything it cannot read. A null is a refusal, never a guess:
+ * an address range that overlaps the LAN takes the router down.
+ */
+export function parseRange(text: string): ParsedRange | null {
+  const trimmed = (text ?? '').trim()
+  if (!trimmed) return null
+
+  const parts = trimmed.split('-')
+  if (parts.length === 2) {
+    const from = parts[0].trim()
+    const to = parts[1].trim()
+    const a = toInt(from)
+    const b = toInt(to)
+    if (a === null || b === null || b < a) return null
+    return { from, to, size: b - a + 1 }
+  }
+  if (parts.length === 1) {
+    const single = parts[0].trim()
+    const a = toInt(single)
+    // A single address is a real, valid pool: RouterOS writes one this way when
+    // the operator wants exactly one address.
+    return a === null ? null : { from: single, to: single, size: 1 }
+  }
+  // Three or more hyphens is not a range.
+  return null
+}
+
+/**
+ * Every readable range in a pool's `ranges` string.
+ *
+ * Comma-separated, because that is how RouterOS stores more than one. Entries
+ * that cannot be read are SKIPPED rather than failing the whole pool, so one
+ * malformed entry does not discard a pool that also contains a good range.
+ */
+export function parseRanges(ranges: string): ParsedRange[] {
+  if (!ranges || !ranges.trim()) return []
+  const out: ParsedRange[] = []
+  for (const entry of ranges.split(',')) {
+    const parsed = parseRange(entry)
+    if (parsed) out.push(parsed)
+  }
+  return out
+}
+
+/** "10.0.0.2-10.0.255.254" -> its endpoints, or null when unreadable. */
 function splitRange(range: string): [string, string] | null {
   const parts = range.trim().split('-')
   if (parts.length !== 2) return null
@@ -132,17 +191,28 @@ function toIp(n: number): string {
   ].join('.')
 }
 
-/** How many addresses a range spans, or null when that cannot be told. */
-export function rangeSize(range: string): number | null {
-  const parts = splitRange(range)
-  if (!parts) return null
-  const a = toInt(parts[0])
-  const b = toInt(parts[1])
-  if (a === null || b === null || b < a) return null
-  return b - a + 1
+/**
+ * How many addresses a `ranges` string covers in total.
+ *
+ * Sums the parsed ranges. Null when NONE of them could be read, so a caller can
+ * tell "no addresses" from "addresses I could not understand" - a difference
+ * that decides whether provisioning proceeds or stops.
+ */
+export function rangeSize(ranges: string): number | null {
+  const parsed = parseRanges(ranges)
+  if (parsed.length === 0) return null
+  return parsed.reduce((n, r) => n + r.size, 0)
 }
 
-// APPEND_POOLS
+/** A usable pair of ranges for PPPoE, or HotSpot's single pool. */
+export interface ResolvedPools {
+  local: string | null
+  remote: string | null
+  source: string | null
+  /** The pools considered and rejected, so a failure explains itself. */
+  rejected: Array<{ name: string; reason: string }>
+}
+
 /**
  * PPPoE needs enough addresses for its subscribers, and enough that the local
  * and remote ranges stay disjoint.
@@ -198,21 +268,28 @@ export function resolvePppPools(
 
   if (usable.length === 0) return { local: null, remote: null, source: null, rejected }
 
-  // Ours first, so a re-provisioning is stable.
+  // Ours first, so a re-provisioning lands on the SAME ranges and no subscriber's
+  // address changes underneath them.
   const chosen = usable.find((u) => u.pool.name.startsWith(OWNER))
     ?? usable.sort((a, b) => b.size - a.size)[0]
 
-  const half = Math.floor(chosen.size / 2)
-  const parts = splitRange(chosen.pool.ranges)!
-  const start = toInt(parts[0])
-  if (start === null || half < 2) {
+  // Split the LARGEST individual range, not the pool as a whole. A comma-separated
+  // pool is several ranges the router keeps distinct; merging them into one span
+  // and re-emitting it would both widen the pool beyond what the operator
+  // configured and hand out addresses that sit in the gaps between the ranges.
+  const ranges = parseRanges(chosen.pool.ranges).sort((a, b) => b.size - a.size)
+  const widest = ranges.find((r) => Math.floor(r.size / 2) >= 2)
+  if (!widest) {
     return { local: null, remote: null, source: chosen.pool.name, rejected }
   }
+
+  const start = toInt(widest.from)!
+  const half = Math.floor(widest.size / 2)
 
   return {
     // An odd size gives the extra address to local.
     local: `${toIp(start)}-${toIp(start + half - 1)}`,
-    remote: `${toIp(start + half)}-${toIp(start + chosen.size - 1)}`,
+    remote: `${toIp(start + half)}-${toIp(start + widest.size - 1)}`,
     source: chosen.pool.name,
     rejected,
   }
@@ -265,6 +342,16 @@ export interface StageCustomer {
   username: string
   password_plain: string | null
   plan_name: string | null
+  /**
+   * Which service this customer's plan actually delivers.
+   *
+   * This is what stops a prepaid HotSpot subscriber being given a PPPoE
+   * dial-in account they never bought. Pushing every active customer to every
+   * SELECTED service is not "mirroring the database" - it is granting service
+   * the entitlement does not include, and a customer who finds a PPPoE account
+   * on a router is looking at an unpaid dial-in service.
+   */
+  service: 'hotspot' | 'pppoe' | 'both' | 'none'
   /** Only active entitlements are synchronised. Never derived from payment. */
   is_active: boolean
 }
@@ -280,6 +367,8 @@ export interface StageSession {
   pppoeInterfaces: string[]
   managementInterfaces: string[]
   tunnelRequired: boolean
+  /** From /system/resource. The second signal for capability decisions. */
+  routerosVersion: string | null
   dns: string[]
   radiusServer: string | null
   radiusEnabled: boolean
@@ -738,38 +827,127 @@ export const connectivityStage: StageFn = async (client, target) => {
 }
 
 /**
+ * What a router can actually do about WireGuard.
+ *
+ * The four states are kept apart on purpose. Collapsing "unsupported" into
+ * "supported but empty" is how a RouterOS 6 box with no WireGuard at all gets a
+ * tunnel created, or - worse - gets a REQUIRED tunnel reported as merely absent,
+ * and the router is declared healthy while nobody can reach it.
+ */
+export type WireGuardSupport =
+  /** The menu exists and returned rows. */
+  | { kind: 'supported'; interfaces: number }
+  /** The menu exists and is empty. Supported, nothing configured yet. */
+  | { kind: 'supported-empty' }
+  /** The menu does not exist. This firmware cannot do WireGuard. */
+  | { kind: 'unsupported'; reason: string }
+  /** The probe failed for some other reason: permissions, timeout, overload. */
+  | { kind: 'unknown'; reason: string }
+
+/**
+ * Classifies a WireGuard probe from TWO independent signals, because one is not
+ * enough:
+ *
+ *   * The command result. An empty list from a menu that does not exist looks
+ *     identical to a supported menu with nothing configured.
+ *   * The reported RouterOS version. WireGuard arrived in 7.1, so older firmware
+ *     CANNOT support it regardless of what the command returned.
+ *
+ * Version is the tie-breaker in the case that matters: old firmware answering
+ * `/interface/wireguard/print` with an empty list instead of rejecting the path.
+ * Believing the empty list there would create a tunnel on a device that cannot
+ * carry it.
+ *
+ * A failed probe is split two ways on purpose. "No such command" means the
+ * feature is missing; a timeout does NOT, and calling a timeout "unsupported"
+ * would report a working router as incapable.
+ */
+export function classifyWireGuard(args: {
+  probe: { ok: true; rows: Record<string, string>[] } | { ok: false; error: string | null }
+  /** From /system/resource version; null when unknown, which is NOT support. */
+  versionSupports: boolean | null
+  version: string | null
+}): WireGuardSupport {
+  const { probe, versionSupports, version } = args
+
+  if (!probe.ok) {
+    const reason = probe.error ?? 'the probe did not answer'
+    if (/no such command|unknown parameter|no such item|not found|invalid/i.test(reason)) {
+      return { kind: 'unsupported', reason }
+    }
+    return { kind: 'unknown', reason }
+  }
+
+  if (versionSupports === false) {
+    return {
+      kind: 'unsupported',
+      reason: `RouterOS ${version ?? 'older than 7.1'} predates WireGuard support`,
+    }
+  }
+
+  return probe.rows.length > 0
+    ? { kind: 'supported', interfaces: probe.rows.length }
+    : { kind: 'supported-empty' }
+}
+
+/** "7.14.3 (stable)" -> true; "6.49.10" -> false; null -> null (unknown). */
+export function versionSupportsWireGuard(version: string | null): boolean | null {
+  if (!version) return null
+  const m = /(\d+)\.(\d+)/.exec(version)
+  if (!m) return null
+  const major = Number(m[1])
+  const minor = Number(m[2])
+  return major > 7 || (major === 7 && minor >= 1)
+}
+
+/**
  * SECURE_TUNNEL (WireGuard).
  *
  * The rule this stage exists to enforce: a REQUIRED tunnel the router cannot
  * provide is a FAILURE, never "unsupported". Recording it as unsupported would
  * call an unreachable router healthy and let it through the ONLINE gate.
  *
- * An optional tunnel is different. If the ISP did not ask for one, or the
- * firmware predates WireGuard, this is UNSUPPORTED and provisioning continues -
- * a cheap RB951 that cannot do WireGuard is not a broken router.
+ * An optional tunnel is different: if the ISP did not ask for one, or the
+ * firmware predates WireGuard, this is UNSUPPORTED and provisioning continues.
+ * A cheap RB951 that cannot do WireGuard is not a broken router.
+ *
+ * An INDETERMINATE probe is its own outcome and never becomes "supported". If we
+ * could not find out and the tunnel is required, the stage fails: refusing to
+ * proceed is recoverable, believing the router is unreachable is not.
  */
 export const secureTunnelStage: StageFn = async (client, target, ctx) => {
   const probe = await attempt(client, target, '/interface/wireguard/print')
+  const version = ctx.session.routerosVersion
+  const support = classifyWireGuard({
+    probe: probe.ok
+      ? { ok: true, rows: probe.rows }
+      : { ok: false, error: probe.error },
+    versionSupports: versionSupportsWireGuard(version),
+    version,
+  })
 
-  // A RouterOS 6 box refuses the path entirely. That is the "cannot do it" case,
-  // and it is PROBED rather than inferred from the version string.
-  if (!probe.ok) {
-    if (ctx.session.tunnelRequired) {
-      return {
+  /** Not available. Required means the run stops; optional means it continues. */
+  const unavailable = (reason: string): StageOutcome => (
+    ctx.session.tunnelRequired
+      ? {
         status: 'failed',
-        error: 'WireGuard is required for this router, but this firmware does not '
-          + `support it (${probe.error}). Without the tunnel the router cannot be `
-          + 'managed, so provisioning stops here. Either use RouterOS 7.1 or later, '
-          + 'or turn the tunnel off and keep a management port reachable.',
+        error: 'WireGuard is required for this router, but it is not available: '
+          + `${reason}. Without the tunnel the router cannot be managed, so `
+          + 'provisioning stops here. Use RouterOS 7.1 or later, or turn the tunnel '
+          + 'off and keep a management port reachable.',
         retryable: false,
-        detail: { supported: false },
+        detail: { support },
       }
-    }
-    return {
-      status: 'unsupported',
-      skipReason: 'This firmware has no WireGuard support, and no tunnel was required.',
-      detail: { supported: false },
-    }
+      : {
+        status: 'unsupported',
+        skipReason: `WireGuard is not available (${reason}), and no tunnel was required.`,
+        detail: { support },
+      })
+
+  if (support.kind === 'unsupported') return unavailable(support.reason)
+  if (support.kind === 'unknown') {
+    // Never treated as support. An unanswered probe is not evidence either way.
+    return unavailable(`the router did not answer the WireGuard probe: ${support.reason}`)
   }
 
   const name = `${OWNER}-${ctx.session.tag}`
@@ -781,7 +959,10 @@ export const secureTunnelStage: StageFn = async (client, target, ctx) => {
     // every customer behind it.
     return {
       status: 'success',
-      detail: { interface: name, already_present: true, disabled: truthy(existing.disabled) },
+      detail: {
+        interface: name, already_present: true,
+        disabled: truthy(existing.disabled), support,
+      },
     }
   }
 
@@ -802,10 +983,11 @@ export const secureTunnelStage: StageFn = async (client, target, ctx) => {
       // A busy port or a full table is worth another try; a permissions problem
       // is not, and repeating it would only fill the job log.
       retryable: /already|busy|timeout/i.test(added.error ?? ''),
+      detail: { support },
     }
   }
 
-  return { status: 'success', detail: { interface: name, created: true } }
+  return { status: 'success', detail: { interface: name, created: true, support } }
 }
 
 /**
@@ -847,6 +1029,21 @@ export const radiusStage: StageFn = async (client, target, ctx) => {
       error: 'RADIUS is required for this ISP\'s HotSpot and PPPoE services, but this '
         + `router does not expose /radius: ${probe.error}. Subscribers would not be `
         + 'able to authenticate, so provisioning stops here.',
+      retryable: false,
+    }
+  }
+
+  // A router with an EMPTY RADIUS secret rejects every Access-Request, and the
+  // router still accepts the configuration call. That is the failure this check
+  // exists to prevent: provisioning would report success, the router would come
+  // online, and not one subscriber could log in.
+  if (!ctx.session.radiusSecret) {
+    return {
+      status: 'failed',
+      error: 'RADIUS is switched on for this ISP, but no shared secret is stored for '
+        + `this router, so it cannot authenticate against ${host}. Store the router's `
+        + 'own RADIUS secret in the panel (it must match the secret for this router in '
+        + 'FreeRADIUS clients.conf), then retry. Nothing has been changed on the router.',
       retryable: false,
     }
   }
@@ -1409,6 +1606,17 @@ export const customerSyncStage: StageFn = async (client, target, ctx) => {
   const wantsHotspot = ctx.session.role !== 'pppoe'
   const wantsPppoe = ctx.session.role !== 'hotspot'
 
+  // Which of the two each entitlement belongs on. Taken from the PLAN's service,
+  // not from the router's role: a router may run both services, but that does not
+  // make every subscriber a subscriber of both.
+  const planService = (name: string | null): 'hotspot' | 'pppoe' | 'none' => {
+    const plan = ctx.plans.find((p) => p.name === name)
+    if (!plan) return 'none'
+    if (plan.kind === 'pppoe' || plan.kind === 'fiber') return 'pppoe'
+    if (plan.kind === 'hotspot') return 'hotspot'
+    return 'none'
+  }
+
   let created = 0
   let skipped = 0
   const failures: string[] = []
@@ -1425,8 +1633,9 @@ export const customerSyncStage: StageFn = async (client, target, ctx) => {
     const existing = new Map(probe.rows.map((r) => [r.name, r]))
 
     for (const c of active) {
-      // Already there, or no credential to create it with. Either way nothing is
-      // written, so the sync is safe to run on every provisioning attempt.
+      const service = c.service === 'none' ? planService(c.plan_name) : c.service
+      if (service !== 'hotspot' && service !== 'both') { skipped += 1; continue }
+      // Already there, or no credential to create it with.
       if (existing.has(c.username) || !c.password_plain) { skipped += 1; continue }
       const params: Record<string, string> = {
         name: c.username,
@@ -1445,6 +1654,8 @@ export const customerSyncStage: StageFn = async (client, target, ctx) => {
     if (probe.ok) {
       const existing = new Map(probe.rows.map((r) => [r.name, r]))
       for (const c of active) {
+        const service = c.service === 'none' ? planService(c.plan_name) : c.service
+        if (service !== 'pppoe' && service !== 'both') { skipped += 1; continue }
         if (existing.has(c.username) || !c.password_plain) { skipped += 1; continue }
         const params: Record<string, string> = {
           name: c.username,

@@ -12,7 +12,8 @@ import {
   OWNER, LEGACY_OWNER, isOwned, safeName, addressing,
   parseSpeedMbps, rateLimit, runStage,
   redactParams, isSecretParam, operationOf,
-  resolvePppPools, resolveHotspotPool, rangeSize, MIN_PPP_ADDRESSES,
+  resolvePppPools, resolveHotspotPool, rangeSize, parseRange, parseRanges,
+  classifyWireGuard, versionSupportsWireGuard, formatRate,
   STAGE_IMPLEMENTATIONS, WORKER_STAGE_NAMES,
   backupStage, connectivityStage, secureTunnelStage, radiusStage,
   hotspotStage, pppoeStage, firewallNatStage, packageSyncStage,
@@ -20,6 +21,7 @@ import {
   syncScriptsStage,
   type StageContext, type StagePlan, type StageCustomer,
 } from './stages.ts'
+import { serviceFor } from './db.ts'
 
 // ── A router that records what it was asked to do ─────────────────────────
 
@@ -67,6 +69,7 @@ const session = (over: Partial<StageContext['session']> = {}): StageContext['ses
   pppoeInterfaces: [],
   managementInterfaces: ['bridge'],
   tunnelRequired: false,
+  routerosVersion: '7.14.3 (stable)',
   dns: ['8.8.8.8'],
   radiusServer: null,
   radiusEnabled: false,
@@ -256,10 +259,42 @@ describe('failures stop the run honestly', () => {
   it('RADIUS that adds but does not report back FAILS, rather than claiming success', async () => {
     r.rows['/radius/print'] = []          // add succeeds, read-back finds nothing
     const out = await radiusStage(r.client, target, ctx({
-      session: session({ radiusEnabled: true, radiusServer: '10.9.9.9' }),
+      session: session({
+        radiusEnabled: true, radiusServer: '10.9.9.9', radiusSecret: 'a-real-secret',
+      }),
     }))
     expect(out.status).toBe('failed')
     expect(out.error).toMatch(/does not report it back/)
+  })
+
+  it('RADIUS with no stored secret FAILS rather than writing an empty one', async () => {
+    // The failure this prevents: a router with an EMPTY secret accepts the
+    // configuration call, provisioning reports success, the router goes online,
+    // and not one subscriber can authenticate.
+    r.rows['/radius/print'] = []
+    const out = await radiusStage(r.client, target, ctx({
+      session: session({ radiusEnabled: true, radiusServer: '10.9.9.9', radiusSecret: null }),
+    }))
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/no shared secret is stored/)
+    // Nothing was written to the router at all.
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('RADIUS with a secret writes it to the router', async () => {
+    // The router confirms the server is there once it has been added.
+    r.rows['/radius/print'] = [
+      { '.id': '*1', name: `${OWNER}-ab12cd34`, address: '10.9.9.9:1812' },
+    ]
+    const out = await radiusStage(r.client, target, ctx({
+      session: session({
+        radiusEnabled: true, radiusServer: '10.9.9.9', radiusSecret: 'per-router-secret',
+      }),
+    }))
+    expect(out.status).toBe('success')
+    expect(r.writes()[0]?.params.secret).toBe('per-router-secret')
+    // Reaches the router, and only the router.
+    expect(JSON.stringify(out)).not.toContain('per-router-secret')
   })
 
   it('never puts the RADIUS secret into a result or an error', async () => {
@@ -738,7 +773,7 @@ describe('nothing sensitive is ever recorded', () => {
     await customerSyncStage(r.client, target, ctx({
       customers: [{
         id: 'c1', username: 'alice', password_plain: 'subscriber-pw',
-        plan_name: 'Home 5M', is_active: true,
+        plan_name: 'Home 5M', service: 'hotspot', is_active: true,
       }],
     }))
     // The value reached the router...
@@ -846,5 +881,358 @@ describe('pools are resolved from the router, not asked for', () => {
     expect(out.status).toBe('success')
     expect(r.writes().find((c) => c.command === '/interface/pppoe-server/add')
       ?.params['local-address']).toBeTruthy()
+  })
+})
+
+// ── Real RouterOS pool formats ────────────────────────────────────────────
+
+describe('the parser reads what RouterOS actually writes', () => {
+  it('reads a plain two-ended range', () => {
+    expect(parseRange('10.0.0.2-10.0.0.100')).toEqual({
+      from: '10.0.0.2', to: '10.0.0.100', size: 99,
+    })
+  })
+
+  it('reads a single address, which RouterOS does emit', () => {
+    // An operator wanting exactly one address gets this form.
+    expect(parseRange('10.0.0.5')).toEqual({ from: '10.0.0.5', to: '10.0.0.5', size: 1 })
+  })
+
+  it('reads a COMMA-SEPARATED list, which is how RouterOS stores several', () => {
+    // This is the shape that used to be rejected wholesale: the whole string was
+    // treated as one range, so a perfectly good pool looked unusable.
+    const out = parseRanges('10.0.0.2-10.0.0.100,10.0.0.200-10.0.0.250')
+    expect(out).toHaveLength(2)
+    expect(out[0].size).toBe(99)
+    expect(out[1].size).toBe(51)
+  })
+
+  it('sums a multi-range pool for the size check', () => {
+    expect(rangeSize('10.0.0.2-10.0.0.100,10.0.0.200-10.0.0.250')).toBe(150)
+  })
+
+  it('rejects an empty or unreadable range rather than guessing', () => {
+    expect(parseRange('')).toBeNull()
+    expect(parseRange('nonsense')).toBeNull()
+    expect(parseRange('10.0.0.9-10.0.0.1')).toBeNull()   // reversed
+    expect(parseRange('10.0.0.1-999.0.0.1')).toBeNull()   // invalid octet
+    expect(parseRange('10.0.0.1-10.0.0.2-10.0.0.3')).toBeNull()
+    expect(rangeSize('')).toBeNull()
+    expect(parseRanges('')).toEqual([])
+  })
+
+  it('keeps the good ranges when one entry in a list is malformed', () => {
+    // One bad entry must not discard a pool that also contains good ranges.
+    expect(parseRanges('garbage,10.0.0.2-10.0.0.100')).toHaveLength(1)
+  })
+
+  it('never fabricates a pool when discovery returned nothing usable', () => {
+    const out = resolvePppPools([
+      { name: 'broken', ranges: 'garbage' },
+      { name: 'empty', ranges: '' },
+    ])
+    expect(out.local).toBeNull()
+    expect(out.source).toBeNull()
+    // And the operator is told which pools were considered, and why each failed.
+    expect(out.rejected.length).toBeGreaterThan(0)
+  })
+
+  it('preserves the pool name it chose, so the operator can verify it', () => {
+    expect(resolvePppPools([{ name: 'branch-pool', ranges: '10.0.0.2-10.0.0.253' }])
+      .source).toBe('branch-pool')
+  })
+})
+
+// ── WireGuard capability: four distinct states ────────────────────────────
+
+describe('WireGuard support is classified, never guessed', () => {
+  const ok = (rows: Record<string, string>[]) => ({ ok: true as const, rows })
+  const bad = (error: string) => ({ ok: false as const, error })
+
+  it('A. supported, with interfaces', () => {
+    expect(classifyWireGuard({
+      probe: ok([{ name: 'wg0' }]), versionSupports: true, version: '7.14.3',
+    })).toEqual({ kind: 'supported', interfaces: 1 })
+  })
+
+  it('B. supported, but nothing configured yet', () => {
+    expect(classifyWireGuard({
+      probe: ok([]), versionSupports: true, version: '7.14.3',
+    })).toEqual({ kind: 'supported-empty' })
+  })
+
+  it('C. unsupported, because the menu is absent', () => {
+    expect(classifyWireGuard({
+      probe: bad('no such command'), versionSupports: null, version: '6.49.10',
+    }).kind).toBe('unsupported')
+  })
+
+  it('C. an OLD firmware answering with an EMPTY list is still unsupported', () => {
+    // THE case this exists for: trusting the empty list would create a tunnel on
+    // a device that cannot carry it, and a required one would read as merely
+    // absent - an unreachable router declared healthy.
+    expect(classifyWireGuard({
+      probe: ok([]), versionSupports: false, version: '6.49.10',
+    })).toEqual({
+      kind: 'unsupported',
+      reason: 'RouterOS 6.49.10 predates WireGuard support',
+    })
+  })
+
+  it('D. a timeout is UNKNOWN, not unsupported', () => {
+    // Calling a timeout "unsupported" would report a working router as incapable.
+    expect(classifyWireGuard({
+      probe: bad('timed out waiting for the router'), versionSupports: null, version: null,
+    })).toEqual({ kind: 'unknown', reason: 'timed out waiting for the router' })
+  })
+
+  it('an unknown version is never treated as support', () => {
+    expect(versionSupportsWireGuard(null)).toBeNull()
+    expect(versionSupportsWireGuard('unknown')).toBeNull()
+    expect(versionSupportsWireGuard('7.0.9')).toBe(false)
+    expect(versionSupportsWireGuard('7.1')).toBe(true)
+    expect(versionSupportsWireGuard('6.49.10 (long-term)')).toBe(false)
+    expect(versionSupportsWireGuard('8.1.0')).toBe(true)
+  })
+
+  it('an UNKNOWN probe never becomes supported, required or not', async () => {
+    r.fail['/interface/wireguard/print'] = 'timed out'
+    const required = await secureTunnelStage(r.client, target,
+      ctx({ session: session({ tunnelRequired: true }) }))
+    expect(required.status).toBe('failed')
+
+    const optional = await secureTunnelStage(r.client, target, ctx())
+    expect(optional.status).toBe('unsupported')
+    // Neither created a tunnel on a router we could not ask.
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('a RouterOS 6 box answering with an empty list never gets a tunnel', async () => {
+    r.rows['/interface/wireguard/print'] = []
+    const out = await secureTunnelStage(r.client, target,
+      ctx({ session: session({ routerosVersion: '6.49.10' }) }))
+    expect(out.status).toBe('unsupported')
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('a RouterOS 6 box that REJECTS the path, tunnel required, FAILS', async () => {
+    r.fail['/interface/wireguard/print'] = 'no such command'
+    const out = await secureTunnelStage(r.client, target,
+      ctx({ session: session({ tunnelRequired: true, routerosVersion: '6.49.10' }) }))
+    // FAILED, never unsupported.
+    expect(out.status).toBe('failed')
+  })
+})
+
+// ── Idempotency: the whole engine, run twice ─────────────────────────────
+
+describe('a second full run changes nothing', () => {
+  /** The objects a router reports after the first run applied everything. */
+  function configured() {
+    r.rows['/ip/hotspot/print'] = [
+      { '.id': '*1', name: `${OWNER}-ab12cd34-ether2`, interface: 'ether2' },
+    ]
+    r.rows['/ip/hotspot/user/profile/print'] = [
+      { '.id': '*2', name: 'Home_5M', 'rate-limit': '5M/2M' },
+    ]
+    r.rows['/interface/pppoe-server/print'] = [
+      { '.id': '*3', name: `${OWNER}-ab12cd34-ether3`, service: 'ether3' },
+    ]
+    r.rows['/ppp/profile/print'] = []
+    r.rows['/ip/firewall/nat/print'] = [
+      { '.id': '*4', name: `${OWNER}-ab12cd34-out`, 'out-interface': 'ether1', action: 'masquerade' },
+    ]
+    r.rows['/ip/firewall/filter/print'] = [
+      { '.id': '*5', name: `${OWNER}-ab12cd34-mgmt` },
+    ]
+    r.rows['/radius/print'] = [
+      { '.id': '*6', name: `${OWNER}-ab12cd34`, address: '10.9.9.9:1812' },
+    ]
+    r.rows['/system/scheduler/print'] = [
+      { '.id': '*7', name: `${OWNER}-heartbeat-ab12cd34` },
+    ]
+    r.rows['/interface/wireguard/print'] = [
+      { '.id': '*8', name: `${OWNER}-ab12cd34` },
+    ]
+    r.rows['/system/identity/print'] = [{ name: 'Branch [ISPFlow:ab12cd34]' }]
+    r.rows['/ip/hotspot/user/print'] = [{ '.id': '*9', name: 'alice' }]
+    r.rows['/ppp/secret/print'] = []
+  }
+
+  it('creates no duplicate of anything', async () => {
+    configured()
+    const c = ctx({
+      session: session({
+        role: 'both', hotspotInterfaces: ['ether2'], pppoeInterfaces: ['ether3'],
+        pppLocal: '10.0.0.2-10.0.0.253', pppRemote: '10.0.1.2-10.0.1.253',
+        radiusEnabled: true, radiusServer: '10.9.9.9', radiusSecret: 's',
+        tunnelRequired: true,
+      }),
+      plans: [plan({ name: 'Home_5M' })],
+      customers: [{ id: 'c1', username: 'alice', password_plain: 'p', plan_name: 'Home_5M', is_active: true }],
+    })
+
+    await hotspotStage(r.client, target, c)
+    await pppoeStage(r.client, target, c)
+    await firewallNatStage(r.client, target, c)
+    await packageSyncStage(r.client, target, c)
+    await radiusStage(r.client, target, c)
+    await heartbeatStage(r.client, target, c)
+    await secureTunnelStage(r.client, target, c)
+    await syncScriptsStage(r.client, target, c)
+    await customerSyncStage(r.client, target, c)
+
+    // Not one ADD. Everything already exists and was adopted.
+    const adds = r.writes().filter((x) => x.command.endsWith('/add'))
+    expect(adds.map((a) => a.command)).toEqual([])
+    // And nothing was removed, in the whole run.
+    expect(r.commandsMatching(/\/remove/)).toHaveLength(0)
+  })
+
+  it('the backup is not taken twice', async () => {
+    r.rows['/file/print'] = [
+      { name: `ispflow-backup-ab12cd34-binary.backup`, size: '900' },
+    ]
+    const out = await backupStage(r.client, target, ctx())
+    expect(out.detail?.already_present).toBe(true)
+    // A second save would overwrite the one taken BEFORE the failure we might
+    // need to roll back to.
+    expect(r.commandsMatching(/backup\/save/)).toHaveLength(0)
+  })
+
+  it('an account already on the router is not recreated', async () => {
+    configured()
+    await customerSyncStage(r.client, target, ctx({
+      customers: [{ id: 'c1', username: 'alice', password_plain: 'p', plan_name: 'Home 5M', service: 'hotspot', is_active: true }],
+    }))
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('a HotSpot subscriber gets NO PPPoE account on a both-services router', async () => {
+    // A real bug, found by the idempotency test above. Customer sync pushed every
+    // active customer to every SELECTED service, so a prepaid HotSpot customer
+    // was handed a PPPoE dial-in account they never bought: unpaid service.
+    r.rows['/ip/hotspot/user/print'] = []
+    r.rows['/ppp/secret/print'] = []
+    const out = await customerSyncStage(r.client, target, ctx({
+      session: session({ role: 'both' }),
+      plans: [plan({ name: 'Home 5M', kind: 'hotspot' })],
+      customers: [{
+        id: 'c1', username: 'alice', password_plain: 'p',
+        plan_name: 'Home 5M', service: 'hotspot', is_active: true,
+      }],
+    }))
+    expect(out.status).toBe('success')
+    expect(r.commandsMatching(/\/ppp\/secret\/add/)).toHaveLength(0)
+    expect(r.commandsMatching(/\/ip\/hotspot\/user\/add/)).toHaveLength(1)
+  })
+
+  it('a PPPoE subscriber gets NO HotSpot account on a both-services router', async () => {
+    r.rows['/ip/hotspot/user/print'] = []
+    r.rows['/ppp/secret/print'] = []
+    await customerSyncStage(r.client, target, ctx({
+      session: session({ role: 'both' }),
+      plans: [plan({ name: 'Fiber 100', kind: 'pppoe' })],
+      customers: [{
+        id: 'c1', username: 'bob', password_plain: 'p',
+        plan_name: 'Fiber 100', service: 'pppoe', is_active: true,
+      }],
+    }))
+    expect(r.commandsMatching(/\/ip\/hotspot\/user\/add/)).toHaveLength(0)
+    expect(r.commandsMatching(/\/ppp\/secret\/add/)).toHaveLength(1)
+  })
+
+  it('a subscriber whose plan is unknown gets no account on any service', async () => {
+    // Never create an account on a guess of which service it belongs to.
+    r.rows['/ip/hotspot/user/print'] = []
+    r.rows['/ppp/secret/print'] = []
+    await customerSyncStage(r.client, target, ctx({
+      session: session({ role: 'both' }),
+      plans: [],
+      customers: [{
+        id: 'c1', username: 'carol', password_plain: 'p',
+        plan_name: 'Deleted Plan', service: 'none', is_active: true,
+      }],
+    }))
+    expect(r.writes()).toHaveLength(0)
+  })
+})
+
+// ── Which service an entitlement belongs to ───────────────────────────────
+
+describe('service routing comes from the plan, not the router', () => {
+  const plans = [
+    { name: 'Home', kind: 'hotspot' },
+    { name: 'Fiber', kind: 'pppoe' },
+    { name: 'Dedicated', kind: 'fiber' },
+    { name: 'Fixed', kind: 'static' },
+  ]
+
+  it('routes each plan kind to the right service', () => {
+    expect(serviceFor('Home', plans)).toBe('hotspot')
+    expect(serviceFor('Fiber', plans)).toBe('pppoe')
+    expect(serviceFor('Dedicated', plans)).toBe('pppoe')
+  })
+
+  it('creates no per-session account for a static plan', () => {
+    // A static package is a fixed address, not a login, so there is nothing to
+    // create on the router for it.
+    expect(serviceFor('Fixed', plans)).toBe('none')
+  })
+
+  it('creates nothing for an unknown plan, or no plan at all', () => {
+    expect(serviceFor('Deleted', plans)).toBe('none')
+    expect(serviceFor(null, plans)).toBe('none')
+    expect(serviceFor('Home', null)).toBe('none')
+  })
+})
+
+// ── Speed validation ──────────────────────────────────────────────────────
+
+describe('speeds that cannot be represented are refused', () => {
+  it('accepts the magnitudes an ISP actually sells', () => {
+    // 512 Kbps is 512 kbit. The conversion is exact, not a rounding to 500.
+    expect(rateLimit(0.512, 0.256)).toBe('512k/256k')
+    expect(rateLimit(100, 100)).toBe('100M')
+    expect(rateLimit(1000, 1000)).toBe('1G')
+    // And the whole parse -> format round trip an ISP's form produces.
+    expect(rateLimit(
+      parseSpeedMbps('512 Kbps')!, parseSpeedMbps('256 Kbps')!)).toBe('512k/256k')
+  })
+
+  it('refuses zero, negative and unparseable input', () => {
+    for (const bad of [null, undefined, '', 'fast', 'lots', '0', '-5', '0 Mbps']) {
+      expect(parseSpeedMbps(bad as string), String(bad)).toBeNull()
+    }
+  })
+
+  it('refuses a decimal below what RouterOS can express', () => {
+    // 0.0001 Mbps is below one kbit. Rounding it to 0 would produce a rate limit
+    // of "0k", which either errors or means unlimited.
+    expect(parseSpeedMbps('0.0001')).toBe(0.0001)
+    expect(formatRate(0.0001)).toBe('0k')
+  })
+
+  it('handles a very large speed without overflowing', () => {
+    expect(formatRate(1_000_000)).toBe('1000G')
+    expect(formatRate(4_294_967_295)).toMatch(/^\d+G$/)
+  })
+
+  it('never produces a doubled or bare suffix', () => {
+    for (const v of [0.5, 1, 20, 100, 999, 1000, 2500]) {
+      expect(formatRate(v)).not.toMatch(/MM|kk|GG/)
+    }
+  })
+
+  it('a plan with an unusable speed fails the stage, naming the package', async () => {
+    r.rows['/ip/hotspot/user/profile/print'] = []
+    const out = await runStage('package_sync', r.client, target, ctx({
+      plans: [plan({ name: 'Broken Plan', speed_down: 'quick' })],
+    }))
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/Broken Plan/)
+    // Nothing was written: all-or-nothing, so the router is never left with a
+    // half-applied catalogue.
+    expect(r.writes()).toHaveLength(0)
   })
 })

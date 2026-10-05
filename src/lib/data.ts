@@ -1892,6 +1892,31 @@ export async function fetchCopySources(sessionId: string): Promise<CopySourceRou
   return (body as { sources?: CopySourceRouter[] }).sources ?? []
 }
 
+/**
+ * Stores this router's RADIUS shared secret.
+ *
+ * Write-only BY DESIGN. There is deliberately no counterpart that returns the
+ * secret: the panel can learn whether one is configured, and nothing more. The
+ * value is encrypted server-side with ROUTER_CREDENTIALS_KEY and read back only
+ * by the network worker, in memory, at the moment it writes the router.
+ */
+export async function saveRadiusSecret(
+  sessionId: string,
+  secret: string,
+): Promise<{ ok: boolean; message: string }> {
+  return provisionAction(sessionId, 'radius_secret', { secret }) as unknown as
+    { ok: boolean; message: string }
+}
+
+/** Whether a secret is configured, plus the identifier FreeRADIUS keys on. */
+export async function fetchRadiusSecretStatus(sessionId: string): Promise<{
+  configured: boolean
+  nas_identifier: string | null
+}> {
+  return provisionAction(sessionId, 'radius_secret_status') as unknown as
+    { configured: boolean; nas_identifier: string | null }
+}
+
 /** Copies a package catalogue from another router of the same ISP. */
 export async function copyPlansFromRouter(
   sessionId: string,
@@ -1909,7 +1934,8 @@ export async function copyPlansFromRouter(
 export async function provisionAction(
   sessionId: string,
   action: 'detect' | 'script' | 'register' | 'stages' | 'configure'
-    | 'copy_plans' | 'copy_sources' | 'pools' | 'refresh',
+    | 'copy_plans' | 'copy_sources' | 'pools' | 'refresh'
+    | 'radius_secret' | 'radius_secret_status',
   extra: Record<string, unknown> = {},
 ): Promise<Record<string, unknown>> {
   const sb = requireSupabase()

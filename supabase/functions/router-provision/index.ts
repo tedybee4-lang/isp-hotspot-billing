@@ -30,7 +30,7 @@ import { buildAccessScript, buildRouterScript } from '../_shared/capabilities.ts
 import { buildCompatibility, parseVersion, type CompatibilityProfile } from '../_shared/compat.ts'
 import { buildDiscoveryScript, SURVEYS } from '../_shared/discovery.ts'
 import { assessLockout, type DiscoveredInterface } from '../_shared/lockout.ts'
-import { decryptSecret } from '../_shared/secrets.ts'
+import { decryptSecret, encryptSecret } from '../_shared/secrets.ts'
 import { probeMethods, type ConnectionMethod } from '../_shared/connection.ts'
 
 const CORS = {
@@ -586,6 +586,62 @@ async function handlePanel(req: Request): Promise<Response> {
       connection_method: still?.mgmt_mode ?? null,
       reachability: still?.reachability ?? null,
       last_heartbeat_at: beat,
+    })
+  }
+
+  // -- radius_secret: store this router's own RADIUS shared secret -----------
+  //
+  // Written once by the ISP, encrypted with ROUTER_CREDENTIALS_KEY, and read
+  // afterwards only by the worker. The response says only whether it was stored -
+  // never the value, not its length, not a prefix - so this endpoint cannot be
+  // used to read a secret back out.
+  if (action === 'radius_secret') {
+    const nodeId = session.node_id
+    if (!nodeId) return json({ error: 'This router has not contacted the platform yet.' }, 409)
+
+    const secret = String(body.secret ?? '')
+    if (secret.length < 8) {
+      return json({
+        error: 'A RADIUS shared secret must be at least 8 characters. Generate one '
+          + 'with: openssl rand -base64 32',
+      }, 400)
+    }
+
+    // Encrypt here, in the Edge Function, which already holds the key. The RPC
+    // only ever sees ciphertext, so the database never holds a plaintext secret.
+    const ciphertext = await encryptSecret(secret)
+    const { data, error } = await admin.rpc('set_radius_nas_secret', {
+      p_node_id: nodeId,
+      p_isp_id: session.isp_id,
+      p_ciphertext: ciphertext,
+    })
+    if (error) return json({ error: error.message }, 500)
+    const result = (data ?? {}) as { ok?: boolean; error?: string }
+    if (result.ok === false) return json({ error: result.error ?? 'Could not store it.' }, 409)
+
+    return json({
+      ok: true,
+      stored: true,
+      message: 'Stored. It is encrypted, it is not shown again, and the network '
+        + 'worker will write it to the router during the RADIUS stage.',
+    })
+  }
+
+  // -- radius_secret_status: whether one is configured, never its value -----
+  if (action === 'radius_secret_status') {
+    const nodeId = session.node_id
+    if (!nodeId) return json({ ok: true, configured: false })
+    const { data } = await admin
+      .from('radius_nas')
+      .select('nas_identifier, secret_set')
+      .eq('node_id', nodeId)
+      .eq('isp_id', session.isp_id)
+      .maybeSingle()
+    return json({
+      ok: true,
+      configured: Boolean((data as { secret_set?: boolean } | null)?.secret_set),
+      // The identifier is not a secret and the ISP needs it for clients.conf.
+      nas_identifier: (data as { nas_identifier?: string } | null)?.nas_identifier ?? null,
     })
   }
 

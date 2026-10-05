@@ -234,9 +234,49 @@ To diagnose: open the stage's `detail`, find the entry with `ok: false`, read
 
 **Tested (against mocks):** stage ordering and resume, the ONLINE gate, lockout
 refusal and its override, package→profile formatting, object-name sanitisation,
-secret redaction, pool-resolution arithmetic, tenant isolation, legacy-tag
-adoption, and that no stage issues a `/remove`.
+secret redaction, pool-resolution arithmetic, WireGuard capability classification,
+tenant isolation, legacy-tag adoption, and that no stage issues a `/remove`.
 
 **Not tested:** every RouterOS path, property name, error string and firmware
 difference in this document. The confidence column is an estimate from the API
 reference, not a result.
+
+---
+
+## 7. RouterOS 6 / 7 compatibility matrix
+
+Derived from `supabase/functions/_shared/compat.ts`, which is the platform's
+existing authority on this. "Behaviour" is what provisioning does when the
+feature is unavailable on the selected configuration.
+
+| Feature | ROS6 | ROS7 | Minimum | Behaviour when unavailable |
+|---|---|---|---|---|
+| REST | no | yes | 7.1 | Not used by the worker. Panel falls back to API. |
+| API | yes | yes | all | **REQUIRED.** Absent → connectivity stage FAILS. |
+| API-SSL | 6.49+ | yes | 6.49 | Optional; falls back to plain API, and the fact is recorded. |
+| WireGuard | no | yes | 7.1 | Optional → `unsupported`. **Required → FAILED.** |
+| HotSpot | yes | yes | all | Optional → `unsupported`. **Selected → FAILED** if absent. |
+| PPPoE | yes | yes | all | Optional → `unsupported`. **Selected → FAILED** if absent. |
+| RADIUS | yes | yes | all | **Required → FAILED**, including when no secret is stored. |
+| Firewall / NAT | yes | yes | all | Required; failure stops the run. |
+| Bridge | yes | yes | all | Read only. Never written by provisioning. |
+| VLAN filtering | 6.41+ | yes | 6.41 | Read only. Never written by provisioning. |
+| Scheduler | yes | yes | all | Optional → `unsupported`; the worker still polls. |
+| `/ip pool` | yes | yes | all | Required for PPPoE/HotSpot allocation; no pool → stage FAILS. |
+| `/ip address` | yes | yes | all | Read only, for context. |
+| `/system/backup/save` | yes | yes | all | **Required.** Failure stops the run before anything changes. |
+
+The rule this matrix encodes, and the one the code enforces: a REQUIRED feature
+that is unavailable **FAILS**; an OPTIONAL one is **SKIPPED/UNSUPPORTED**; and
+neither is ever allowed to become "success" and reach ONLINE.
+
+### Two ambiguities the hardware test must settle
+
+1. **How does a RouterOS 6 box answer `/interface/wireguard/print`?** The code now
+   treats "rejects the path" and "answers with an empty list" differently — an
+   old firmware answering with an empty list is classified unsupported using the
+   version as a second signal — but the real behaviour is unverified.
+2. **Does `/ip/pool/print` return `ranges` bare, or with a prefix?** The parser
+   accepts `10.0.0.2-10.0.0.100` and comma-separated lists, and rejects anything
+   else rather than guessing. If RouterOS emits something else, the parser will
+   refuse the pool and PPPoE will fail visibly rather than silently.
