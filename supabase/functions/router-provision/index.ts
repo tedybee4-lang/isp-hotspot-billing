@@ -29,6 +29,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { buildAccessScript, buildRouterScript } from '../_shared/capabilities.ts'
 import { buildCompatibility, parseVersion, type CompatibilityProfile } from '../_shared/compat.ts'
 import { buildDiscoveryScript, SURVEYS } from '../_shared/discovery.ts'
+import { assessLockout, type DiscoveredInterface } from '../_shared/lockout.ts'
 import { decryptSecret } from '../_shared/secrets.ts'
 import { probeMethods, type ConnectionMethod } from '../_shared/connection.ts'
 
@@ -489,17 +490,38 @@ async function handlePanel(req: Request): Promise<Response> {
     return json({ ok: true, script })
   }
 
-// -- register: online only after a real heartbeat ---------------------------
+// -- register: online only after the stage gate agrees ---------------------
   //
-  // The one thing this action must never do is take the ISP's word for it. A
-  // click in the panel is not evidence that the router exists, so the decision
-  // is made from a heartbeat row inside the router's own offline threshold.
+  // Two independent conditions, and BOTH must hold:
+  //
+  //   1. `router_online_blocker` says every required stage settled, verification
+  //      SUCCEEDED, and a backup exists. That is the authoritative gate.
+  //   2. A real heartbeat arrived inside the router's own offline threshold.
+  //      A stage table saying "success" and a router that is actually answering
+  //      are different claims.
+  //
+  // Neither alone is enough, and this is the one place a router could be marked
+  // online without having been really configured - which is why it checks both.
   if (action === 'register') {
     const nodeId = session.node_id
     if (!nodeId) {
       return json({
         error: 'This session has no router attached yet. The router has not '
           + 'contacted the platform.',
+      }, 409)
+    }
+
+    const { data: gate, error: gateErr } = await admin.rpc('router_online_blocker', {
+      p_session_id: sessionId,
+    })
+    if (gateErr) return json({ error: gateErr.message }, 500)
+    const verdict = (gate ?? {}) as { blocked?: boolean; stage?: string; reason?: string }
+    if (verdict.blocked) {
+      return json({
+        error: 'This router has not passed verification, so it cannot be marked '
+          + `online. ${verdict.reason ?? ''}`
+          + (verdict.stage ? ` (stage: ${verdict.stage})` : ''),
+        blocked_stage: verdict.stage ?? null,
       }, 409)
     }
 
@@ -564,6 +586,145 @@ async function handlePanel(req: Request): Promise<Response> {
       connection_method: still?.mgmt_mode ?? null,
       reachability: still?.reachability ?? null,
       last_heartbeat_at: beat,
+    })
+  }
+
+  // -- stages: the live stage list the wizard renders ------------------------
+  //
+  // One RPC so the panel cannot assemble "is this finished" itself and get it
+  // wrong. It also returns the ONLINE verdict, so the UI shows the same answer
+  // the gate would give rather than a guess.
+  if (action === 'stages') {
+    const { data, error } = await admin.rpc('provisioning_stage_report', {
+      p_session_id: sessionId,
+    })
+    if (error) return json({ error: error.message }, 500)
+    return json(data ?? { ok: false })
+  }
+
+  // -- configure: check safety, then hand the run to the worker --------------
+  //
+  // This is the point of no return, so the management check runs HERE, on the
+  // server, from the router's own discovered state. Checking it in the browser
+  // would mean the answer depends on what the browser was told, and it would be
+  // one skipped click away from not being checked at all.
+  //
+  // Nothing is configured by this request. It seeds the stage rows and queues ONE
+  // job; the worker does the rest over its own authenticated socket.
+  if (action === 'configure') {
+    const nodeId = session.node_id
+    if (!nodeId) {
+      return json({ error: 'This router has not contacted the platform yet.' }, 409)
+    }
+
+    const selection = {
+      wan: (body.wanInterface as string | null) ?? session.wan_interface ?? null,
+      hotspot: (body.hotspotInterfaces as string[] | undefined)
+        ?? session.hotspot_interfaces ?? [],
+      pppoe: (body.pppoeInterfaces as string[] | undefined)
+        ?? session.pppoe_interfaces ?? [],
+      management: (body.managementInterfaces as string[] | undefined)
+        ?? session.management_interfaces ?? [],
+      acceptLockout: body.acceptLockout === true,
+      replacementPath: body.replacementPath as {
+        kind?: string; verified?: boolean; note?: string
+      } | undefined,
+    }
+
+    // The lockout assessment works from DISCOVERED state, never from an
+    // assumption that the WAN is ether1. Whatever the router reported is checked.
+    const { data: caps } = await admin
+      .from('router_capabilities').select('*').eq('node_id', nodeId).maybeSingle()
+
+    const assessment = assessLockout(selection, {
+      interfaces: (caps?.interfaces ?? []) as unknown as DiscoveredInterface[],
+      addresses: [],
+      bridges: (caps?.bridges ?? []) as unknown as Array<{ name: string }>,
+    })
+
+    if (!assessment.safe) {
+      // Refused, with the actual reason. Nothing is queued, nothing is changed,
+      // and the override is NOT honoured on its own - see lockout.ts.
+      return json({
+        ok: false,
+        error: assessment.message,
+        remedy: assessment.remedy,
+        lockout: {
+          safe: false,
+          losing_management: assessment.losingManagement,
+          // Stated so the UI can explain WHY the tick box did not help.
+          override_requires: 'a verified out-of-band management path '
+            + '(second LAN segment, console server, or on-site access)',
+        },
+      }, 409)
+    }
+
+    // Persist the accepted selection so the worker applies exactly what was
+    // checked here, not a second and possibly different copy from the browser.
+    const { error: saveErr } = await admin.from('provisioning_sessions').update({
+      wan_interface: selection.wan,
+      hotspot_interfaces: selection.hotspot,
+      pppoe_interfaces: selection.pppoe,
+      management_interfaces: selection.management,
+      management_lockout_accepted: selection.acceptLockout === true,
+      management_replacement_path: selection.replacementPath?.kind ?? null,
+      management_replacement_verified: selection.replacementPath?.verified === true,
+      management_assessed_at: new Date().toISOString(),
+      role: (body.role as string | undefined) ?? session.role,
+      wizard_answers: {
+        ...(session.wizard_answers ?? {}),
+        ...(body.tunnel ? { tunnel: body.tunnel } : {}),
+        ...(body.pppLocal ? { ppp_local: body.pppLocal } : {}),
+        ...(body.pppRemote ? { ppp_remote: body.pppRemote } : {}),
+        ...(body.hotspotPool ? { hotspot_pool: body.hotspotPool } : {}),
+        ...(body.radiusServer ? { radius_server: body.radiusServer } : {}),
+        ...(body.radiusEnabled !== undefined
+          ? { radius_enabled: String(body.radiusEnabled === true) } : {}),
+      },
+    }).eq('id', sessionId)
+    if (saveErr) return json({ error: saveErr.message }, 500)
+
+    const { data, error } = await admin.rpc('enqueue_staged_provisioning', {
+      p_session_id: sessionId,
+    })
+    if (error) return json({ error: error.message }, 500)
+    const result = (data ?? {}) as { ok?: boolean; error?: string; job_id?: string }
+    if (result.ok === false) return json({ error: result.error ?? 'Could not start.' }, 409)
+
+    return json({
+      ok: true,
+      queued: true,
+      job_id: result.job_id ?? null,
+      lockout: { safe: true, warning: assessment.message },
+      message: 'Queued. The network worker applies each stage in order and records '
+        + 'the real result of every one.',
+    })
+  }
+
+// APPEND_ACTIONS
+  // -- copy_plans: from another router of the SAME ISP -----------------------
+  //
+  // The tenant check lives in the function. The browser cannot widen it, and a
+  // cross-tenant request is refused before any plan is read.
+  if (action === 'copy_plans') {
+    const sourceNode = String(body.sourceNodeId ?? '')
+    if (!sourceNode) return json({ error: 'sourceNodeId is required.' }, 400)
+
+    const { data, error } = await admin.rpc('copy_router_plans', {
+      p_source_node_id: sourceNode,
+      p_target_session: sessionId,
+      p_kinds: (body.kinds as string[] | undefined) ?? ['hotspot', 'pppoe'],
+      p_replace: body.replace === true,
+    })
+    if (error) return json({ error: error.message }, 400)
+    const result = (data ?? {}) as { ok?: boolean; error?: string; plans?: number }
+    if (result.ok === false) return json({ error: result.error ?? 'Could not copy.' }, 409)
+
+    return json({
+      ok: true,
+      plans: result.plans ?? 0,
+      message: `${result.plans ?? 0} package(s) copied. The router gets its own `
+        + 'objects during the next package sync.',
     })
   }
 

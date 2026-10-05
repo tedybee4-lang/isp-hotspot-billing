@@ -14,7 +14,8 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { decryptSecret } from './crypto.ts'
 import type { JobStore, RouterJob } from './runner.ts'
 import type { RouterTarget } from './router-client.ts'
-import type { HandlerContext } from './handlers.ts'
+import type { HandlerContext, ProvisioningWork } from './handlers.ts'
+import type { StageStatus } from './stages.ts'
 
 export interface DbConfig {
   url: string
@@ -228,6 +229,186 @@ export class Db implements JobStore {
           .upsert(row, { onConflict: 'isp_id,username' })
         if (error) throw new Error(`saving radius account failed: ${error.message}`)
       },
+      loadProvisioning: (sessionId) => this.loadProvisioning(sessionId),
+      advanceStage: async (sessionId, stage, status, extra) => {
+        // p_isp_id is passed explicitly because this worker has no auth.uid():
+        // the function uses it, together with the netisp.worker GUC that
+        // set_job_worker established, to confirm the session belongs to the
+        // tenant this job names.
+        const { error } = await c.rpc('advance_provisioning_stage', {
+          p_session_id: sessionId,
+          p_stage: stage,
+          p_status: status,
+          p_error: extra.error ?? null,
+          p_detail: extra.detail ?? {},
+          p_skip_reason: extra.skipReason ?? null,
+          p_isp_id: extra.ispId,
+        })
+        // The ordering rule lives in the database. A refusal here means a stage
+        // tried to start before one it depends on, and that must surface rather
+        // than be logged and ignored.
+        if (error) throw new Error(`stage ${stage} -> ${status} refused: ${error.message}`)
+      },
+      recordBackup: async (sessionId, row) => {
+        const { error } = await c.rpc('record_router_backup', {
+          p_session_id: sessionId,
+          p_node_id: row.nodeId,
+          p_filename: row.filename,
+          p_kind: row.kind,
+          p_routeros_version: row.routerosVersion ?? null,
+          p_size_bytes: row.sizeBytes ?? null,
+          p_status: 'succeeded',
+        })
+        if (error) throw new Error(`recording backup failed: ${error.message}`)
+      },
+      setSessionState: async (sessionId, state, error) => {
+        const { error: e } = await c.from('provisioning_sessions').update({
+          state,
+          last_error: error ?? null,
+          ...(state === 'online' ? { completed_at: new Date().toISOString() } : {}),
+        }).eq('id', sessionId)
+        if (e) throw new Error(`saving session state failed: ${e.message}`)
+      },
+      enqueueNextPass: async (sessionId, nodeId, ispId, pass) => {
+        // The EXISTING queue. The key carries the pass number so each pass is a
+        // distinct job, while a duplicate delivery of the same pass collapses.
+        const { data, error } = await c.rpc('enqueue_router_job', {
+          p_node_id: nodeId,
+          p_kind: 'provision',
+          p_payload: { session_id: sessionId, pass },
+          p_idempotency_key: `provision:${sessionId}:p${pass + 1}`,
+          p_priority: 5,
+          p_max_attempts: 8,
+          p_isp_id: ispId,
+        })
+        if (error) throw new Error(`queueing next pass failed: ${error.message}`)
+        if (data && (data as { ok?: boolean }).ok === false) {
+          throw new Error(`queueing next pass refused: `
+            + `${(data as { error?: string }).error ?? 'unknown'}`)
+        }
+      },
+    }
+  }
+
+// APPEND_DB_HERE
+  /**
+   * Loads everything a provisioning pass needs, in one round trip.
+   *
+   * The stage ORDER comes from the database catalogue, not from this file. The
+   * worker's registry is checked against it by a test, and the worker is not
+   * allowed to decide what runs next - that is what stops a stage running before
+   * the one it depends on.
+   */
+  async loadProvisioning(sessionId: string): Promise<ProvisioningWork | null> {
+    const c = this.client
+
+    const { data: sessionRow, error: sErr } = await c
+      .from('provisioning_sessions')
+      .select('id, isp_id, node_id, role, wan_interface, hotspot_interfaces, '
+        + 'pppoe_interfaces, management_interfaces, wizard_answers')
+      .eq('id', sessionId)
+      .maybeSingle()
+    // The select is the contract; the cast only tells the compiler so. supabase-js
+    // types an untyped client as GenericStringError on the data side.
+    const session = sessionRow as unknown as {
+      id: string; isp_id: string; node_id: string | null
+      role: string; wan_interface: string | null
+      hotspot_interfaces: string[]; pppoe_interfaces: string[]
+      management_interfaces: string[] | null
+      wizard_answers: Record<string, string> | null
+    }
+    if (sErr) throw new Error(`loading provisioning session failed: ${sErr.message}`)
+    if (!session) return null
+
+    const [stagesRes, plansRes, orderRes] = await Promise.all([
+      c.from('provisioning_stages')
+        .select('stage, status').eq('session_id', sessionId),
+      c.from('plans')
+        .select('id, name, kind, speed_down, speed_up, shared_users, data_limit, is_active')
+        .eq('isp_id', session.isp_id),
+      c.rpc('provisioning_stage_order'),
+    ])
+    if (stagesRes.error) throw new Error(`loading stages failed: ${stagesRes.error.message}`)
+    if (plansRes.error) throw new Error(`loading plans failed: ${plansRes.error.message}`)
+
+    const stageStatuses: Record<string, StageStatus> = {}
+    for (const row of (stagesRes.data ?? []) as Array<{ stage: string; status: string }>) {
+      stageStatuses[row.stage] = row.status as StageStatus
+    }
+
+    // The catalogue order is authoritative. There is deliberately NO alphabetical
+    // fallback: guessing an order can run a stage before the one it depends on,
+    // which is worse than refusing to start.
+    const order = (orderRes.data as string[] | null) ?? []
+    if (order.length === 0) {
+      throw new Error('provisioning_stage_order() returned nothing, so the stage order '
+        + 'is unknown. Refusing to guess an order.')
+    }
+
+    // Only customers the BILLING side has already made active. This decides what
+    // to mirror onto the router and nothing else - it cannot activate anyone,
+    // because nothing here writes back to billing.
+    const { data: customers } = await c
+      .from('clients')
+      .select('id, username, status, plan_name, expires_at')
+      .eq('isp_id', session.isp_id)
+
+    const active = ((customers ?? []) as Array<{
+      id: string; username: string; status: string
+      plan_name: string | null; expires_at: string | null
+    }>).filter((row) =>
+      row.status === 'active' && (!row.expires_at || new Date(row.expires_at) > new Date()))
+
+    const answers = (session.wizard_answers ?? {}) as Record<string, string>
+
+    return {
+      session: {
+        id: session.id,
+        ispId: session.isp_id,
+        nodeId: session.node_id ?? '',
+        role: (session.role as 'hotspot' | 'pppoe' | 'both') ?? 'hotspot',
+        tag: sessionId.slice(0, 8),
+        wanInterface: session.wan_interface ?? null,
+        hotspotInterfaces: session.hotspot_interfaces ?? [],
+        pppoeInterfaces: session.pppoe_interfaces ?? [],
+        managementInterfaces: session.management_interfaces ?? [],
+        tunnelRequired: answers['tunnel'] === 'wireguard',
+        dns: answers['dns'] ? String(answers['dns']).split(',').filter(Boolean) : [],
+        radiusServer: answers['radius_server'] ?? null,
+        radiusEnabled: answers['radius_enabled'] === 'true',
+        // A secret is never stored in the session row, and none is read here.
+        radiusSecret: null,
+        sessionTimeoutMin: Number(answers['session_timeout_min'] ?? 30),
+        idleTimeoutMin: Number(answers['idle_timeout_min'] ?? 5),
+        pppLocal: answers['ppp_local'] ?? null,
+        pppRemote: answers['ppp_remote'] ?? null,
+        hotspotPool: answers['hotspot_pool'] ?? null,
+      },
+      stageStatuses,
+      stageOrder: order,
+      plans: ((plansRes.data ?? []) as Array<{
+        id: string; name: string; kind: string
+        speed_down: string; speed_up: string
+        shared_users: number; data_limit: string | null; is_active: boolean
+      }>).map((p) => ({
+        id: p.id,
+        name: p.name,
+        kind: p.kind as 'hotspot' | 'pppoe' | 'fiber',
+        speed_down: p.speed_down,
+        speed_up: p.speed_up,
+        shared_users: p.shared_users ?? 1,
+        data_limit: p.data_limit ?? null,
+        is_active: p.is_active !== false,
+      })),
+      // No credential is read: subscribers authenticate through RADIUS, so the
+      // platform never needs a subscriber password to create the account.
+      customers: active.map((row) => ({
+        id: row.id,
+        username: row.username,
+        password_plain: null,
+        plan_name: row.plan_name,
+        is_active: true,
+      })),
     }
   }
 }

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   Plug, Copy, CheckCircle2, RefreshCw, ChevronRight, Terminal, ShieldCheck, Ban,
+  ListChecks,
 } from 'lucide-react'
 import * as api from '../../../lib/data'
 import type { ProvisioningSession, RouterCapabilities } from '../../../lib/data'
@@ -54,6 +55,8 @@ export function ProvisioningPage() {
   const [wizard, setWizard] = useState<
     { session: ProvisioningSession; caps: RouterCapabilities } | null
   >(null)
+  /** Which session's stage list is open, if any. */
+  const [stagesFor, setStagesFor] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
   const load = useCallback(async () => {
@@ -185,6 +188,11 @@ return (
                     </p>
                   </div>
                   <div className="flex gap-1">
+                    <button onClick={() => setStagesFor(s.id)}
+                      title="Show provisioning stages"
+                      className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
+                      <ListChecks className="w-3.5 h-3.5" />
+                    </button>
                     <button onClick={() => void detect(s.id)} disabled={busy === s.id}
                       title="Detect hardware"
                       className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
@@ -232,7 +240,146 @@ return (
           onClose={() => setWizard(null)}
           onDone={async () => { setWizard(null); await load() }} />
       )}
+
+      {stagesFor && (
+        <StageProgress session={stagesFor} onClose={() => setStagesFor(null)} />
+      )}
     </div>
+  )
+}
+
+/** How each stage status is drawn, and what the operator is told. */
+const STAGE_ICON: Record<string, string> = {
+  success: 'text-emerald-500',
+  failed: 'text-rose-500',
+  running: 'text-amber-500',
+  pending: 'text-slate-300 dark:text-slate-600',
+  skipped: 'text-slate-400',
+  unsupported: 'text-slate-400',
+}
+
+const STAGE_MARK: Record<string, string> = {
+  success: 'OK', failed: 'X', running: '...', pending: '-',
+  skipped: 'skip', unsupported: 'n/a',
+}
+
+/**
+ * The real stage list, polled while a run is in flight.
+ *
+ * Shows the status the DATABASE recorded, not an optimistic animation. A stage
+ * that failed says why it failed and names the stage, because "provisioning
+ * failed" with no other detail is the single most useless message this page can
+ * display.
+ */
+function StageProgress({
+  session, onClose,
+}: {
+  session: string
+  onClose: () => void
+}) {
+  const [report, setReport] = useState<api.ProvisioningStageReport | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const r = await api.fetchProvisioningStages(session)
+        if (!cancelled) setReport(r)
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Could not read stages.')
+      }
+    }
+    void tick()
+    // Poll while the run is unfinished. Once everything has settled there is
+    // nothing left to watch, so the timer stops rather than hammering the API.
+    const timer = setInterval(() => {
+      const live = report?.stages.some(
+        (st) => st.status === 'pending' || st.status === 'running')
+      if (live || !report) void tick()
+    }, 4000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [session, report])
+
+  const failed = report?.stages.find((st) => st.status === 'failed')
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <h2 className="text-sm font-black text-slate-900 dark:text-white">
+            Provisioning stages
+          </h2>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Each step is applied by the network worker and recorded as it happens.
+          </p>
+        </div>
+        <Button size="sm" variant="secondary" onClick={onClose}>Close</Button>
+      </div>
+
+      {error && <Alert kind="error">{error}</Alert>}
+      {failed && (
+        <Alert kind="error">
+          <span className="font-bold">{failed.label} failed.</span> {failed.error}
+        </Alert>
+      )}
+      {report?.online.blocked && (
+        <Alert kind="warning">
+          Not online yet: {report.online.reason}
+          {report.online.stage ? ` (stage: ${report.online.stage})` : ''}
+        </Alert>
+      )}
+      {report && !report.online.blocked && (
+        <Alert kind="success">Every required stage passed. This router may go online.</Alert>
+      )}
+
+      <div className="mt-3 space-y-1">
+        {(report?.stages ?? []).map((st) => (
+          <div key={st.stage} className="flex items-start gap-3 py-1.5 border-b
+            border-slate-100 dark:border-slate-800 last:border-0">
+            <span className={cn('w-10 shrink-0 text-center text-[10px] font-mono font-bold',
+              STAGE_ICON[st.status])}>
+              {STAGE_MARK[st.status]}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
+                {st.label}
+                {!st.required && (
+                  <span className="ml-1.5 font-normal text-slate-400">(optional)</span>
+                )}
+              </p>
+              {st.error && (
+                <p className="text-[10px] text-rose-600 dark:text-rose-400">{st.error}</p>
+              )}
+              {st.skipped_reason && (
+                <p className="text-[10px] text-slate-400">{st.skipped_reason}</p>
+              )}
+              {st.duration_ms != null && st.status === 'success' && (
+                <p className="text-[10px] text-slate-400 font-mono">{st.duration_ms} ms</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {(report?.backups.length ?? 0) > 0 && (
+        <div className="mt-4">
+          <p className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+            Backups on this router
+          </p>
+          <p className="text-[10px] text-slate-400">
+            Stored on the router itself, never uploaded.
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {report!.backups.map((b) => (
+              <li key={b.id} className="text-[10px] font-mono text-slate-500">
+                {b.filename} - {b.kind} - {new Date(b.created_at).toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
   )
 }
 function WizardModal({
@@ -243,31 +390,56 @@ function WizardModal({
   onClose: () => void
   onDone: () => void | Promise<void>
 }) {
-  const candidates = caps.interfaces.filter((i) => !i.disabled && !i.isBridge)
+  // Real discovered ports only. Bridges are included because a bridge IS a
+  // legitimate HotSpot or management target on a real router; excluding them
+  // would force an operator to pick a physical port the bridge hides behind.
+  const candidates = caps.interfaces.filter((i) => !i.disabled)
   const [role, setRole] = useState(session.role)
-  const [wan, setWan] = useState<string>('')
-  const [hs, setHs] = useState<string[]>([])
-  const [pp, setPp] = useState<string[]>([])
+  const [wan, setWan] = useState<string>(session.wan_interface ?? '')
+  const [hs, setHs] = useState<string[]>(session.hotspot_interfaces ?? [])
+  const [pp, setPp] = useState<string[]>(session.pppoe_interfaces ?? [])
+  const [mgmt, setMgmt] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [remedy, setRemedy] = useState<string | null>(null)
+  const [queued, setQueued] = useState(false)
 
   const toggle = (list: string[], set: (v: string[]) => void, n: string) =>
     set(list.includes(n) ? list.filter((x) => x !== n) : [...list, n])
 
+  /**
+   * A port that is already the WAN must not also become a customer port.
+   *
+   * A HotSpot server and the upstream link on one interface is not a
+   * configuration, it is a way to sell the ISP's own uplink to its subscribers.
+   * Refusing here means the operator sees the conflict while looking at the
+   * choice, rather than as an unexplained error after pressing Apply.
+   */
+  const wanConflict = wan === '' ? [] : [...hs, ...pp].filter((p) => p === wan)
+
   async function submit() {
-    setBusy(true); setError(null)
+    setBusy(true); setError(null); setRemedy(null)
     try {
-      await api.saveProvisioningAnswers(session.id, {
+      // This does not configure the router from the browser. The server runs the
+      // management safety check against the router's discovered state and then
+      // queues ONE job for the network worker.
+      await api.configureRouter({
+        sessionId: session.id,
         role,
-        wan_interface: wan || null,
-        hotspot_interfaces: role === 'pppoe' ? [] : hs,
-        pppoe_interfaces: role === 'hotspot' ? [] : pp,
+        wanInterface: wan || null,
+        hotspotInterfaces: role === 'pppoe' ? [] : hs,
+        pppoeInterfaces: role === 'hotspot' ? [] : pp,
+        managementInterfaces: mgmt,
       })
-      const r = await api.provisionAction(session.id, 'script')
-      if (r.script) await navigator.clipboard.writeText(String(r.script))
+      setQueued(true)
       await onDone()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not apply the configuration.')
+      // The refusal reason comes from the SERVER, which checked the router's
+      // discovered state. The browser never decides this.
+      const err = e as { message?: string; detail?: Record<string, unknown> }
+      setError(err.message ?? 'Could not apply the configuration.')
+      const r = err.detail?.remedy
+      if (typeof r === 'string') setRemedy(r)
     } finally {
       setBusy(false)
     }
@@ -279,6 +451,20 @@ function WizardModal({
       ? 'border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
       : 'border-slate-200 dark:border-slate-700 text-slate-500',
   )
+
+  if (queued) {
+    return (
+      <Modal open onClose={onClose} title={`Configure ${session.label}`}>
+        <div className="space-y-3">
+          <Alert kind="success">
+            Queued for the network worker. It applies each stage in order and
+            records the real result of every one.
+          </Alert>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
+        </div>
+      </Modal>
+    )
+  }
 
   return (
     <Modal open onClose={onClose} title={`Configure ${session.label}`}>
@@ -293,6 +479,7 @@ function WizardModal({
         </div>
 
         {error && <Alert kind="error">{error}</Alert>}
+        {remedy && <Alert kind="warning">{remedy}</Alert>}
 
         <div>
           <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
@@ -328,7 +515,9 @@ function WizardModal({
                 onChange={(e) => setWan(e.target.value)}>
                 <option value="">Leave as it is</option>
                 {candidates.map((i) => (
-                  <option key={i.name} value={i.name}>{i.name} ({i.type})</option>
+                  <option key={i.name} value={i.name}>
+                      {i.name} ({i.type}){i.isBridge ? ' - bridge' : ''}
+                    </option>
                 ))}
               </select>
             </div>
@@ -339,7 +528,7 @@ function WizardModal({
                   HotSpot interfaces
                 </span>
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {candidates.map((i) => (
+                  {candidates.filter((i) => i.name !== wan).map((i) => (
                     <button key={i.name} onClick={() => toggle(hs, setHs, i.name)}
                       className={chip(hs.includes(i.name))}>
                       {i.name}
@@ -355,7 +544,7 @@ function WizardModal({
                   PPPoE interfaces
                 </span>
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {candidates.map((i) => (
+                  {candidates.filter((i) => i.name !== wan).map((i) => (
                     <button key={i.name} onClick={() => toggle(pp, setPp, i.name)}
                       className={chip(pp.includes(i.name))}>
                       {i.name}
@@ -363,6 +552,32 @@ function WizardModal({
                   ))}
                 </div>
               </div>
+            )}
+
+            <div>
+              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                Management interface
+              </span>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Keep at least one port you can reach the router on. If your
+                selection would leave none, the configuration is refused.
+              </p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {candidates.map((i) => (
+                  <button key={i.name} onClick={() => toggle(mgmt, setMgmt, i.name)}
+                    className={chip(mgmt.includes(i.name))}>
+                    {i.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {wanConflict.length > 0 && (
+              <Alert kind="warning">
+                {wanConflict.join(', ')} is selected as the WAN and also as a
+                customer port. That would sell your own uplink to subscribers, so
+                it has been taken off the customer side.
+              </Alert>
             )}
           </>
         )}
@@ -377,9 +592,10 @@ function WizardModal({
 
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit} disabled={busy || candidates.length === 0}
+          <Button onClick={submit}
+            disabled={busy || candidates.length === 0 || wanConflict.length > 0}
             icon={<ChevronRight className="w-3.5 h-3.5" />}>
-            {busy ? 'Applying...' : 'Apply configuration'}
+            {busy ? 'Queueing...' : 'Apply configuration'}
           </Button>
         </div>
       </div>

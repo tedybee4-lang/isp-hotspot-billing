@@ -15,6 +15,19 @@
 import { RouterConnectError, isAlreadyExists, isAuthFailure } from './session.ts'
 import type { RouterClient, RouterTarget } from './router-client.ts'
 import type { JobHandler, JobOutcome } from './runner.ts'
+import {
+  runStage,
+  type StageContext, type StageStatus,
+} from './stages.ts'
+
+/** Everything the provision handler needs, loaded once per job. */
+export interface ProvisioningWork {
+  session: StageContext['session']
+  stageStatuses: Record<string, StageStatus>
+  stageOrder: string[]
+  plans: StageContext['plans']
+  customers: StageContext['customers']
+}
 
 /** Everything a handler needs to write results back. */
 export interface HandlerContext {
@@ -34,6 +47,43 @@ export interface HandlerContext {
   saveCustomer(clientId: string, patch: Record<string, unknown>): Promise<void>
   /** Upserts the RADIUS mirror row. */
   saveRadiusAccount(row: Record<string, unknown>): Promise<void>
+  // -- staged provisioning ------------------------------------------------------
+  /** Loads a session, its stage list, its plans and its active entitlements. */
+  loadProvisioning(sessionId: string): Promise<ProvisioningWork | null>
+  /** Records a stage transition. Throws if the database refuses the ordering. */
+  advanceStage(
+    sessionId: string,
+    stage: string,
+    status: StageStatus,
+    extra: {
+      ispId: string
+      error?: string | null
+      skipReason?: string | null
+      detail?: Record<string, unknown>
+    },
+  ): Promise<void>
+  /** Records backup metadata for the session. */
+  recordBackup(sessionId: string, row: {
+    nodeId: string; ispId: string; filename: string; kind: string
+    routerosVersion?: string | null; sizeBytes?: number | null
+  }): Promise<void>
+  /** Moves the session itself to a new state. */
+  setSessionState(sessionId: string, state: string, error?: string | null): Promise<void>
+  /**
+   * Queues the next pass of the same provisioning run.
+   *
+   * This is the EXISTING queue - enqueue_router_job - not a second one. The
+   * idempotency key carries the pass number, so each pass is a distinct job
+   * while a retry of the same pass is deduplicated. That is what lets a
+   * thirteen-stage run survive a worker restart: the pass in flight is reclaimed
+   * by the lease, and the pass after it is already queued.
+   */
+  enqueueNextPass(
+    sessionId: string,
+    nodeId: string,
+    ispId: string,
+    pass: number,
+  ): Promise<void>
 }
 
 const num = (v: string | undefined | null): number | null => {
@@ -1007,6 +1057,153 @@ export function sessionSyncHandler(ctx: HandlerContext, client: RouterClient): J
   }
 }
 
+/**
+ * provision: walk the stage list, one stage at a time, resuming where the last
+ * run stopped.
+ *
+ * THE RESUME RULE, which is the whole design:
+ *
+ *   The stage table is the memory. This handler does not remember anything
+ *   between invocations, and neither does the job row. It asks the database
+ *   "which is the first stage that has not settled?", runs exactly that one, and
+ *   returns. So a worker killed halfway through RADIUS comes back, re-reads the
+ *   table, finds RADIUS still unsettled, and repeats only RADIUS.
+ *
+ *   That is why stages are idempotent rather than merely guarded: the retry path
+ *   and the crash path are the same code path, so anything that is not safe to
+ *   run twice cannot be allowed to run twice.
+ *
+ * WHY ONE STAGE PER CLAIM
+ * -----------------------
+ * The job timeout is minutes and a thirteen-stage run over a slow link is not.
+ * One stage per claim keeps every job short, makes the lease meaningful, and
+ * gives the operator a job log that says which step was in flight. The queue row
+ * stays `processing` until the run finishes; the re-claim path in
+ * `claim_router_jobs` reclaims it once the lease expires.
+ *
+ * NOTHING HERE SETS ONLINE. That is the database's `router_online_blocker`, and
+ * the session reaches `online` only after it agrees.
+ */
+export function provisionHandler(ctx: HandlerContext, client: RouterClient): JobHandler {
+  return async (job, target): Promise<JobOutcome> => {
+    const started = Date.now()
+    const sessionId = String(job.payload?.session_id ?? '')
+    if (!sessionId) {
+      return {
+        ok: false, durationMs: 0, retryable: false,
+        error: 'This provisioning job carries no session_id.',
+      }
+    }
+    if (!target) {
+      throw new RouterConnectError('No router credentials for this provisioning job.')
+    }
+
+    const work = await ctx.loadProvisioning(sessionId)
+    if (!work) {
+      return {
+        ok: false, durationMs: 0, retryable: false,
+        error: `Provisioning session ${sessionId} no longer exists.`,
+      }
+    }
+
+    // The first stage that has not settled. `failed` and `running` are both
+    // "still to do", deliberately: a failed stage is exactly what a retry is for,
+    // and a running one is what a dead worker left behind.
+    const settled = isStageSettled
+    const next = work.stageOrder.find((name) => !settled(work.stageStatuses[name]))
+    if (!next) {
+      // Everything settled. This is a resume of a finished run, so it is a
+      // success - not an error, and not a reason to touch the router again.
+      return {
+        ok: true,
+        durationMs: Date.now() - started,
+        result: { stages: 'all_settled', note: 'Nothing left to do.' },
+      }
+    }
+
+    const stageCtx: StageContext = {
+      session: work.session,
+      plans: work.plans,
+      customers: work.customers,
+    }
+
+    // Claim it. The database refuses this out of order, which is the guarantee
+    // that a stage can never run before the one it depends on.
+    await ctx.advanceStage(sessionId, next, 'running', { ispId: work.session.ispId })
+
+    const outcome = await runStage(next, client, target, stageCtx)
+
+    await ctx.advanceStage(sessionId, next, outcome.status, {
+      ispId: work.session.ispId,
+      error: outcome.error ?? null,
+      skipReason: outcome.skipReason ?? null,
+      detail: outcome.detail ?? {},
+    })
+
+    if (outcome.status === 'failed') {
+      // The stage is recorded FAILED and the session is marked failed, with the
+      // operator's actual reason. Completed stages are left alone: a retry
+      // resumes from this stage rather than re-running work that already worked.
+      await ctx.setSessionState(sessionId, 'failed', outcome.error ?? 'Stage failed.')
+      return {
+        ok: false,
+        durationMs: Date.now() - started,
+        error: outcome.error ?? `Stage ${next} failed.`,
+        retryable: outcome.retryable ?? false,
+        result: { stage: next, status: outcome.status },
+      }
+    }
+
+    // A backup that succeeded is recorded so the ONLINE gate can require it.
+    if (next === 'backup' && outcome.status === 'success') {
+      const filename = (outcome.detail as { filename?: string })?.filename
+      if (filename) {
+        await ctx.recordBackup(sessionId, {
+          nodeId: target.nodeId,
+          ispId: work.session.ispId,
+          filename,
+          kind: 'binary',
+          sizeBytes: Number((outcome.detail as { size_bytes?: string })?.size_bytes ?? 0) || null,
+        })
+      }
+    }
+
+    // Queue the next pass through the EXISTING queue, so the run keeps going
+    // after this job row completes. Without this the run would stop after one
+    // stage, because nothing else would claim the job again.
+    //
+    // The pass number comes from the job's own attempt count, so a reclaimed job
+    // re-queues itself under a NEW key while a duplicate delivery of the same
+    // pass is deduplicated by the existing idempotency rule.
+    const pass = Number(job.attempt_count ?? 1)
+    await ctx.enqueueNextPass(
+      sessionId, target.nodeId, work.session.ispId, pass,
+    )
+
+    return {
+      ok: true,
+      durationMs: Date.now() - started,
+      result: {
+        stage: next,
+        status: outcome.status,
+        remaining: work.stageOrder.filter((n) => !settled(work.stageStatuses[n])
+          && n !== next).length,
+      },
+    }
+  }
+}
+
+/**
+ * Decides whether a stage status means "this stage is finished".
+ *
+ * Exported because the resume rule and the ONLINE gate must agree on it, and the
+ * one place they can silently disagree is here: if a caller treated 'unsupported'
+ * as unsettled it would loop forever, and if it treated 'failed' as settled it
+ * would walk straight past a broken RADIUS stage.
+ */
+export const isStageSettled = (s: StageStatus | undefined): boolean =>
+  s === 'success' || s === 'skipped' || s === 'unsupported'
+
 /** Every job kind the worker knows how to run. */
 export function buildHandlers(
   ctx: HandlerContext,
@@ -1014,6 +1211,7 @@ export function buildHandlers(
 ): Record<string, JobHandler> {
   return {
     heartbeat: heartbeatHandler(ctx, client),
+    provision: provisionHandler(ctx, client),
     capabilities: capabilitiesHandler(ctx, client),
     voucher_sync: voucherSyncHandler(ctx, client),
     voucher_revoke: voucherRevokeHandler(ctx, client),
