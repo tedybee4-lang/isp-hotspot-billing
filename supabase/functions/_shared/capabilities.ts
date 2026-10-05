@@ -104,49 +104,52 @@ export function buildRouterScript(o: ProvisionOptions): string {
   if (o.dns.length) {
     L.push('# --- DNS resolvers ---')
     L.push(':global NETISP_DNS ' + o.dns.join(' '))
-    for (const server of o.dns) {
-      L.push('do={/ip dns')
-      L.push(`  :local have [find where address="${server}"]`)
-      L.push(`  :if ([:len $have] = 0) do={ add address="${server}" }`)
+    o.dns.forEach((server, i) => {
+      // A `:local` per server, not one reused name: reusing a name across blocks
+      // is legal but makes the generated script harder to read when diagnosing.
+      const v = `netispDns${i}`
+      L.push(`:local ${v} [/ip/dns/find where address="${server}"]`)
+      L.push(`:if ([:len $${v}] = 0) do={`)
+      L.push(`    /ip/dns/add address="${server}"`)
       L.push('}')
-    }
+    })
     L.push('')
   }
 
   if (o.role === 'hotspot' || o.role === 'both') {
     L.push('# --- HotSpot servers ---')
-    for (const iface of o.hotspotInterfaces) {
-      L.push('do={/ip hotspot')
-      L.push(`  :local s [find interface="${iface}"]`)
-      L.push('  :if ([:len $s] = 0) do={')
-      L.push(`    add name="${obj(o.tag)}-${iface}" interface="${iface}" ` +
-        `profile="${obj(o.tag)}" comment="${mark(o.tag)}" disabled=no`)
-      L.push('  }')
+    o.hotspotInterfaces.forEach((iface, i) => {
+      const v = `netispHs${i}`
+      L.push(`:local ${v} [/ip/hotspot/find where interface="${iface}"]`)
+      L.push(`:if ([:len $${v}] = 0) do={`)
+      L.push(`    /ip/hotspot/add name="${obj(o.tag)}-${iface}" ` +
+        `interface="${iface}" profile="${obj(o.tag)}" ` +
+        `comment="${mark(o.tag)}" disabled=no`)
       L.push('}')
-    }
+    })
     L.push('')
   }
 
   if (o.role === 'pppoe' || o.role === 'both') {
     L.push('# --- PPPoE servers ---')
-    for (const iface of o.pppoeInterfaces) {
-      L.push('do={/interface pppoe-server')
-      L.push(`  :local s [find service-name="${iface}"]`)
-      L.push('  :if ([:len $s] = 0) do={')
-      L.push(`    add service-name="${iface}" name="${obj(o.tag)}-${iface}" ` +
-        `one-session-per-host=yes comment="${mark(o.tag)}" disabled=no`)
-      L.push('  }')
+    o.pppoeInterfaces.forEach((iface, i) => {
+      const v = `netispPpp${i}`
+      L.push(`:local ${v} [/interface/pppoe-server/find where service="${iface}"]`)
+      L.push(`:if ([:len $${v}] = 0) do={`)
+      L.push(`    /interface/pppoe-server/add service="${iface}" ` +
+        `name="${obj(o.tag)}-${iface}" one-session-per-host=yes ` +
+        `comment="${mark(o.tag)}" disabled=no`)
       L.push('}')
-    }
+    })
     L.push('')
   }
 
   // A narrowly-scoped account for the panel. We never put a password in the
   // script; it is generated once and stored encrypted.
   L.push('# --- Management group for the panel ---')
-  L.push('do={/user group')
-  L.push('  :local g [find name="netisp-panel"]')
-  L.push('  :if ([:len $g] = 0) do={ add name="netisp-panel" policy=read,write,api,test }')
+  L.push(':local netispGrp [/user/group/find where name="netisp-panel"]')
+  L.push(':if ([:len $netispGrp] = 0) do={')
+  L.push('    /user/group/add name="netisp-panel" policy=read,write,api,test')
   L.push('}')
   L.push('')
 
@@ -154,24 +157,25 @@ export function buildRouterScript(o: ProvisionOptions): string {
   // /ip hotspot tree, so configuring it would be dead weight in its setup.
   if (o.role === 'hotspot' || o.role === 'both') {
     L.push('# --- Session timeouts (only on servers we created) ---')
-    L.push('do={/ip hotspot')
-    L.push(`  :local mine [find comment="${mark(o.tag)}"]`)
-    L.push('  :foreach s in=$mine do={')
-    L.push(`    :set s "idle-timeout=${o.idleTimeoutMin}m"`)
-    L.push(`    :set s "keepalive-timeout=${o.sessionTimeoutMin}m"`)
-    L.push('  }')
+    // A :foreach over OUR OWN tagged rows. That is the one place a bare
+    // `do={ }` is legal, because it is an argument to :foreach rather than a
+    // command with nothing to attach it to.
+    L.push(`:local netispMine [/ip/hotspot/find where comment="${mark(o.tag)}"]`)
+    L.push(':foreach netispSrv in=$netispMine do={')
+    L.push(`    :set netispSrv "idle-timeout=${o.idleTimeoutMin}m"`)
+    L.push(`    :set netispSrv "keepalive-timeout=${o.sessionTimeoutMin}m"`)
     L.push('}')
     L.push('')
   }
 
   if (o.radiusEnabled && o.radiusServer) {
     L.push('# --- RADIUS servers ---')
-    L.push('do={/radius')
-    L.push(`  :local r [find address="${o.radiusServer}"]`)
-    L.push('  :if ([:len $r] = 0) do={')
-    L.push(`    add address="${o.radiusServer}" service=hotspot,ppp ` +
-      `comment="${mark(o.tag)}" secret="(set from the panel)"`)
-    L.push('  }')
+    L.push(`:local netispRad [/radius/find where address="${o.radiusServer}"]`)
+    L.push(':if ([:len $netispRad] = 0) do={')
+    // The secret is NOT embedded here. It is written by the worker during the
+    // RADIUS stage, from the encrypted store, so it never travels in a script.
+    L.push(`    /radius/add address="${o.radiusServer}:1812" ` +
+      `comment="${mark(o.tag)}"`)
     L.push('}')
     L.push('')
   }
@@ -211,6 +215,18 @@ export function buildProvisioningCommand(opts: {
     `  :local u "${opts.claimUrl}";`,
     `  :local t "${opts.token}";`,
     '  :local f "ispflow-bootstrap.rsc";',
+    // The router reports ITSELF, here, before fetching anything.
+    //
+    // Without these the callback URL carries `?token=` and nothing else, so
+    // `buildCompatibility` is called with a null version. Every feature flag it
+    // computes is then false, and a RouterOS 7.24.4 CHR was told it had no REST
+    // and no WireGuard - because nobody ever asked it. Reading the values here,
+    // on the device that owns them, is the fix; inventing a second version
+    // detector on the server would only hide the same gap differently.
+    '  :local v [/system/resource/get version];',
+    '  :local b [/system/resource/get board-name];',
+    '  :local a [/system/resource/get architecture-name];',
+    '  :local n [/system/identity/get name];',
     // output=file is REQUIRED. `output=none` tells RouterOS to discard the
     // fetched bytes instead of writing dst-path, so the file check below could
     // never succeed and every router failed with "could not reach the
@@ -221,7 +237,7 @@ export function buildProvisioningCommand(opts: {
     // /tool/fetch), so without it the single-use token travels over a
     // connection any proxy on the path can read and rewrite - and this fetch
     // returns a script the router then executes as root.
-    '  /tool fetch url=($u . "?token=" . $t) mode=https check-certificate=yes dst-path=$f output=file keep-result=yes;',
+    '  /tool fetch url=($u . "?token=" . $t . "&version=" . $v . "&board=" . $b . "&arch=" . $a . "&id=" . $n) mode=https check-certificate=yes dst-path=$f output=file keep-result=yes;',
     '  :if ([:len [/file find name=$f]] = 0) do={',
     '    :error "ISPFlow: could not reach the provisioning endpoint.";',
     '  }',
@@ -258,69 +274,100 @@ export function buildAccessScript(opts: {
     '# Enables management access. Additive and idempotent; deletes nothing.',
     '',
     '# --- RouterOS API on 8728. Present on every RouterOS including 6.x. ---',
-    'do={/ip service',
-    '  :local a [find name="api"]',
-    '  :if ([:len $a] = 0) do={ add name="api" port=8728 }',
+    ':local ispFlowApi [/ip/service/find name="api"]',
+    ':if ([:len $ispFlowApi] = 0) do={',
+    '    /ip/service/add name="api" port=8728',
     '}',
     '',
     '# --- API over TLS on 8729. ---',
-    'do={/ip service',
-    '  :local s [find name="api-ssl"]',
-    '  :if ([:len $s] = 0) do={ add name="api-ssl" port=8729 certificate=none }',
+    ':local ispFlowApiSsl [/ip/service/find name="api-ssl"]',
+    ':if ([:len $ispFlowApiSsl] = 0) do={',
+    '    /ip/service/add name="api-ssl" port=8729',
     '}',
     '',
   ]
 
-  // REST exists only from 7.1. Sending it to a 6.x router aborts the import.
+  // REST exists only from 7.1; sending it to a 6.x router aborts the import.
+  //
+  // THREE states, kept apart on purpose. "The version says no" and "we were never
+  // told the version" are different facts, and only the first justifies telling an
+  // operator their router lacks a feature. The second used to print "REST is not
+  // available on this RouterOS version" on a RouterOS 7.24.4 CHR, which is simply
+  // untrue.
   if (opts.profile.rest) {
     L.push('# --- HTTPS REST on 8080. RouterOS 7.1 and later only. ---')
-    L.push('do={/ip service')
-    L.push('  :local r [find name="www-ssl"]')
-    L.push('  :if ([:len $r] = 0) do={ add name="www-ssl" port=8080 ' +
-      'certificate=none }')
+    L.push(':local ispFlowRest [/ip/service/find name="www-ssl"]')
+    L.push(':if ([:len $ispFlowRest] = 0) do={')
+    L.push('    /ip/service/add name="www-ssl" port=8080')
     L.push('}')
     L.push('')
+  } else if (opts.profile.versionKnown) {
+    L.push('# This RouterOS version predates HTTPS REST. Management uses the RouterOS')
+    L.push('# API above, which is why the platform never requires REST.')
+    L.push('')
   } else {
-    L.push('# REST is not available on this RouterOS version. Management uses the')
-    L.push('# RouterOS API above, which is why the platform never requires REST.')
+    L.push('# HTTPS REST was not enabled: this router did not report its RouterOS')
+    L.push('# version, and the platform does not send a 7.1+ command to a device it')
+    L.push('# cannot identify. The RouterOS API above is sufficient for management.')
     L.push('')
   }
 
   const v = opts.vpn
   if (opts.profile.wireGuard && v) {
-    L.push('# --- WireGuard tunnel to the network worker (7.1 and later) ---')
-    L.push('do={/interface wireguard')
-    L.push(`  :local w [find name="${v.interfaceName}"]`)
-    L.push('  :if ([:len $w] = 0) do={')
-    L.push(`    add name="${v.interfaceName}" listen-port=${v.listenPort} ` +
-      `comment="NETISP:${tag}"`)
-    L.push('  }')
-    L.push('}')
-    L.push('')
-    L.push('do={/interface wireguard peers')
-    L.push(`  :local p [find where public-key="${v.peerPublicKey}"]`)
-    L.push('  :if ([:len $p] = 0) do={')
-    L.push(`    add interface="${v.interfaceName}" public-key="${v.peerPublicKey}" ` +
-      `allowed-address="${v.allowedAddress}" endpoint-host="${v.endpointHost}" ` +
-      `endpoint-port=${v.endpointPort} persistent-keepalive=25 ` +
-      `comment="NETISP:${tag}"`)
-    L.push('  }')
-    L.push('}')
-    L.push('')
-    L.push('do={/ip address')
-    L.push(`  :local a [find where interface="${v.interfaceName}"]`)
-    L.push('  :if ([:len $a] = 0) do={')
-    L.push(`    add address=${v.tunnelAddress} interface="${v.interfaceName}" ` +
-      `comment="NETISP:${tag}"`)
-    L.push('  }')
-    L.push('}')
-    L.push('')
-  } else if (!opts.profile.wireGuard) {
+  L.push(`:local ispFlowWg [/interface/wireguard/find name="${v.interfaceName}"]`)
+  L.push(':if ([:len $ispFlowWg] = 0) do={')
+  L.push(`    /interface/wireguard/add name="${v.interfaceName}" ` +
+    `listen-port=${v.listenPort} comment="NETISP:${tag}"`)
+  L.push('}')
+  L.push('')
+  L.push(`:local ispFlowPeer [/interface/wireguard/peers/find ` +
+    `where public-key="${v.peerPublicKey}"]`)
+  L.push(':if ([:len $ispFlowPeer] = 0) do={')
+  L.push(`    /interface/wireguard/peers/add interface="${v.interfaceName}" ` +
+    `public-key="${v.peerPublicKey}" allowed-address="${v.allowedAddress}" ` +
+    `endpoint-host="${v.endpointHost}" endpoint-port=${v.endpointPort} ` +
+    `persistent-keepalive=25 comment="NETISP:${tag}"`)
+  L.push('}')
+  L.push('')
+  L.push(`:local ispFlowWgAddr [/ip/address/find ` +
+    `where interface="${v.interfaceName}"]`)
+  L.push(':if ([:len $ispFlowWgAddr] = 0) do={')
+  L.push(`    /ip/address/add address=${v.tunnelAddress} ` +
+    `interface="${v.interfaceName}" comment="NETISP:${tag}"`)
+  L.push('}')
+  L.push('')
+  } else if (!opts.profile.wireGuard && opts.profile.versionKnown) {
     L.push('# This RouterOS version has no WireGuard support. The router is managed')
     L.push('# over the API above, so it needs a reachable management address. Behind')
     L.push('# CGNAT that is not possible, and the panel says exactly that.')
     L.push('')
+  } else if (!opts.profile.wireGuard) {
+    // Unknown, not unsupported. Never announce a missing feature on a router
+    // whose version was never reported.
+    L.push('# No WireGuard tunnel was configured: this router did not report its')
+    L.push('# RouterOS version. The platform manages it over the API above.')
+    L.push('')
   }
+
+  // Variables used here are DEFINED here, not assumed to exist.
+  //
+  // This script previously printed $identity, $version and $board-name, none of
+  // which had ever been assigned anywhere in it. RouterOS does not provide them,
+  // so the confirmation line rendered as "registered as  RouterOS  on " and
+  // proved nothing at all. They are read from the router where they are used.
+  L.push('# --- Report what this router is, from the router itself ---')
+  L.push(':local ispFlowIdentity [/system/identity/get name]')
+  L.push(':local ispFlowVersion [/system/resource/get version]')
+  L.push(':local ispFlowBoard [/system/resource/get board-name]')
+  // Assembled from parts so the emitted script is ONE logical line: a RouterOS
+  // :put that wraps mid-expression is easy to mis-paste, and this is text an
+  // operator runs blind.
+  const SP = ' '
+  L.push([
+    ':put ("ISPFlow: this router is " . $ispFlowIdentity . ',
+    `", RouterOS " . $ispFlowVersion . ${SP}`,
+    '" on " . $ispFlowBoard . ".")',
+  ].join(''))
 
   L.push(`:put "NETISP:${tag}: management access configured."`)
   return L.join('\n')

@@ -56,8 +56,12 @@ describe('buildRouterScript', () => {
   })
 
   it('checks before it creates, so it is idempotent', () => {
-    // Every guarded block is preceded by a `[find ...]` and an `:if`.
-    expect(body).toMatch(/\[find/)
+    // Every guarded block is preceded by a fetch and an `:if`.
+    // The fetch path changed from a bare `[find ...]` (only valid inside a
+    // menu context, which the illegal `do={` blocks provided) to a full
+    // `[/menu/find ...]`, because there is no menu context at the top level of
+    // an imported script.
+    expect(body).toMatch(/\[\/[a-z-]+\/find/)
     expect(body).toMatch(/:if \(/)
   })
 
@@ -67,12 +71,16 @@ describe('buildRouterScript', () => {
 
   it('never embeds a password', () => {
     expect(body).not.toMatch(/password=/i)
-    expect(script).toMatch(/set from the panel/i)
+    // The RADIUS secret is no longer written into the script at all, not even
+    // as the literal placeholder "(set from the panel)". It is applied by the
+    // worker from encrypted storage during the RADIUS stage, so the value never
+    // travels in a script an operator pastes or a router keeps.
+    expect(script).not.toMatch(/secret=/i)
   })
 
   it('creates only the roles the ISP asked for', () => {
     const hotspotOnly = commands(buildRouterScript({ ...base, role: 'hotspot' }))
-    expect(hotspotOnly).toMatch(/\/ip hotspot/)
+    expect(hotspotOnly).toMatch(/\/ip\/hotspot\//)
     expect(hotspotOnly).not.toMatch(/pppoe-server/)
 
     const pppoeOnly = commands(buildRouterScript({ ...base, role: 'pppoe' }))
@@ -150,7 +158,7 @@ describe('buildAccessScript version gating', () => {
 
   it('explains to the operator why REST is absent', () => {
     const s = buildAccessScript({ tag: 't1', profile: ros6, vpn: null })
-    expect(s).toMatch(/not available on this RouterOS version/)
+    expect(s).toMatch(/predates HTTPS REST/)
     expect(s).toMatch(/never requires REST/)
   })
 
@@ -161,7 +169,7 @@ describe('buildAccessScript version gating', () => {
 
   it('adds a WireGuard tunnel only when both the device and the peer exist', () => {
     const withVpn = buildAccessScript({ tag: 't1', profile: ros7, vpn })
-    expect(withVpn).toMatch(/interface wireguard/)
+    expect(withVpn).toMatch(/\/interface\/wireguard/)
     expect(withVpn).toMatch(/persistent-keepalive=25/)
     expect(withVpn).toMatch(/10\.77\.0\.2\/32/)
 
@@ -178,8 +186,10 @@ describe('buildAccessScript version gating', () => {
 
   it('never removes a service it did not create', () => {
     const s = buildAccessScript({ tag: 't1', profile: ros7, vpn })
-    expect(s).not.toMatch(/\/ip service remove/)
-    expect(s).toMatch(/\[find name="api"\]/)
+    expect(s).not.toMatch(/\/ip\/service\/remove/)
+    // The lookup that makes the add idempotent. A full path is required because
+    // the script's top level has no menu context.
+    expect(s).toMatch(/\[\/ip\/service\/find name="api"\]/)
   })
 
   it('never resets the configuration', () => {

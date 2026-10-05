@@ -119,6 +119,20 @@ export interface CompatibilityProfile {
   managementNote: string
   /** Features this device cannot have, for the UI to hide. */
   unsupported: string[]
+  /**
+   * Whether the router actually told us its RouterOS version.
+   *
+   * THIS IS THE FIELD THAT PREVENTS A FALSE CLAIM. Every feature flag below is
+   * derived from the version string, so an UNREPORTED version produces rest=false
+   * and wireGuard=false - which, read literally, says "this device has neither".
+   * For a RouterOS 7.24.4 CHR whose version simply never arrived, that is a lie
+   * the panel repeats and the generated script prints.
+   *
+   * With this flag, a caller can say "unknown" rather than "unsupported", and
+   * must: refusing to send a 6.x-only command is right, but announcing that a
+   * modern router lacks a feature it has is not.
+   */
+  versionKnown: boolean
   /** Suggested heartbeat interval for this class. */
   suggestedHeartbeatSecs: number
 }
@@ -172,6 +186,9 @@ export function buildCompatibility(
   const ssh = true                    // exists everywhere; availability is probed
 
   const unsupported: string[] = []
+  // Whether the router TOLD us its version. Derived from the same parse the
+  // feature flags use, so the two can never disagree about what was known.
+  const versionKnown = v !== null
   if (!rest) unsupported.push('rest')
   if (!wireGuard) unsupported.push('wireguard')
   if (!supportsBridgeVlanFiltering(v)) unsupported.push('bridge-vlan-filtering')
@@ -206,6 +223,11 @@ export function buildCompatibility(
     inboundManagementPossible: true,
     managementNote,
     unsupported,
+    // Every feature flag above is derived from the version string. An absent
+    // version yields rest=false and wireGuard=false, which is CORRECT for
+    // refusing to send the command and WRONG for claiming the device lacks the
+    // feature. This flag is what lets a caller tell those two cases apart.
+    versionKnown,
     // Low-memory devices get polled less often so a sweep cannot starve them.
     suggestedHeartbeatSecs: lowResource ? 120 : 60,
   }

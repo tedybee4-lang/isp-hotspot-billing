@@ -104,9 +104,12 @@ export function buildConnectivityScript(opts: {
     '# Additive. Disables nothing and removes nothing.',
     '',
     '# --- RouterOS API on 8728. Present on every RouterOS including 6.x. ---',
-    'do={/ip/service',
-    '  :local a [find name="api"]',
-    '  :if ([:len $a] = 0) do={ add name="api" port=8728 disabled=no }',
+    // A bare `do={/ip/service ... }` is NOT valid RouterOS: `do=` is an argument
+    // to a command, and on its own line the parser stops with
+    // "expected end of command". Every block is a fetch plus a conditional.
+    ':local ispflowApi [/ip/service/find name="api"]',
+    ':if ([:len $ispflowApi] = 0) do={',
+    '    /ip/service/add name="api" port=8728',
     '}',
   ]
 
@@ -115,18 +118,18 @@ export function buildConnectivityScript(opts: {
       '',
       '# --- HTTPS REST on 8080. RouterOS 7.1 and later only. ---',
       '# The platform presents its own certificate; this script does not mint one.',
-      'do={/ip/service',
-      '  :local r [find name="www-ssl"]',
-      '  :if ([:len $r] = 0) do={ add name="www-ssl" port=8080 disabled=no }',
+      ':local ispflowRest [/ip/service/find name="www-ssl"]',
+      ':if ([:len $ispflowRest] = 0) do={',
+      '    /ip/service/add name="www-ssl" port=8080',
       '}',
       '',
       '# --- API over TLS on 8729, only where a certificate already exists. ---',
       '# Generating a certificate here would mean shipping a private key to a',
       '# device we have not yet secured, so this waits for one to exist.',
-      'do={/ip/service',
-      '  :local c [/certificate/find]',
-      '  :local s [find name="api-ssl"]',
-      '  :if ([:len $s] = 0 && [:len $c] > 0) do={ add name="api-ssl" port=8729 disabled=no }',
+      ':local ispflowCerts [/certificate/find]',
+      ':local ispflowSsl [/ip/service/find name="api-ssl"]',
+      ':if ([:len $ispflowSsl] = 0 && [:len $ispflowCerts] > 0) do={',
+      '    /ip/service/add name="api-ssl" port=8729',
       '}',
     )
   } else {
@@ -176,10 +179,10 @@ export function buildProfileScript(opts: {
   for (const pool of opts.pools) {
     L.push(
       `# --- address pool ${pool.name} ---`,
-      'do={/ip/pool',
-      `  :local p [find where name=${q(pool.name)}]`,
-      `  :if ([:len $p] = 0) do={ add name=${q(pool.name)} ranges=${q(pool.ranges)} ` +
-        `comment=${q(tag)} }`,
+      `:local ispflowPool [/ip/pool/find where name=${q(pool.name)}]`,
+      ':if ([:len $ispflowPool] = 0) do={',
+      `    /ip/pool/add name=${q(pool.name)} ranges=${q(pool.ranges)} ` +
+        `comment=${q(tag)}`,
       '}',
       '',
     )
@@ -188,10 +191,10 @@ export function buildProfileScript(opts: {
   for (const p of opts.profiles) {
     L.push(
       `# --- HotSpot profile: ${p.objectName} ---`,
-      'do={/ip/hotspot/user/profile',
-      `  :local e [find where name=${q(p.objectName)}]`,
-      `  :if ([:len $e] = 0) do={ add name=${q(p.objectName)} rate-limit=${q(p.rateLimit)} ` +
-        `shared-users=1 comment=${q(tag)} }`,
+      `:local ispflowProf [/ip/hotspot/user/profile/find where name=${q(p.objectName)}]`,
+      ':if ([:len $ispflowProf] = 0) do={',
+      `    /ip/hotspot/user/profile/add name=${q(p.objectName)} ` +
+        `rate-limit=${q(p.rateLimit)} shared-users=1 comment=${q(tag)}`,
       '}',
       '',
     )
@@ -199,11 +202,11 @@ export function buildProfileScript(opts: {
     if (p.needsPpp && p.localAddress && p.remoteAddress) {
       L.push(
         `# --- PPP profile: ${p.objectName} ---`,
-        'do={/ppp/profile',
-        `  :local e [find where name=${q(p.objectName)}]`,
-        `  :if ([:len $e] = 0) do={ add name=${q(p.objectName)} ` +
+        `:local ispflowPpp [/ppp/profile/find where name=${q(p.objectName)}]`,
+        ':if ([:len $ispflowPpp] = 0) do={',
+        `    /ppp/profile/add name=${q(p.objectName)} ` +
           `local-address=${q(p.localAddress)} remote-address=${q(p.remoteAddress)} ` +
-          `comment=${q(tag)} }`,
+          `comment=${q(tag)}`,
         '}',
         '',
       )
@@ -254,20 +257,17 @@ export function buildHeartbeatScript(opts: {
     `# ISPFlow heartbeat - ${opts.tag}`,
     '',
     '# --- the script that reports in ---',
-    'do={/system/script',
-    `  :local s [find where name=${q(name)}]`,
-    '  :if ([:len $s] = 0) do={',
-    `    add name=${q(name)} comment=${q(tag)} source=${q(body)}`,
-    '  }',
+    `:local ispflowScript [/system/script/find where name=${q(name)}]`,
+    ':if ([:len $ispflowScript] = 0) do={',
+    `    /system/script/add name=${q(name)} comment=${q(tag)} source=${q(body)}`,
     '}',
     '',
     '# --- the scheduler that runs it ---',
-    'do={/system/scheduler',
-    `  :local e [find where name=${q(name)}]`,
-    '  :if ([:len $e] = 0) do={',
-    `    add name=${q(name)} interval=${interval}s on-event=${q(`/system/script/run ${name}`)} ` +
+    `:local ispflowSched [/system/scheduler/find where name=${q(name)}]`,
+    ':if ([:len $ispflowSched] = 0) do={',
+    `    /system/scheduler/add name=${q(name)} interval=${interval}s ` +
+      `on-event=${q(`/system/script/run ${name}`)} ` +
       `comment=${q(tag)} policy=read,write,policy,test`,
-    '  }',
     '}',
     '',
     '# Run once now, so the panel sees a heartbeat without waiting a whole',

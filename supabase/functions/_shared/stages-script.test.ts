@@ -97,7 +97,12 @@ describe('the connectivity stage', () => {
 
   it('adds nothing that is already there', () => {
     const s = buildConnectivityScript({ tag: 't', supportsRest: true })
-    expect(s).toMatch(/:if \(\[:len \$a\] = 0\)/)
+    // The variable is named for what it holds rather than reused as `$a`. What
+    // matters is that a length check guards each add.
+    expect(s).toMatch(/:if \(\[:len \$ispflowApi\] = 0\) do=\{/)
+    expect(s).toMatch(/\[\/ip\/service\/find name="api"\]/)
+    // And there is no bare top-level add, which is what would duplicate a
+    // service on a second run.
     expect(s).not.toMatch(/^\/ip\/service add/m)
   })
 
@@ -138,11 +143,15 @@ describe('the package profile stage', () => {
   })
 
   it('checks before adding, so re-running repairs instead of duplicating', () => {
-    const adds = script.match(/do=\{ add /g) ?? []
+    // Counts real `/menu/add` commands. This previously counted `do={ add `,
+    // which was counting the illegal standalone-block form rather than the
+    // configuration it was meant to describe.
+    const adds = script.match(/^\s+\/[a-z/-]+\/add /gm) ?? []
     // One pool + two HotSpot profiles + one PPP profile.
     expect(adds.length).toBe(4)
-    // Every add sits behind a guard for the object it creates.
-    expect(script.match(/:if \(\[:len \$[ep]\] = 0\)/g)!.length).toBe(adds.length)
+    // Every add sits behind a length check on the object it creates.
+    const guards = script.match(/:if \(\[:len \$[A-Za-z][\w-]*\] = 0\) do=\{/g) ?? []
+    expect(guards.length).toBe(adds.length)
   })
 
   it('never removes anything', () => {
@@ -178,7 +187,7 @@ describe('the heartbeat stage', () => {
     // One heartbeat scheduler per router, however many times this runs. Without
     // the guards a second provisioning run leaves two schedulers fighting over a
     // small device, and the panel sees two heartbeats per interval.
-    const adds = script.match(/^\s+add /gm) ?? []
+    const adds = script.match(/^\s+\/[a-z/-]+\/add /gm) ?? []
     const guards = script.match(/:if \(\[:len/g) ?? []
     expect(adds.length).toBe(2)
     expect(guards.length).toBe(2)
