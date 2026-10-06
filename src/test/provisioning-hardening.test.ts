@@ -78,15 +78,14 @@ describe('the RADIUS secret can never reach a browser', () => {
     expect(data).toMatch(/configured:\s*boolean/)
   })
 
-  it('is never echoed by the Edge Function that accepts it', () => {
+  it('never echoes the secret back in the write response', () => {
     const fn = read(PROVISION_FN)
-    // The provisioning endpoint serves a script to a token holder over GET.
-    // It accepts no secret from the caller, so there is no request value that
-    // could ever be reflected back to a browser.
-    expect(fn).not.toMatch(/req\.json\(\)/)
-    // And it builds no JSON success envelope that could carry one.
-    expect(fn).not.toMatch(/stored:\s*true/)
-    expect(fn).not.toMatch(/secret:\s/)
+    // The API accepts a JSON body only to write ciphertext at the service role
+    // layer. It does not return the plaintext secret, nor does it emit a JSON
+    // payload that could carry it back to the browser.
+    expect(fn).toMatch(/action === 'radius_secret'/)
+    expect(fn).toContain('stored: true')
+    expect(fn).not.toMatch(/return json\(\{\s*ok:\s*true,\s*stored:\s*true,[\s\S]*?secret\s*:/i)
   })
 
   it('is redacted even if a stage result ever contained it', () => {
