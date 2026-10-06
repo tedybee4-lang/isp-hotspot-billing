@@ -27,18 +27,16 @@
 //    * every map is `:local r [:toarray ""]`,
 //    * every survey and every service block is
 //        :do { ... } on-error={ :put "ISPFlow: <step> skipped/failed" },
-//    * every fetch is
-//        /tool fetch mode=https url=(...) method=POST check-certificate=yes
+//    * every POST fetch is
+//        /tool fetch mode=https url=(...) http-method=post check-certificate=yes
 //          http-header-field="Content-Type:application/json" output=none
 //          http-data=$jsonPayload;
-//    * NEVER `http-method=post`, NEVER `[:replace ...]`, NEVER `keep-result=no`.
+//    * RouterOS 7.13+ uses `:serialize`; older versions use JSON-safe
+//      `:replace` escaping. Every CLI menu path is space-delimited.
 //
-//  Why `[:replace ...]` is banned outright: it was the hand-escaping fallback
-//  for firmware without `[:serialize to=json]`, and it is the pattern that
-//  produced malformed JSON for any router whose identity contained a quote.
-//  The canonical script uses native serialization everywhere; firmware too old
-//  to provide it fails inside its own `:do` block and the survey says so. That
-//  is a smaller, visible failure in place of a silent one.
+//  JSON strategy is selected from the reported RouterOS version: native
+//  serialization where supported, the compatible escape path on older
+//  versions, and the conservative escape path when the version is unknown.
 // =============================================================================
 
 import {
@@ -59,7 +57,7 @@ import {
  */
 function heartbeatSource(o: GenerateOptions): string {
   const url = ros(pingUrl(o.reportUrl))
-  return `/tool fetch mode=https url=\\"${url}\\" method=POST check-certificate=yes ` +
+  return `/tool fetch mode=https url=\\"${url}\\" http-method=post check-certificate=yes ` +
     `http-header-field=\\"Content-Type:application/json\\" output=none http-data=\\"{}\\"`
 }
 
@@ -76,6 +74,10 @@ export interface GenerateOptions {
   tag: string
   /** Absolute `/router-provision/report` URL. `/ping` is derived from it. */
   reportUrl: string
+  /** RouterOS version reported by the bootstrap request, when known. */
+  major?: number | null
+  minor?: number | null
+  architecture?: string | null
   /**
    * RADIUS client to install, when the panel has one to give.
    *
@@ -125,13 +127,12 @@ export function buildGenerateScript(o: GenerateOptions): string {
   const discovery: DiscoveryOptions = {
     reportUrl: o.reportUrl,
     token: o.token,
-    // Deliberately null. The canonical one-line command carries no `vm`
-    // parameter, so this build never guesses a version it was not told. The
-    // section records WireGuard as "version not reported" rather than as
-    // unsupported, which is the truth - and the identity survey the router
-    // posts moments later is what actually tells the panel the version.
-    major: null,
-    minor: null,
+    // Unknown versions use the RouterOS 6-compatible JSON escape path and do
+    // not receive version-specific menus. The claim path supplies these values
+    // directly from the router before generating its script.
+    major: o.major ?? null,
+    minor: o.minor ?? null,
+    architecture: o.architecture,
     tag: o.tag,
   }
 

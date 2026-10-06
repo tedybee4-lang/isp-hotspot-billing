@@ -118,7 +118,7 @@ describe('a RouterOS 7.24.4 CHR is configured correctly', () => {
 
   it('is given the HTTPS REST service, and never told it is unavailable', () => {
     const script = buildAccessScript({ tag: 'ab12', profile: CHR_724, vpn: null })
-    expect(script).toMatch(/\/ip\/service\/add name="www-ssl" port=8080/)
+    expect(script).toMatch(/\/ip service add name="www-ssl" port=8080/)
     expect(script).not.toMatch(/REST is not available/)
     expect(script).not.toMatch(/predates HTTPS REST/)
     expect(script).not.toMatch(/no WireGuard support/)
@@ -126,9 +126,9 @@ describe('a RouterOS 7.24.4 CHR is configured correctly', () => {
 
   it('gets the API and API-SSL blocks, in valid form', () => {
     const script = buildAccessScript({ tag: 'ab12', profile: CHR_724, vpn: null })
-    expect(script).toMatch(/:local ispFlowApi \[\/ip\/service\/find name="api"\]/)
-    expect(script).toMatch(/\/ip\/service\/add name="api" port=8728/)
-    expect(script).toMatch(/\/ip\/service\/add name="api-ssl" port=8729/)
+    expect(script).toMatch(/:local ispFlowApi \[\/ip service find name="api"\]/)
+    expect(script).toMatch(/\/ip service add name="api" port=8728/)
+    expect(script).toMatch(/\/ip service add name="api-ssl" port=8729/)
   })
 
   it('defines the variables it prints, instead of assuming them', () => {
@@ -136,9 +136,9 @@ describe('a RouterOS 7.24.4 CHR is configured correctly', () => {
     // the confirmation line rendered as "registered as  RouterOS  on " and
     // proved nothing.
     const script = buildAccessScript({ tag: 'ab12', profile: CHR_724, vpn: null })
-    expect(script).toMatch(/:local ispFlowIdentity \[\/system\/identity\/get name\]/)
-    expect(script).toMatch(/:local ispFlowVersion \[\/system\/resource\/get version\]/)
-    expect(script).toMatch(/:local ispFlowBoard \[\/system\/resource\/get board-name\]/)
+    expect(script).toMatch(/:local ispFlowIdentity \[\/system identity get name\]/)
+    expect(script).toMatch(/:local ispFlowVersion \[\/system resource get version\]/)
+    expect(script).toMatch(/:local ispFlowBoard \[\/system resource get board-name\]/)
     expect(script).not.toMatch(/\$identity/)
     expect(script).not.toMatch(/\$version\b/)
     expect(script).not.toMatch(/\$board-name/)
@@ -183,7 +183,7 @@ describe('an unknown version is reported as unknown, not unsupported', () => {
     const script = buildAccessScript({ tag: 'ab12', profile: UNKNOWN, vpn: null })
     expect(script).not.toMatch(/name="www-ssl"/)
     // The API, which every RouterOS has, is still there.
-    expect(script).toMatch(/\/ip\/service\/add name="api" port=8728/)
+    expect(script).toMatch(/\/ip service add name="api" port=8728/)
   })
 })
 
@@ -196,8 +196,8 @@ describe('RouterOS 6 paths are unchanged and still correct', () => {
 
   it('gets the API and nothing else', () => {
     const script = buildAccessScript({ tag: 'ab12', profile: ROS6, vpn: null })
-    expect(script).toMatch(/\/ip\/service\/add name="api" port=8728/)
-    expect(script).toMatch(/\/ip\/service\/add name="api-ssl" port=8729/)
+    expect(script).toMatch(/\/ip service add name="api" port=8728/)
+    expect(script).toMatch(/\/ip service add name="api-ssl" port=8729/)
     // Neither 7.1+ service: sending them aborts the rest of the import.
     expect(script).not.toMatch(/www-ssl/)
     expect(script).not.toMatch(/wireguard/)
@@ -218,13 +218,13 @@ describe('RouterOS 6 paths are unchanged and still correct', () => {
 
   it('refuses a WireGuard block for a device that cannot run one', () => {
     expect(buildAccessScript({ tag: 'ab12', profile: ROS6, vpn: VPN }))
-      .not.toMatch(/wireguard\/add/)
+      .not.toMatch(/wireguard add/)
   })
 
   it('writes one when the device does support it', () => {
     const script = buildAccessScript({ tag: 'ab12', profile: CHR_724, vpn: VPN })
-    expect(script).toMatch(/\/interface\/wireguard\/add/)
-    expect(script).toMatch(/\/interface\/wireguard\/peers\/add/)
+    expect(script).toMatch(/\/interface wireguard add/)
+    expect(script).toMatch(/\/interface wireguard peers add/)
     // listen-port with a hyphen. listen_port is silently ignored on some
     // firmware, yielding a tunnel that listens on nothing.
     expect(script).toMatch(/listen-port=13231/)
@@ -236,7 +236,7 @@ describe('safety properties survived the syntax fix', () => {
   it('checks before every add, so a second run changes nothing', () => {
     for (const [name, script] of ALL_SCRIPTS) {
       const adds = script.split('\n')
-        .filter((l) => /\/add\s/.test(l) && !l.trim().startsWith('#'))
+        .filter((l) => /\badd\s/.test(l) && !l.trim().startsWith('#'))
       const guards = script.split('\n')
         .filter((l) => /^\s*:if \(\[:len \$[A-Za-z]/.test(l))
       expect(adds.length, name).toBeGreaterThan(0)
@@ -431,12 +431,14 @@ describe('the one-command bootstrap reports the router itself', () => {
     token: 'x'.repeat(48),
   })
 
-  it('sends the version and architecture, but only the URL-safe parts', () => {
-    // The fixed self-report parameters the panel documents. They are URL-safe
-    // by construction - a version and an architecture token - so no free text
-    // can ever reach the request target.
-    expect(cmd).toMatch(/&vm=7/)
-    expect(cmd).toMatch(/&arch=x86_64/)
+  it('detects the current version and architecture instead of targeting a device family', () => {
+    expect(cmd).toContain(':local ispflowVersion [/system resource get version]')
+    expect(cmd).toContain(':local ispflowArch [/system resource get architecture-name]')
+    expect(cmd).toContain(':local ispflowSecondDot')
+    expect(cmd).toContain('&vm=')
+    expect(cmd).toContain('&arch=')
+    expect(cmd).not.toContain('&vm=7')
+    expect(cmd).not.toContain('&arch=x86_64')
 
     // board-name and identity are NOT in the URL: they are free text, they are
     // what caused the 400, and the discovery survey reports both.
@@ -447,10 +449,9 @@ describe('the one-command bootstrap reports the router itself', () => {
   })
 
   it('travels over TLS', () => {
-    // mode=https: the request itself is made over TLS. The documented command
-    // pins the certificate check off (check-certificate=no) by design.
+    // The bootstrap carries a single-use credential, so its certificate is verified.
     expect(cmd).toMatch(/mode=https/)
-    expect(cmd).toMatch(/check-certificate=no/)
+    expect(cmd).toMatch(/check-certificate=yes/)
   })
 
   it('writes the fetched file and imports it', () => {
@@ -475,7 +476,7 @@ describe('the one-command bootstrap reports the router itself', () => {
   it('keeps the documented fetch parameters', () => {
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
     expect(fetchLine).toMatch(/mode=https/)
-    expect(fetchLine).toMatch(/check-certificate=no/)
+    expect(fetchLine).toMatch(/check-certificate=yes/)
     expect(fetchLine).toMatch(/output=file/)
   })
 
@@ -502,12 +503,13 @@ describe('the one-command bootstrap reports the router itself', () => {
 
   it('sends only fixed URL-safe parameters, never free text', () => {
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
-    expect(fetchLine).toMatch(/vm=7/)
-    expect(fetchLine).toMatch(/arch=x86_64/)
-    // The zero-width pick that made every download take the escape path must
-    // never return: no version-scaffolding locals remain in the command.
-    expect(cmd).not.toMatch(/\[:pick\s+\$ispFlowVer\s+\d+\s+\d+\s*\]/)
-    expect(cmd).not.toMatch(/:local ispFlowVer/)
+    expect(fetchLine).toContain('&vm=')
+    expect(fetchLine).toContain('&arch=')
+    expect(fetchLine).toMatch(/\$ispflowVersion/)
+    expect(fetchLine).toMatch(/\$ispflowArch/)
+    expect(fetchLine).not.toMatch(/vm=7/)
+    expect(fetchLine).not.toMatch(/arch=x86_64/)
+    expect(cmd).toContain(':local ispflowSecondDot')
   })
 
   it('removes only the bootstrap file it downloaded', () => {

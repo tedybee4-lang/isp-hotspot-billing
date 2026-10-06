@@ -172,7 +172,7 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
  * The argument order, the parentheses around `url` and the payload variable
  * name are all part of the canonical script format and are asserted by test:
  *
- *   /tool fetch mode=https url=(...) method=POST check-certificate=yes
+ *   /tool fetch mode=https url=(...) http-method=post check-certificate=yes
  *     http-header-field="Content-Type:application/json" output=none
  *     http-data=$jsonPayload;
  *
@@ -181,9 +181,7 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
  * the master block. That is what keeps a token out of thirty string literals
  * and gives the validator one place to check the report endpoint.
  *
- * `method=POST` is the real RouterOS property name. (`http-method=post` appears
- * in some reference scripts and is NOT valid RouterOS - the fetch fails and the
- * survey is silently lost.)
+ * RouterOS names this property `http-method`; `method` is rejected by the CLI.
  *
  * `mode=https` plus `check-certificate=yes`: RouterOS does NOT verify TLS
  * certificates by default (current manual, /tool/fetch), and this body carries
@@ -208,7 +206,7 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
  * @param bodyVar  must be `$jsonPayload`
  */
 function post(urlExpr: string, bodyVar = '$jsonPayload'): string {
-  return `/tool fetch mode=https url=(${urlExpr}) method=POST check-certificate=yes ` +
+  return `/tool fetch mode=https url=(${urlExpr}) http-method=post check-certificate=yes ` +
     `http-header-field="Content-Type:application/json" ` +
     `output=none http-data=${bodyVar};`
 }
@@ -273,20 +271,33 @@ function serializeRows(
 ): string[] {
   const out = [...guard(key)]
   out.push('  :local rows ""')
-  out.push(`  :foreach i in=[${menu}/find] do={`)
+  out.push(`  :foreach i in=[${menu} find] do={`)
   // The canonical map declaration. `[:toarray ""]` is understood by every
   // RouterOS build ISPFlow supports, which is why it appears rather than an
   // array literal: the map is the one construct that has to work on a 6.x box
   // and on a 7.24 CHR alike.
-  out.push('    :local r [:toarray ""]')
+  const mode = jsonMode(_opts)
+  if (mode === 'serialize') out.push('    :local r [:toarray ""]')
+  else out.push('    :local j "{"')
   for (const [index, [jsonKey, prop]] of fields.entries()) {
     const local = fieldLocalName(jsonKey, index)
     out.push(`    :local ${local} ($i->"${prop}")`)
-    // An unset property is an empty array. Skipping it keeps the payload to
-    // values that exist rather than a wall of empty arrays.
-    out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+    if (mode === 'serialize') {
+      // An unset property is an empty array. Skipping it keeps the payload to
+      // values that exist rather than a wall of empty arrays.
+      out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+    } else {
+      const escaped = `json_${local}`
+      out.push(`    :if ([:typeof $${local}] != "array") do={`)
+      out.push(`      :local ${escaped} [:tostr $${local}]`)
+      out.push(...jsonEscapeSteps(escaped, escaped).map((line) => `      ${line}`))
+      out.push('      :if ([:len $j] > 1) do={ :set j ($j . ",") }')
+      out.push(`      :set j ($j . "\\"${jsonKey}\\":\\"" . $${escaped} . "\\"")`)
+      out.push('    }')
+    }
   }
-  out.push('    :local j [:serialize to=json value=$r]')
+  if (mode === 'serialize') out.push('    :local j [:serialize to=json value=$r]')
+  else out.push('    :set j ($j . "}")')
   out.push('    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }')
   out.push('    :set rows ($rows . $j)')
   out.push('  }')
@@ -303,13 +314,26 @@ function serializeScalars(
   _opts: DiscoveryOptions,
 ): string[] {
   const out = [...guard(key)]
-  out.push('  :local r [:toarray ""]')
+  const mode = jsonMode(_opts)
+  if (mode === 'serialize') out.push('  :local r [:toarray ""]')
+  else out.push('  :local jsonPayload "{"')
   for (const [index, [jsonKey, expr]] of reads.entries()) {
     const local = fieldLocalName(jsonKey, index)
     out.push(`  :local ${local} [${expr}]`)
-    out.push(`  :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+    if (mode === 'serialize') {
+      out.push(`  :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+    } else {
+      const escaped = `json_${local}`
+      out.push(`  :if ([:typeof $${local}] != "array") do={`)
+      out.push(`    :local ${escaped} [:tostr $${local}]`)
+      out.push(...jsonEscapeSteps(escaped, escaped).map((line) => `    ${line}`))
+      out.push('    :if ([:len $jsonPayload] > 1) do={ :set jsonPayload ($jsonPayload . ",") }')
+      out.push(`    :set jsonPayload ($jsonPayload . "\\"${jsonKey}\\":\\"" . $${escaped} . "\\"")`)
+      out.push('  }')
+    }
   }
-  out.push('  :local jsonPayload [:serialize to=json value=$r]')
+  if (mode === 'serialize') out.push('  :local jsonPayload [:serialize to=json value=$r]')
+  else out.push('  :set jsonPayload ($jsonPayload . "}")')
   out.push(`  ${post(urlExpr(key))}`)
   out.push(...endGuard(key))
   return out
@@ -319,17 +343,31 @@ function guardedScalars(
   key: Survey,
   reads: Array<[json: string, routeros: string]>,
   probe: string,
+  opts: DiscoveryOptions,
 ): string[] {
+  const mode = jsonMode(opts)
   const out = [...guard(key)]
   out.push(`  :local probe [${probe}]`)
   out.push('  :if ([:typeof $probe] != "array") do={')
-  out.push('    :local r [:toarray ""]')
+  if (mode === 'serialize') out.push('    :local r [:toarray ""]')
+  else out.push('    :local jsonPayload "{"')
   for (const [index, [jsonKey, expr]] of reads.entries()) {
     const local = fieldLocalName(jsonKey, index)
     out.push(`    :local ${local} [${expr}]`)
-    out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+    if (mode === 'serialize') {
+      out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+    } else {
+      const escaped = `json_${local}`
+      out.push(`    :if ([:typeof $${local}] != "array") do={`)
+      out.push(`      :local ${escaped} [:tostr $${local}]`)
+      out.push(...jsonEscapeSteps(escaped, escaped).map((line) => `      ${line}`))
+      out.push('      :if ([:len $jsonPayload] > 1) do={ :set jsonPayload ($jsonPayload . ",") }')
+      out.push(`      :set jsonPayload ($jsonPayload . "\\"${jsonKey}\\":\\"" . $${escaped} . "\\"")`)
+      out.push('    }')
+    }
   }
-  out.push('    :local jsonPayload [:serialize to=json value=$r]')
+  if (mode === 'serialize') out.push('    :local jsonPayload [:serialize to=json value=$r]')
+  else out.push('    :set jsonPayload ($jsonPayload . "}")')
   out.push(`    ${post(urlExpr(key))}`)
   out.push('  };')
   out.push(...endGuard(key))
@@ -424,22 +462,22 @@ export function buildSurveySection(
 
   // --- identity and hardware -------------------------------------------------
   L.push(...scalars('identity', [
-    ['name', '/system identity/get name'],
-    ['version', '/system resource/get version'],
+    ['name', '/system identity get name'],
+    ['version', '/system resource get version'],
   ], o))
 
   L.push(...scalars('resource', [
-    ['board_name', '/system resource/get board-name'],
-    ['platform', '/system resource/get platform'],
-    ['architecture', '/system resource/get architecture-name'],
-    ['cpu', '/system resource/get cpu'],
-    ['cpu_count', '/system resource/get cpu-count'],
-    ['cpu_load', '/system resource/get cpu-load'],
-    ['free_memory', '/system resource/get free-memory'],
-    ['total_memory', '/system resource/get total-memory'],
-    ['free_hdd', '/system resource/get free-hdd-space'],
-    ['total_hdd', '/system resource/get total-hdd-space'],
-    ['uptime', '/system resource/get uptime'],
+    ['board_name', '/system resource get board-name'],
+    ['platform', '/system resource get platform'],
+    ['architecture', '/system resource get architecture-name'],
+    ['cpu', '/system resource get cpu'],
+    ['cpu_count', '/system resource get cpu-count'],
+    ['cpu_load', '/system resource get cpu-load'],
+    ['free_memory', '/system resource get free-memory'],
+    ['total_memory', '/system resource get total-memory'],
+    ['free_hdd', '/system resource get free-hdd-space'],
+    ['total_hdd', '/system resource get total-hdd-space'],
+    ['uptime', '/system resource get uptime'],
   ], o))
 
   const arch = (o.architecture ?? '').trim().toLowerCase()
@@ -452,10 +490,10 @@ export function buildSurveySection(
     L.push(...skipped('board', 'CHR/x86_64 does not expose a RouterBOARD menu', o))
   } else {
     L.push(...guardedScalars('board', [
-      ['serial_number', '/system routerboard/get serial-number'],
-      ['model', '/system routerboard/get model'],
-      ['firmware_type', '/system routerboard/get firmware-type'],
-    ], '/system routerboard/find'))
+      ['serial_number', '/system routerboard get serial-number'],
+      ['model', '/system routerboard get model'],
+      ['firmware_type', '/system routerboard get firmware-type'],
+    ], '/system routerboard find', o))
   }
 
   L.push(...rows('/system package', [
@@ -682,16 +720,25 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
  * because the panel should not have to know which kind of block produced a row.
  */
 function skipped(key: Survey, reason: string, _o: DiscoveryOptions): string[] {
-  return [
+  const prefix = [
     '',
     '# --- ' + key + ' (skipped: not applicable to this firmware) ---',
     ':do {',
     `  :put "ISPFlow: ${key} skipped - ${reason}";`,
-    '  :local r [:toarray ""]',
-    `  :set ($r->"unsupported") "${ros(reason)}"`,
-    '  :local jsonPayload [:serialize to=json value=$r]',
-    `  ${post(urlExpr(key))}`,
-    ...endGuard(key),
   ]
+  if (jsonMode(_o) === 'serialize') {
+    prefix.push(
+      '  :local r [:toarray ""]',
+      `  :set ($r->"unsupported") "${ros(reason)}"`,
+      '  :local jsonPayload [:serialize to=json value=$r]',
+    )
+  } else {
+    prefix.push(
+      `  :local jsonValue "${ros(reason)}"`,
+      ...jsonEscapeSteps('jsonValue', 'jsonValue').map((line) => `  ${line}`),
+      '  :local jsonPayload ("{\\"unsupported\\":\\"" . $jsonValue . "\\"}")',
+    )
+  }
+  prefix.push(`  ${post(urlExpr(key))}`, ...endGuard(key))
+  return prefix
 }
-

@@ -19,6 +19,8 @@ const OPTS: DiscoveryOptions = {
   reportUrl: 'https://demo.supabase.co/functions/v1/router-provision/report',
   token: 'a'.repeat(48),
   major: 7,
+  minor: 24,
+  architecture: 'arm64',
   tag: 'ab12cd34',
 }
 
@@ -58,8 +60,8 @@ describe('the discovery script is RouterOS a router can actually run', () => {
     }
     // The PPP secret menu is read for names and profiles only.
     const pppSecretBlock = script.slice(
-      script.indexOf('/ppp secret/find'),
-      script.indexOf('/ppp secret/find') + 2000,
+      script.indexOf('/ppp secret find'),
+      script.indexOf('/ppp secret find') + 2000,
     )
     expect(pppSecretBlock).not.toMatch(/password/)
   })
@@ -99,7 +101,7 @@ describe('the discovery script is RouterOS a router can actually run', () => {
   })
 
   it('guards RouterBOARD-only board reads so CHR does not get an unconditional routerboard probe', () => {
-    expect(script).toContain(':local probe [/system routerboard/find]')
+    expect(script).toContain(':local probe [/system routerboard find]')
     expect(script).toContain('ISPFlow: board skipped/failed')
     expect(script).not.toContain(':local v [/system routerboard/get serial-number]')
   })
@@ -112,23 +114,23 @@ describe('discovery covers what decides whether provisioning is safe', () => {
     // The question is not "what is this box" but "what is ALREADY on it", so
     // the production subsystems are the ones that must not be missing.
     for (const menu of [
-      '/interface/find', '/interface bridge/find', '/interface vlan/find',
-      '/ip address/find', '/ip dhcp-server/find', '/ip pool/find',
-      '/ip hotspot/find', '/ip hotspot user/find', '/ppp profile/find',
-      '/ip firewall filter/find', '/ip firewall nat/find', '/ip route/find',
-      '/ip dns/find', '/ip service/find', '/certificate/find',
-      '/system scheduler/find', '/system script/find', '/system package/find',
+      '/interface find', '/interface bridge find', '/interface vlan find',
+      '/ip address find', '/ip dhcp-server find', '/ip pool find',
+      '/ip hotspot find', '/ip hotspot user find', '/ppp profile find',
+      '/ip firewall filter find', '/ip firewall nat find', '/ip route find',
+      '/ip dns find', '/ip service find', '/certificate find',
+      '/system scheduler find', '/system script find', '/system package find',
     ]) {
       expect(script, `${menu} must be surveyed`).toContain(menu)
     }
   })
 
   it('reports identity, hardware and resources', () => {
-    expect(script).toContain('/system identity/get name')
-    expect(script).toContain('/system resource/get version')
-    expect(script).toContain('/system resource/get board-name')
-    expect(script).toContain('/system resource/get architecture-name')
-    expect(script).toContain('/system resource/get total-memory')
+    expect(script).toContain('/system identity get name')
+    expect(script).toContain('/system resource get version')
+    expect(script).toContain('/system resource get board-name')
+    expect(script).toContain('/system resource get architecture-name')
+    expect(script).toContain('/system resource get total-memory')
   })
 
   it('keeps the operator\'s own port comments, the best label there is', () => {
@@ -140,12 +142,12 @@ describe('discovery covers what decides whether provisioning is safe', () => {
 
 describe('version gating is decided by the router, not assumed', () => {
   it('asks RouterOS 7 boxes about WireGuard', () => {
-    expect(buildDiscoveryScript(OPTS)).toContain('/interface wireguard/find')
+    expect(buildDiscoveryScript(OPTS)).toContain('/interface wireguard find')
   })
 
   it('does not send a RouterOS 7 path to a RouterOS 6 box', () => {
     const six = buildDiscoveryScript({ ...OPTS, major: 6 })
-    expect(six).not.toContain('/interface wireguard/find')
+    expect(six).not.toContain('/interface wireguard find')
     // And says so, rather than letting the panel infer "unsupported".
     expect(six).toContain('skipped')
     expect(six).toContain('RouterOS 6 has no WireGuard support')
@@ -156,8 +158,8 @@ describe('version gating is decided by the router, not assumed', () => {
     const six = buildDiscoveryScript({ ...OPTS, major: 6 })
     // The expensive firewall walk happens on both: an ISP needs to see it
     // whichever firmware they are on.
-    expect(seven).toContain('/ip firewall filter/find')
-    expect(six).toContain('/ip firewall filter/find')
+    expect(seven).toContain('/ip firewall filter find')
+    expect(six).toContain('/ip firewall filter find')
   })
 })
 

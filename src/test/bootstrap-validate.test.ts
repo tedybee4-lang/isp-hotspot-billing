@@ -33,7 +33,8 @@ describe('the validator rejects known-bad constructs', () => {
     ['fetch-keep-result',
       '/tool fetch url="https://a/b" method=POST check-certificate=yes output=user as-value keep-result=no'],
     ['json-js', ':local x ""\n:put (JSON.stringify $x)'],
-    ['fetch-insecure', '/tool fetch url="https://a/b" method=POST http-method=post'],
+    ['fetch-method', '/tool fetch url="https://a/b" method=POST'],
+    ['cli-path', ':local api [/ip/service/add name="api"]'],
     ['unsafe-url-param', '/tool fetch url="https://a?identity=x" method=POST'],
   ])('catches %s', (rule, script) => {
     expect(validateRouterOsScript(script).map((i) => i.rule)).toContain(rule)
@@ -51,7 +52,7 @@ describe('the validator rejects known-bad constructs', () => {
     // build, the absence of :serialize is a failure even though the file is
     // perfectly valid RouterOS - which is exactly how the stale deployment
     // passed every check while serving the escape path.
-    const escaped = '/tool fetch url="https://a/b" method=POST'
+    const escaped = '/tool fetch url="https://a/b" http-method=post'
     const rules = validateRouterOsScript(escaped, { mode: 'serialize' }).map((i) => i.rule)
     expect(rules).toContain('missing-marker')
     expect(rules).toContain('missing-serialize')
@@ -66,7 +67,7 @@ describe('the validator rejects known-bad constructs', () => {
   it('does not mistake property access for an undefined variable', () => {
     // `$i->"name"` is a property read on the loop variable, not a variable
     // called `i-`. Treating it as undefined once masked every real finding.
-    const script = '{ :local o ""\n :foreach i in=[/ip pool/find] do={\n'
+    const script = '{ :local o ""\n :foreach i in=[/ip pool find] do={\n'
       + '  :local p ($i->"name")\n  :set o ($o . $p)\n }\n}'
     expect(validateRouterOsScript(script).some((i) => i.rule === 'undefined-variable')).toBe(false)
   })
@@ -214,7 +215,7 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
     // The WireGuard SURVEY lives in the discovery tail, not the access script.
     // RouterOS spells this menu with a SPACE: `/interface wireguard`, not
     // `/interface/wireguard`.
-    expect(script).toContain('/interface wireguard/find')
+    expect(script).toContain('/interface wireguard find')
   })
 
   it('F/G. WireGuard and REST are capability-driven, not hardcoded', () => {
@@ -222,7 +223,7 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
     // Same generator, different device, different answer. A hardcoded string
     // could not produce both.
     expect(ros6).toMatch(/RouterOS 6 has no WireGuard support/)
-    expect(ros6).not.toContain('/interface wireguard/find')
+    expect(ros6).not.toContain('/interface wireguard find')
     expect(ros6).not.toContain('www-ssl')
   })
 
@@ -234,7 +235,7 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
     expect(urlLine).not.toMatch(/board=/)
     expect(urlLine).not.toMatch(/&id=/)
     expect(urlLine).toMatch(/mode=https/)
-    expect(urlLine).toMatch(/check-certificate=no/)
+    expect(urlLine).toMatch(/check-certificate=yes/)
     expect(urlLine).toMatch(/output=file/)
     expect(urlLine).toMatch(/dst-path=ispflow-bootstrap\.rsc/)
     expect(urlLine).not.toMatch(/keep-result/)
@@ -254,16 +255,16 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
   it('J/K. PPPoE and HotSpot are read from their own subsystems', () => {
     const pppoe = script.slice(
       script.indexOf('# --- pppoe ---'), script.indexOf('# --- pppoe-servers ---'))
-    expect(pppoe).toContain('/ppp secret/find')
-    expect(pppoe).not.toContain('/ip hotspot user/find')
+    expect(pppoe).toContain('/ppp secret find')
+    expect(pppoe).not.toContain('/ip hotspot user find')
     const hotspot = script.slice(script.indexOf('# --- hotspot ---'),
       script.indexOf('# --- hotspot ---') + 3000)
-    expect(hotspot).toContain('/ip hotspot user/find')
+    expect(hotspot).toContain('/ip hotspot user find')
   })
 
   it('L. optional menus cannot abort the bootstrap', () => {
     for (const menu of ['/certificate', '/interface wireless', '/caps-man manager']) {
-      expect(script).toContain(`${menu}/find`)
+      expect(script).toContain(`${menu} find`)
     }
     // Each survey is individually guarded, so one absent menu cannot stop the
     // rest. A syntax error would still stop it, which is why rule 1 exists.
@@ -288,7 +289,7 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
       && !/\/(find|print|get)\b/.test(l)
       && !l.includes('/tool fetch')
       && !l.includes('/file remove'))
-    for (const w of writes) expect(w).toMatch(/\/ip\/service\/add/)
+    for (const w of writes)     expect(w).toMatch(/\/ip service add/)
     for (const line of script.split('\n')) {
       expect(line).not.toMatch(/reset-configuration|\/system\s+reboot/)
     }
@@ -307,7 +308,7 @@ describe.each(Object.entries(DEVICES))('%s', (_key, device) => {
   })
 
   it('reads WireGuard only where the version allows the menu', () => {
-    const readsMenu = script.includes('/interface wireguard/find')
+    const readsMenu = script.includes('/interface wireguard find')
     // `unknown` is not `unsupported`: it simply does not read the menu.
     expect(readsMenu).toBe((device.major ?? 0) >= 7)
   })
@@ -365,11 +366,11 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
 
   it('enables the services idempotently, never duplicating them', () => {
     for (const [name, port] of [['api', '8728'], ['api-ssl', '8729'], ['www-ssl', '8080']]) {
-      expect(script).toContain(`[/ip/service/find name="${name}"]`)
-      expect(script).toMatch(new RegExp(`/ip/service/add name="${name}" port=${port}`))
+        expect(script).toContain(`[/ip service find name="${name}"]`)
+        expect(script).toMatch(new RegExp(`/ip service add name="${name}" port=${port}`))
     }
     // Guarded creation: each add sits inside a length check.
-    expect((script.match(/\/ip\/service\/add/g) ?? []).length).toBe(3)
+    expect((script.match(/\/ip service add/g) ?? []).length).toBe(3)
   })
 
   it('reads PPPoE customers from PPP, not from HotSpot', () => {
@@ -379,8 +380,8 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
       script.indexOf('# --- pppoe ---'),
       script.indexOf('# --- pppoe-servers ---'),
     )
-    expect(pppoeBlock).toContain('/ppp secret/find')
-    expect(pppoeBlock).not.toContain('/ip hotspot user/find')
+    expect(pppoeBlock).toContain('/ppp secret find')
+    expect(pppoeBlock).not.toContain('/ip hotspot user find')
   })
 
   it('reads RADIUS from the RADIUS menu, and never the shared secret', () => {
@@ -388,7 +389,7 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
       script.indexOf('# --- radius ---'),
       script.indexOf('# --- radius-aaa ---'),
     )
-    expect(radiusBlock).toContain('/radius/find')
+    expect(radiusBlock).toContain('/radius find')
     // A secret must never travel out over a survey POST.
     for (const line of script.split('\n')) {
       if (line.includes('http-data')) expect(line).not.toMatch(/secret/i)
@@ -399,14 +400,12 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
     // A comment containing a quote previously produced invalid JSON and the
     // server silently discarded the entire survey.
     expect(script).toContain(':local j [:serialize to=json value=$r]')
-    // ONE strategy everywhere. The hand-escaped [:replace path is banned
-    // outright by the canonical format - it produced malformed JSON for any
-    // identity containing a quote - so firmware too old to provide :serialize
-    // fails inside its own :do block and says so, rather than half-serializing.
+    // The generated RouterOS 7.24 script uses native serialization. Older
+    // RouterOS targets are checked separately for the compatible escape path.
     expect(script).not.toContain('[:replace')
     const ros6 = bootstrap('6.49.10', 'x86_64')
-    expect(ros6).toContain(':serialize to=json')
-    expect(ros6).not.toContain('[:replace')
+    expect(ros6).not.toContain(':serialize to=json')
+    expect(ros6).toContain('[:replace')
     const steps = jsonEscapeSteps('p', 'j')
     expect(steps[0]).toContain('$p')
     expect(steps[1]).not.toContain('$p')
@@ -422,7 +421,7 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
       && !l.includes('/tool fetch')
       && !l.includes('/file remove'))
     for (const w of writes) {
-      expect(w).toMatch(/\/ip\/service\/add/)
+      expect(w).toMatch(/\/ip service add/)
     }
     // Nothing destructive anywhere: no remove, unset, reset or reboot.
     for (const line of script.split('\n')) {
@@ -436,7 +435,7 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
     expect(fetches.length).toBeGreaterThan(20)
     for (const f of fetches) {
       expect(f).toMatch(/check-certificate=yes/)
-      expect(f).toMatch(/method=POST/)
+      expect(f).toMatch(/http-method=post/)
       expect(f).not.toMatch(/keep-result/)
       expect(f).not.toMatch(/mode=http\b/)
     }
@@ -481,13 +480,13 @@ describe.each([
   })
 
   it('gates version-dependent menus on the real major version', () => {
-    expect(script.includes('/interface wireguard/find')).toBe(major >= 7)
+    expect(script.includes('/interface wireguard find')).toBe(major >= 7)
   })
 
   it('never emits a RouterOS 7 path on RouterOS 6', () => {
     if (major >= 7) return
     // RouterOS spells this menu with a space: `/interface wireguard`.
-    for (const path of ['/interface wireguard', '/ip/service/find name="www-ssl"']) {
+    for (const path of ['/interface wireguard', '/ip service find name="www-ssl"']) {
       expect(script).not.toContain(path)
     }
   })
@@ -520,7 +519,7 @@ describe('a router without optional packages', () => {
     // `/certificate`, `/interface wireless` and `/caps-man manager` are all
     // absent on a bare CHR with no wireless package.
     for (const menu of ['/certificate', '/interface wireless', '/caps-man manager']) {
-      expect(script).toContain(`${menu}/find`)
+      expect(script).toContain(`${menu} find`)
     }
     expect((script.match(/on-error=\{/g) ?? []).length).toBeGreaterThan(20)
   })

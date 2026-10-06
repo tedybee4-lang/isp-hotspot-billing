@@ -108,9 +108,9 @@ export function buildRouterScript(o: ProvisionOptions): string {
       // A `:local` per server, not one reused name: reusing a name across blocks
       // is legal but makes the generated script harder to read when diagnosing.
       const v = `netispDns${i}`
-      L.push(`:local ${v} [/ip/dns/find where address="${server}"]`)
+      L.push(`:local ${v} [/ip dns find where address="${server}"]`)
       L.push(`:if ([:len $${v}] = 0) do={`)
-      L.push(`    /ip/dns/add address="${server}"`)
+      L.push(`    /ip dns add address="${server}"`)
       L.push('}')
     })
     L.push('')
@@ -120,9 +120,9 @@ export function buildRouterScript(o: ProvisionOptions): string {
     L.push('# --- HotSpot servers ---')
     o.hotspotInterfaces.forEach((iface, i) => {
       const v = `netispHs${i}`
-      L.push(`:local ${v} [/ip/hotspot/find where interface="${iface}"]`)
+      L.push(`:local ${v} [/ip hotspot find where interface="${iface}"]`)
       L.push(`:if ([:len $${v}] = 0) do={`)
-      L.push(`    /ip/hotspot/add name="${obj(o.tag)}-${iface}" ` +
+      L.push(`    /ip hotspot add name="${obj(o.tag)}-${iface}" ` +
         `interface="${iface}" profile="${obj(o.tag)}" ` +
         `comment="${mark(o.tag)}" disabled=no`)
       L.push('}')
@@ -134,9 +134,9 @@ export function buildRouterScript(o: ProvisionOptions): string {
     L.push('# --- PPPoE servers ---')
     o.pppoeInterfaces.forEach((iface, i) => {
       const v = `netispPpp${i}`
-      L.push(`:local ${v} [/interface/pppoe-server/find where service="${iface}"]`)
+      L.push(`:local ${v} [/interface pppoe-server server find where service="${iface}"]`)
       L.push(`:if ([:len $${v}] = 0) do={`)
-      L.push(`    /interface/pppoe-server/add service="${iface}" ` +
+      L.push(`    /interface pppoe-server server add service="${iface}" ` +
         `name="${obj(o.tag)}-${iface}" one-session-per-host=yes ` +
         `comment="${mark(o.tag)}" disabled=no`)
       L.push('}')
@@ -147,9 +147,9 @@ export function buildRouterScript(o: ProvisionOptions): string {
   // A narrowly-scoped account for the panel. We never put a password in the
   // script; it is generated once and stored encrypted.
   L.push('# --- Management group for the panel ---')
-  L.push(':local netispGrp [/user/group/find where name="netisp-panel"]')
+  L.push(':local netispGrp [/user group find where name="netisp-panel"]')
   L.push(':if ([:len $netispGrp] = 0) do={')
-  L.push('    /user/group/add name="netisp-panel" policy=read,write,api,test')
+  L.push('    /user group add name="netisp-panel" policy=read,write,api,test')
   L.push('}')
   L.push('')
 
@@ -160,7 +160,7 @@ export function buildRouterScript(o: ProvisionOptions): string {
     // A :foreach over OUR OWN tagged rows. That is the one place a bare
     // `do={ }` is legal, because it is an argument to :foreach rather than a
     // command with nothing to attach it to.
-    L.push(`:local netispMine [/ip/hotspot/find where comment="${mark(o.tag)}"]`)
+    L.push(`:local netispMine [/ip hotspot find where comment="${mark(o.tag)}"]`)
     L.push(':foreach netispSrv in=$netispMine do={')
     L.push(`    :set netispSrv "idle-timeout=${o.idleTimeoutMin}m"`)
     L.push(`    :set netispSrv "keepalive-timeout=${o.sessionTimeoutMin}m"`)
@@ -170,11 +170,11 @@ export function buildRouterScript(o: ProvisionOptions): string {
 
   if (o.radiusEnabled && o.radiusServer) {
     L.push('# --- RADIUS servers ---')
-    L.push(`:local netispRad [/radius/find where address="${o.radiusServer}"]`)
+    L.push(`:local netispRad [/radius find where address="${o.radiusServer}"]`)
     L.push(':if ([:len $netispRad] = 0) do={')
     // The secret is NOT embedded here. It is written by the worker during the
     // RADIUS stage, from the encrypted store, so it never travels in a script.
-    L.push(`    /radius/add address="${o.radiusServer}:1812" ` +
+    L.push(`    /radius add address="${o.radiusServer}:1812" ` +
       `comment="${mark(o.tag)}"`)
     L.push('}')
     L.push('')
@@ -202,16 +202,24 @@ export function buildRouterScript(o: ProvisionOptions): string {
  * The single command the ISP pastes into the router terminal.
  *
  * Exactly as the panel documents it: one line, three statements - fetch the
- * bootstrap into a file, import it, remove it. The URL carries the token and
- * the fixed self-report parameters (vm, arch) and nothing a router controls,
- * so free text can never corrupt the request target.
+ * bootstrap into a file, import it, remove it. Version and architecture are
+ * read from the router itself, so the endpoint can select the right syntax.
  */
 export function buildProvisioningCommand(opts: {
   claimUrl: string
   token: string
 }): string {
-  const url = `${opts.claimUrl}?token=${opts.token}&vm=7&arch=x86_64`
-  return `/tool fetch url="${url}" mode=https check-certificate=no output=file dst-path=ispflow-bootstrap.rsc; /import file-name=ispflow-bootstrap.rsc; /file remove ispflow-bootstrap.rsc;`
+  const urlPrefix = `${opts.claimUrl}?token=${opts.token}&vm=`
+  return `:local ispflowVersion [/system resource get version]; ` +
+    `:local ispflowVersionEnd [:find $ispflowVersion " "]; ` +
+    `:if ($ispflowVersionEnd != nil) do={ :set ispflowVersion [:pick $ispflowVersion 0 $ispflowVersionEnd] }; ` +
+    `:local ispflowDot [:find $ispflowVersion "."]; ` +
+    `:if ($ispflowDot != nil) do={ :local ispflowSecondDot [:find $ispflowVersion "." $ispflowDot]; ` +
+    `:if ($ispflowSecondDot != nil) do={ :set ispflowVersion [:pick $ispflowVersion 0 $ispflowSecondDot] } }; ` +
+    `:local ispflowArch [/system resource get architecture-name]; ` +
+    `/tool fetch url=("${urlPrefix}" . $ispflowVersion . "&arch=" . $ispflowArch) ` +
+    `mode=https check-certificate=yes output=file dst-path=ispflow-bootstrap.rsc; ` +
+    `/import file-name=ispflow-bootstrap.rsc; /file remove ispflow-bootstrap.rsc;`
 }
 /**
  * Reads the router's self-report out of a claim URL's query parameters.
@@ -230,7 +238,7 @@ export function parseClaimSelfReport(params: URLSearchParams): {
   version: string | null
   architecture: string | null
 } {
-  // Exactly `N.N`. Anything else is discarded and the version stays unknown,
+  // Exactly numeric major.minor. Anything else is discarded and the version stays unknown,
   // which the compatibility engine treats as "do not send version-specific
   // commands" - the safe direction.
   const vm = params.get('vm') ?? ''
@@ -279,15 +287,15 @@ export function buildAccessScript(opts: {
     '# Enables management access. Additive and idempotent; deletes nothing.',
     '',
     '# --- RouterOS API on 8728. Present on every RouterOS including 6.x. ---',
-    ':local ispFlowApi [/ip/service/find name="api"]',
+    ':local ispFlowApi [/ip service find name="api"]',
     ':if ([:len $ispFlowApi] = 0) do={',
-    '    /ip/service/add name="api" port=8728',
+    '    /ip service add name="api" port=8728',
     '}',
     '',
     '# --- API over TLS on 8729. ---',
-    ':local ispFlowApiSsl [/ip/service/find name="api-ssl"]',
+    ':local ispFlowApiSsl [/ip service find name="api-ssl"]',
     ':if ([:len $ispFlowApiSsl] = 0) do={',
-    '    /ip/service/add name="api-ssl" port=8729',
+    '    /ip service add name="api-ssl" port=8729',
     '}',
     '',
   ]
@@ -301,9 +309,9 @@ export function buildAccessScript(opts: {
   // untrue.
   if (opts.profile.rest) {
     L.push('# --- HTTPS REST on 8080. RouterOS 7.1 and later only. ---')
-    L.push(':local ispFlowRest [/ip/service/find name="www-ssl"]')
+    L.push(':local ispFlowRest [/ip service find name="www-ssl"]')
     L.push(':if ([:len $ispFlowRest] = 0) do={')
-    L.push('    /ip/service/add name="www-ssl" port=8080')
+    L.push('    /ip service add name="www-ssl" port=8080')
     L.push('}')
     L.push('')
   } else if (opts.profile.versionKnown) {
@@ -319,25 +327,25 @@ export function buildAccessScript(opts: {
 
   const v = opts.vpn
   if (opts.profile.wireGuard && v) {
-  L.push(`:local ispFlowWg [/interface/wireguard/find name="${v.interfaceName}"]`)
+  L.push(`:local ispFlowWg [/interface wireguard find name="${v.interfaceName}"]`)
   L.push(':if ([:len $ispFlowWg] = 0) do={')
-  L.push(`    /interface/wireguard/add name="${v.interfaceName}" ` +
+  L.push(`    /interface wireguard add name="${v.interfaceName}" ` +
     `listen-port=${v.listenPort} comment="NETISP:${tag}"`)
   L.push('}')
   L.push('')
-  L.push(`:local ispFlowPeer [/interface/wireguard/peers/find ` +
+  L.push(`:local ispFlowPeer [/interface wireguard peers find ` +
     `where public-key="${v.peerPublicKey}"]`)
   L.push(':if ([:len $ispFlowPeer] = 0) do={')
-  L.push(`    /interface/wireguard/peers/add interface="${v.interfaceName}" ` +
+  L.push(`    /interface wireguard peers add interface="${v.interfaceName}" ` +
     `public-key="${v.peerPublicKey}" allowed-address="${v.allowedAddress}" ` +
     `endpoint-host="${v.endpointHost}" endpoint-port=${v.endpointPort} ` +
     `persistent-keepalive=25 comment="NETISP:${tag}"`)
   L.push('}')
   L.push('')
-  L.push(`:local ispFlowWgAddr [/ip/address/find ` +
+  L.push(`:local ispFlowWgAddr [/ip address find ` +
     `where interface="${v.interfaceName}"]`)
   L.push(':if ([:len $ispFlowWgAddr] = 0) do={')
-  L.push(`    /ip/address/add address=${v.tunnelAddress} ` +
+  L.push(`    /ip address add address=${v.tunnelAddress} ` +
     `interface="${v.interfaceName}" comment="NETISP:${tag}"`)
   L.push('}')
   L.push('')
@@ -361,9 +369,9 @@ export function buildAccessScript(opts: {
   // so the confirmation line rendered as "registered as  RouterOS  on " and
   // proved nothing at all. They are read from the router where they are used.
   L.push('# --- Report what this router is, from the router itself ---')
-  L.push(':local ispFlowIdentity [/system/identity/get name]')
-  L.push(':local ispFlowVersion [/system/resource/get version]')
-  L.push(':local ispFlowBoard [/system/resource/get board-name]')
+  L.push(':local ispFlowIdentity [/system identity get name]')
+  L.push(':local ispFlowVersion [/system resource get version]')
+  L.push(':local ispFlowBoard [/system resource get board-name]')
   // Assembled from parts so the emitted script is ONE logical line: a RouterOS
   // :put that wraps mid-expression is easy to mis-paste, and this is text an
   // operator runs blind.

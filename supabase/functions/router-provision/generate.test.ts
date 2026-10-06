@@ -22,6 +22,9 @@ const OPTS: GenerateOptions = {
   token: 'a'.repeat(48),
   tag: 'abcd1234',
   reportUrl: 'https://demo.supabase.co/functions/v1/router-provision/report',
+  major: 7,
+  minor: 24,
+  architecture: 'x86_64',
 }
 
 const script = buildGenerateScript(OPTS)
@@ -116,29 +119,36 @@ describe('the canonical fetch statement', () => {
   it('uses the exact mode, method, and header field names', () => {
     for (const line of fetchLines) {
       expect(line).toContain('mode=https')
-      expect(line).toContain('method=POST')
+      expect(line).toContain('http-method=post')
       expect(line).toContain('check-certificate=yes')
       expect(line).toContain('http-header-field="Content-Type:application/json"')
       expect(line).toContain('output=none')
     }
   })
 
-  it('never uses the invalid http-method or keep-result forms', () => {
+  it('uses the RouterOS http-method property and never keep-result', () => {
     for (const line of fetchLines) {
-      expect(line).not.toContain('http-method')
+      expect(line).not.toContain('method=POST')
       expect(line).not.toContain('keep-result')
     }
   })
 
-  it('never uses hand-crafted JSON or [:replace ...]', () => {
+  it('uses one JSON strategy per RouterOS version', () => {
     for (const line of script.split('\n')) {
       if (line.includes(':serialize')) {
         expect(line).toContain('to=json')
-        expect(line).not.toContain('[:replace')
       }
     }
-    // At least one serialization must occur
     expect(script).toContain(':serialize to=json')
+    expect(script).not.toContain('[:replace')
+    const ros6 = buildGenerateScript({ ...OPTS, major: 6, minor: 49 })
+    expect(ros6).not.toContain(':serialize to=json')
+    expect(ros6).toContain('[:replace')
+    expect(validateRouterOsScript(ros6, { mode: 'escape' })).toEqual([])
+  })
+
+  it('uses RouterOS CLI path syntax rather than API slash paths', () => {
+    expect(script).not.toMatch(/\/(?:ip|interface|system|ppp|radius|user|file)\/(?:[^ \]\r\n]+\/)*(?:add|find|set|print|get|remove|save|run)\b/)
   })
 })
 
@@ -212,11 +222,10 @@ describe('the heartbeat is installed as stored source, double-escaped', () => {
     const line = script.split('\n').find((l) => l.includes('/system script add'))!
     expect(line).toBeTruthy()
     expect(line).toContain('url=')
-    expect(line).toContain('method=POST')
+    expect(line).toContain('http-method=post')
     expect(line).toContain('check-certificate=yes')
     expect(line).toContain('http-data=')
-    expect(line).not.toContain('http-method')
+    expect(line).not.toContain('method=POST')
     expect(line).not.toContain('keep-result')
   })
 })
-

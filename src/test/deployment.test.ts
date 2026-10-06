@@ -1157,10 +1157,14 @@ it('never claims a RouterOS fetch wrote a file it discarded', () => {
     // after it could never pass and provisioning failed on every router while
     // reporting a network error. Regression guard on the real generated script.
     const caps = read('supabase/functions/_shared/capabilities.ts')
-    // Match the command itself, not the explanatory comment above it.
-    const fetchLine = caps.split('\n').find((l) => l.includes('/tool fetch url=')) ?? ''
-    expect(fetchLine).not.toMatch(/output=none/)
-    expect(fetchLine).toMatch(/output=file/)
+    // The source builds this command from concatenated template fragments.
+    const fetchStart = caps.indexOf('`/tool fetch url=')
+    const fetchEnd = caps.indexOf('`/import file-name=', fetchStart)
+    const fetchCommand = fetchStart >= 0 && fetchEnd > fetchStart
+      ? caps.slice(fetchStart, fetchEnd)
+      : ''
+    expect(fetchCommand).not.toMatch(/output=none/)
+    expect(caps).toContain('mode=https check-certificate=yes output=file dst-path=ispflow-bootstrap.rsc;')
 
     // The connectivity probe in the worker legitimately wants output=none: it
     // must not be "fixed" along with the provisioning download.

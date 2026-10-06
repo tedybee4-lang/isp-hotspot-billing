@@ -51,7 +51,7 @@ describe('the backup stage', () => {
   const script = buildBackupScript({ tag: 'ab12cd34' })
 
   it('takes a binary backup, which is the one that can be restored', () => {
-    expect(script).toMatch(/system\/backup\/save/)
+    expect(script).toMatch(/system backup save/)
   })
 
   it('takes a text export with secrets hidden', () => {
@@ -100,10 +100,10 @@ describe('the connectivity stage', () => {
     // The variable is named for what it holds rather than reused as `$a`. What
     // matters is that a length check guards each add.
     expect(s).toMatch(/:if \(\[:len \$ispflowApi\] = 0\) do=\{/)
-    expect(s).toMatch(/\[\/ip\/service\/find name="api"\]/)
+    expect(s).toMatch(/\[\/ip service find name="api"\]/)
     // And there is no bare top-level add, which is what would duplicate a
     // service on a second run.
-    expect(s).not.toMatch(/^\/ip\/service add/m)
+    expect(s).not.toMatch(/^\/ip service add/m)
   })
 
   it('disables nothing', () => {
@@ -134,7 +134,7 @@ describe('the package profile stage', () => {
   })
 
   it('creates a PPP profile only for a package that needs one', () => {
-    expect(script).toMatch(/\/ppp\/profile/)
+    expect(script).toMatch(/\/ppp profile/)
     expect(script).toMatch(/local-address="10\.10\.0\.2-10\.10\.0\.254"/)
   })
 
@@ -146,7 +146,7 @@ describe('the package profile stage', () => {
     // Counts real `/menu/add` commands. This previously counted `do={ add `,
     // which was counting the illegal standalone-block form rather than the
     // configuration it was meant to describe.
-    const adds = script.match(/^\s+\/[a-z/-]+\/add /gm) ?? []
+    const adds = script.match(/^\s+\/(?:[a-z-]+(?: [a-z-]+)*) add /gm) ?? []
     // One pool + two HotSpot profiles + one PPP profile.
     expect(adds.length).toBe(4)
     // Every add sits behind a length check on the object it creates.
@@ -187,7 +187,7 @@ describe('the heartbeat stage', () => {
     // One heartbeat scheduler per router, however many times this runs. Without
     // the guards a second provisioning run leaves two schedulers fighting over a
     // small device, and the panel sees two heartbeats per interval.
-    const adds = script.match(/^\s+\/[a-z/-]+\/add /gm) ?? []
+    const adds = script.match(/^\s+\/(?:[a-z-]+(?: [a-z-]+)*) add /gm) ?? []
     const guards = script.match(/:if \(\[:len/g) ?? []
     expect(adds.length).toBe(2)
     expect(guards.length).toBe(2)
@@ -195,7 +195,7 @@ describe('the heartbeat stage', () => {
 
   it('runs once immediately rather than waiting a whole interval', () => {
     // On a slow rural link the panel should not look dead for 10 minutes.
-    expect(script).toMatch(/\/system\/script\/run/)
+    expect(script).toMatch(/\/system script run/)
   })
 })
 
@@ -212,16 +212,16 @@ describe('the verification stage', () => {
   })
 
   it('checks the backup the run depends on actually exists', () => {
-    expect(script).toMatch(/file\/find where name~"ispflow-backup-ab12"/)
+    expect(script).toMatch(/file find where name~"ispflow-backup-ab12"/)
   })
 
   it('checks the services the ISP selected really exist', () => {
-    expect(script).toMatch(/hotspot\/user\/profile\/find/)
-    expect(script).toMatch(/ppp\/profile\/find/)
+    expect(script).toMatch(/hotspot user profile find/)
+    expect(script).toMatch(/ppp profile find/)
   })
 
   it('checks the heartbeat is installed', () => {
-    expect(script).toMatch(/scheduler\/find/)
+    expect(script).toMatch(/scheduler find/)
   })
 
   it('reports the answer as one machine-readable line', () => {
@@ -233,7 +233,7 @@ describe('the verification stage', () => {
     // Failing a router for lacking PPPoE when PPPoE was never wanted would block
     // onboarding for a reason the operator cannot act on.
     const hs = buildVerifyScript({ tag: 't', expectHotspot: true, expectPppoe: false })
-    expect(hs).toMatch(/hotspot\/user\/profile\/find/)
-    expect(hs).not.toMatch(/ppp\/profile\/find/)
+    expect(hs).toMatch(/hotspot user profile find/)
+    expect(hs).not.toMatch(/ppp profile find/)
   })
 })

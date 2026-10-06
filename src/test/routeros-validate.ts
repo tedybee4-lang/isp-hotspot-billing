@@ -74,6 +74,9 @@ export function validateRouterOsScript(
     if (/^\s*(do=|onerror\s)/.test(l)) {
       add(i, 'standalone-do', '`do=`/`onerror=` with no command to attach it to')
     }
+    if (/\/(?:ip|interface|system|ppp|radius|user|file)\/(?:[^ \]\r\n]+\/)*(?:add|find|set|print|get|remove|save|run)\b/.test(l)) {
+      add(i, 'cli-path', 'RouterOS CLI menus must be space-delimited, not API-style slash paths')
+    }
   })
 
   // --- 2. unbalanced braces and parens, ignoring string contents ----------
@@ -179,8 +182,8 @@ export function validateRouterOsScript(
     if (/keep-result/.test(l) && /output=file/.test(l)) {
       add(i, 'fetch-output', 'keep-result with output=file is rejected by RouterOS')
     }
-    if (/http-method/i.test(l)) {
-      add(i, 'fetch-insecure', 'http-method is not a RouterOS property; use method=POST')
+    if (/method\s*=\s*post/i.test(l) && !/http-method\s*=\s*post/i.test(l)) {
+      add(i, 'fetch-method', 'RouterOS fetch requires http-method=post')
     }
     if (/mode=http\b/.test(l) && !/mode=https/.test(l)) {
       add(i, 'fetch-insecure', 'plaintext HTTP fallback')
@@ -227,8 +230,8 @@ export function validateRouterOsScript(
     if (/JSON\.(stringify|parse)/.test(l)) {
       add(i, 'json-js', 'JSON.stringify/JSON.parse is JavaScript; RouterOS cannot run it')
     }
-    if (/http-method\s*=/i.test(l)) {
-      add(i, 'fetch-insecure', 'http-method is not a RouterOS fetch property; use method=POST')
+    if (/method\s*=\s*post/i.test(l) && !/http-method\s*=\s*post/i.test(l)) {
+      add(i, 'fetch-method', 'RouterOS fetch requires http-method=post')
     }
     if (/keep-result\s*=\s*no/.test(l)) {
       add(i, 'fetch-keep-result',
@@ -291,10 +294,10 @@ export function validateRouterOsScript(
       text: raw[0] ?? '',
     })
   }
-  if (hasFetch && !/method=POST/.test(script)) {
+  if (hasFetch && !/http-method=post/i.test(script)) {
     issues.push({
       line: 1, rule: 'missing-post',
-      message: 'fetch present but no `method=POST`',
+      message: 'fetch present but no `http-method=post`',
       text: raw[0] ?? '',
     })
   }

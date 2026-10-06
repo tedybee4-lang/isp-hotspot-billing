@@ -60,6 +60,6 @@ export function heartbeatSource(o: { reportUrl: string; heartbeatToken?: string 
   // Number UNQUOTED so free_memory arrives as a JSON number for the bigint
   // column; identity/version/uptime are quoted strings.
   const body = String.raw`("{\"identity\":\"" . [/system identity get name] . \"\",\"version\":\"" . [/system resource get version] . \"\",\"uptime\":\"" . [/system resource get uptime] . \"\",\"free_memory\":" . [/system resource get free-memory] . "}")`
-  return `/tool fetch mode=https url="${url}" method=POST check-certificate=yes ` +
+  return `/tool fetch mode=https url="${url}" http-method=post check-certificate=yes ` +
     `http-header-field="Content-Type:application/json" output=none http-data=${body}`
 }

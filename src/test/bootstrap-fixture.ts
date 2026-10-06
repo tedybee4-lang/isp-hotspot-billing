@@ -25,9 +25,9 @@ export function bootstrap(
   const access = buildAccessScript({ tag: TAG, profile, vpn: null })
   const trailer = [
     '',
-    ':local ispFlowClaimName [/system/identity/get name]',
-    ':local ispFlowClaimVer [/system/resource/get version]',
-    ':local ispFlowClaimBoard [/system/resource/get board-name]',
+    ':local ispFlowClaimName [/system identity get name]',
+    ':local ispFlowClaimVer [/system resource get version]',
+    ':local ispFlowClaimBoard [/system resource get board-name]',
     ':put ("ISPFlow: registered as " . $ispFlowClaimName);',
     ':put ("ISPFlow: RouterOS " . $ispFlowClaimVer . " on " . $ispFlowClaimBoard);',
     profile.rest

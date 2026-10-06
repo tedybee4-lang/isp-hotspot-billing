@@ -68,7 +68,7 @@ export function buildBackupScript(opts: { tag: string }): string {
     `:global ispflowBackupBase "ispflow-backup-${opts.tag}"`,
     '',
     '# --- binary backup: the restorable one ---',
-    '/system/backup/save name=($ispflowBackupBase . "-binary.backup")',
+    '/system backup save name=($ispflowBackupBase . "-binary.backup")',
     ':put ("ISPFlow: binary backup written as " . $ispflowBackupBase . "-binary.backup");',
     '',
     '# --- text export: the readable one, secrets omitted ---',
@@ -78,7 +78,7 @@ export function buildBackupScript(opts: { tag: string }): string {
     ':put ("ISPFlow: text export written as " . $ispflowBackupBase . "-export.rsc");',
     '',
     '# --- report what actually landed on disk ---',
-    '/file/print where name~$ispflowBackupBase',
+    '/file print where name~$ispflowBackupBase',
     '',
     ':put "ISPFlow: backup stage complete.";',
   ].join('\n') + '\n'
@@ -107,9 +107,9 @@ export function buildConnectivityScript(opts: {
     // A bare `do={/ip/service ... }` is NOT valid RouterOS: `do=` is an argument
     // to a command, and on its own line the parser stops with
     // "expected end of command". Every block is a fetch plus a conditional.
-    ':local ispflowApi [/ip/service/find name="api"]',
+    ':local ispflowApi [/ip service find name="api"]',
     ':if ([:len $ispflowApi] = 0) do={',
-    '    /ip/service/add name="api" port=8728',
+    '    /ip service add name="api" port=8728',
     '}',
   ]
 
@@ -118,18 +118,18 @@ export function buildConnectivityScript(opts: {
       '',
       '# --- HTTPS REST on 8080. RouterOS 7.1 and later only. ---',
       '# The platform presents its own certificate; this script does not mint one.',
-      ':local ispflowRest [/ip/service/find name="www-ssl"]',
+      ':local ispflowRest [/ip service find name="www-ssl"]',
       ':if ([:len $ispflowRest] = 0) do={',
-      '    /ip/service/add name="www-ssl" port=8080',
+      '    /ip service add name="www-ssl" port=8080',
       '}',
       '',
       '# --- API over TLS on 8729, only where a certificate already exists. ---',
       '# Generating a certificate here would mean shipping a private key to a',
       '# device we have not yet secured, so this waits for one to exist.',
-      ':local ispflowCerts [/certificate/find]',
-      ':local ispflowSsl [/ip/service/find name="api-ssl"]',
+      ':local ispflowCerts [/certificate find]',
+      ':local ispflowSsl [/ip service find name="api-ssl"]',
       ':if ([:len $ispflowSsl] = 0 && [:len $ispflowCerts] > 0) do={',
-      '    /ip/service/add name="api-ssl" port=8729',
+      '    /ip service add name="api-ssl" port=8729',
       '}',
     )
   } else {
@@ -143,7 +143,7 @@ export function buildConnectivityScript(opts: {
   L.push(
     '',
     '# --- report, so the stage has evidence to report ---',
-    '/ip/service/print where name~"api"',
+    '/ip service print where name~"api"',
     '',
     ':put "ISPFlow: connectivity stage complete.";',
   )
@@ -179,9 +179,9 @@ export function buildProfileScript(opts: {
   for (const pool of opts.pools) {
     L.push(
       `# --- address pool ${pool.name} ---`,
-      `:local ispflowPool [/ip/pool/find where name=${q(pool.name)}]`,
+      `:local ispflowPool [/ip pool find where name=${q(pool.name)}]`,
       ':if ([:len $ispflowPool] = 0) do={',
-      `    /ip/pool/add name=${q(pool.name)} ranges=${q(pool.ranges)} ` +
+      `    /ip pool add name=${q(pool.name)} ranges=${q(pool.ranges)} ` +
         `comment=${q(tag)}`,
       '}',
       '',
@@ -191,9 +191,9 @@ export function buildProfileScript(opts: {
   for (const p of opts.profiles) {
     L.push(
       `# --- HotSpot profile: ${p.objectName} ---`,
-      `:local ispflowProf [/ip/hotspot/user/profile/find where name=${q(p.objectName)}]`,
+      `:local ispflowProf [/ip hotspot user profile find where name=${q(p.objectName)}]`,
       ':if ([:len $ispflowProf] = 0) do={',
-      `    /ip/hotspot/user/profile/add name=${q(p.objectName)} ` +
+      `    /ip hotspot user profile add name=${q(p.objectName)} ` +
         `rate-limit=${q(p.rateLimit)} shared-users=1 comment=${q(tag)}`,
       '}',
       '',
@@ -202,9 +202,9 @@ export function buildProfileScript(opts: {
     if (p.needsPpp && p.localAddress && p.remoteAddress) {
       L.push(
         `# --- PPP profile: ${p.objectName} ---`,
-        `:local ispflowPpp [/ppp/profile/find where name=${q(p.objectName)}]`,
+        `:local ispflowPpp [/ppp profile find where name=${q(p.objectName)}]`,
         ':if ([:len $ispflowPpp] = 0) do={',
-        `    /ppp/profile/add name=${q(p.objectName)} ` +
+        `    /ppp profile add name=${q(p.objectName)} ` +
           `local-address=${q(p.localAddress)} remote-address=${q(p.remoteAddress)} ` +
           `comment=${q(tag)}`,
         '}',
@@ -214,7 +214,7 @@ export function buildProfileScript(opts: {
   }
 
   L.push(
-    '/ip/hotspot/user/profile/print where name!=""',
+    '/ip hotspot user profile print where name!=""',
     ':put "ISPFlow: package profiles synchronised.";',
   )
   return L.join('\n') + '\n'
@@ -245,11 +245,12 @@ export function buildHeartbeatScript(opts: {
   // giant literal every cycle, and so uptime and memory are read at send time.
   const body = [
     ':put "ISPFlow heartbeat"',
-    `:tool fetch url=${q(opts.url)} method=POST check-certificate=yes output=user as-value keep-result=no`,
-    `  http-data=("{\\"routeros\\":\\"" . [/system/resource/get version] .`,
-    `    \\",\\"identity\\":\\"" . [/system identity/get name] .`,
-    `    \\",\\"uptime\\":\\"" . [/system resource/get uptime] .`,
-    `    \\",\\"free_memory\\":\\"" . [/system resource/get free-memory] .`,
+    `/tool fetch url=${q(opts.url)} http-method=post check-certificate=yes ` +
+      `http-header-field=${q('Content-Type:application/json')} output=none`,
+    `  http-data=("{\\"routeros\\":\\"" . [/system resource get version] .`,
+    `    \\",\\"identity\\":\\"" . [/system identity get name] .`,
+    `    \\",\\"uptime\\":\\"" . [/system resource get uptime] .`,
+    `    \\",\\"free_memory\\":\\"" . [/system resource get free-memory] .`,
     `    \\",\\"token\\":\\"${opts.token}\\"}")`,
   ].join(' ')
 
@@ -257,22 +258,22 @@ export function buildHeartbeatScript(opts: {
     `# ISPFlow heartbeat - ${opts.tag}`,
     '',
     '# --- the script that reports in ---',
-    `:local ispflowScript [/system/script/find where name=${q(name)}]`,
+    `:local ispflowScript [/system script find where name=${q(name)}]`,
     ':if ([:len $ispflowScript] = 0) do={',
-    `    /system/script/add name=${q(name)} comment=${q(tag)} source=${q(body)}`,
+    `    /system script add name=${q(name)} comment=${q(tag)} source=${q(body)}`,
     '}',
     '',
     '# --- the scheduler that runs it ---',
-    `:local ispflowSched [/system/scheduler/find where name=${q(name)}]`,
+    `:local ispflowSched [/system scheduler find where name=${q(name)}]`,
     ':if ([:len $ispflowSched] = 0) do={',
-    `    /system/scheduler/add name=${q(name)} interval=${interval}s ` +
-      `on-event=${q(`/system/script/run ${name}`)} ` +
+    `    /system scheduler add name=${q(name)} interval=${interval}s ` +
+      `on-event=${q(`/system script run ${name}`)} ` +
       `comment=${q(tag)} policy=read,write,policy,test`,
     '}',
     '',
     '# Run once now, so the panel sees a heartbeat without waiting a whole',
     '# interval on a slow link.',
-    `/system/script/run ${name}`,
+    `/system script run ${name}`,
     '',
     ':put "ISPFlow: heartbeat installed.";',
   ].join('\n') + '\n'
@@ -298,41 +299,41 @@ export function buildVerifyScript(opts: {
     `# ISPFlow verification - ${opts.tag}`,
     '# READ ONLY. This stage changes nothing; it only looks.',
     '',
-    ':put ("ISPFlow: RouterOS " . [/system resource/get version] .',
-    '        " on " . [/system resource/get board-name] .',
-    '        " (" . [/system resource/get architecture-name] . ")");',
+    ':put ("ISPFlow: RouterOS " . [/system resource get version] .',
+    '        " on " . [/system resource get board-name] .',
+    '        " (" . [/system resource get architecture-name] . ")");',
     '',
     ':global ispflowVerified 1',
     '',
     '# --- the backup this run depends on must actually exist ---',
-    `:global bk [/file/find where name~"ispflow-backup-${opts.tag}"]`,
+    `:global bk [/file find where name~"ispflow-backup-${opts.tag}"]`,
     ':if ([:len $bk] = 0) do={',
     '  :set ispflowVerified 0',
     '  :put "ISPFlow: FAIL - no backup file found for this session."',
     '}',
     '',
     '# --- management must still be reachable ---',
-    ':local api [/ip/service/find where name="api"]',
+    ':local api [/ip service find where name="api"]',
     ':if ([:len $api] = 0) do={',
     '  :set ispflowVerified 0',
     '  :put "ISPFlow: FAIL - the API service is not enabled."',
     '}',
     '',
     '# --- an ISPFlow-owned management path must survive ---',
-    ':local managed [/ip/address/find where comment~"' + OWNER + '"]',
+    ':local managed [/ip address find where comment~"' + OWNER + '"]',
     ':if ([:len $managed] = 0) do={',
     '  :put "ISPFlow: note - no ISPFlow-tagged address; management is on an existing address."',
     '}',
     '',
     '# --- hotspot users must be untouched by provisioning ---',
-    ':local users [/ip/hotspot/user/find]',
+    ':local users [/ip hotspot user find]',
     ':put ("ISPFlow: " . [:len $users] . " HotSpot account(s) present; none were removed.");',
   ]
 
   if (opts.expectHotspot) {
     L.push(
       '',
-      ':if ([:len [/ip/hotspot/user/profile/find]] = 0) do={',
+      ':if ([:len [/ip hotspot user profile find]] = 0) do={',
       '  :set ispflowVerified 0',
       '  :put "ISPFlow: FAIL - HotSpot was selected but no user profile exists."',
       '}',
@@ -341,7 +342,7 @@ export function buildVerifyScript(opts: {
   if (opts.expectPppoe) {
     L.push(
       '',
-      ':if ([:len [/ppp/profile/find]] = 0) do={',
+      ':if ([:len [/ppp profile find]] = 0) do={',
       '  :set ispflowVerified 0',
       '  :put "ISPFlow: FAIL - PPPoE was selected but no PPP profile exists."',
       '}',
@@ -351,7 +352,7 @@ export function buildVerifyScript(opts: {
   L.push(
     '',
     '# --- heartbeat must exist and be enabled ---',
-    ':local hb [/system/scheduler/find where comment~"' + OWNER + '"]',
+    ':local hb [/system scheduler find where comment~"' + OWNER + '"]',
     ':if ([:len $hb] = 0) do={',
     '  :set ispflowVerified 0',
     '  :put "ISPFlow: FAIL - no heartbeat scheduler is installed."',

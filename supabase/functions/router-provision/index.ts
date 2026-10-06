@@ -331,9 +331,9 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
     // values that matter are already collected by the discovery survey below and
     // recorded from there, so nothing is lost by printing what the router can
     // actually resolve.
-    ':local ispFlowClaimName [/system/identity/get name]',
-    ':local ispFlowClaimVer [/system/resource/get version]',
-    ':local ispFlowClaimBoard [/system/resource/get board-name]',
+    ':local ispFlowClaimName [/system identity get name]',
+    ':local ispFlowClaimVer [/system resource get version]',
+    ':local ispFlowClaimBoard [/system resource get board-name]',
     ':put ("ISPFlow: registered as " . $ispFlowClaimName);',
     ':put ("ISPFlow: RouterOS " . $ispFlowClaimVer . " on " . $ispFlowClaimBoard);',
     profile.rest
@@ -432,15 +432,15 @@ async function buildHeartbeatTail(
     '',
     '# --- Router heartbeat: reports in even from behind NAT ---',
     ':do {',
-    `  :local ispflowHbScript [/system/script/find where name="${name}"];`,
+    ` :local ispflowHbScript [/system script find where name="${name}"];`,
     '  :if ([:len $ispflowHbScript] = 0) do={',
-    `    /system/script/add name="${name}" comment="ISPFlow:${tag}" source="${escaped}";`,
+    ` /system script add name="${name}" comment="ISPFlow:${tag}" source="${escaped}";`,
     '  };',
-    `  :local ispflowHbSched [/system/scheduler/find where name="${name}"];`,
+    ` :local ispflowHbSched [/system scheduler find where name="${name}"];`,
     '  :if ([:len $ispflowHbSched] = 0) do={',
-    `    /system/scheduler/add name="${name}" comment="ISPFlow:${tag}" interval=${interval} on-event="/system/script/run ${name}" policy=read,write,policy,test;`,
+    ` /system scheduler add name="${name}" comment="ISPFlow:${tag}" interval=${interval} on-event="/system script run ${name}" policy=read,write,policy,test;`,
     '  };',
-    `  /system/script/run ${name};`,
+    `  /system script run ${name};`,
     '  :put "ISPFlow: heartbeat installed.";',
     '} on-error={',
     '  :put "ISPFlow: heartbeat installation skipped/failed";',

@@ -57,11 +57,9 @@ describe('buildRouterScript', () => {
 
   it('checks before it creates, so it is idempotent', () => {
     // Every guarded block is preceded by a fetch and an `:if`.
-    // The fetch path changed from a bare `[find ...]` (only valid inside a
-    // menu context, which the illegal `do={` blocks provided) to a full
-    // `[/menu/find ...]`, because there is no menu context at the top level of
-    // an imported script.
-    expect(body).toMatch(/\[\/[a-z-]+\/find/)
+    // RouterOS CLI paths use menu words separated by spaces, not API-style
+    // slash-delimited paths such as `/ip/hotspot/add`.
+    expect(body).toMatch(/\[\/[a-z-]+ [a-z-]+ find/)
     expect(body).toMatch(/:if \(/)
   })
 
@@ -80,7 +78,7 @@ describe('buildRouterScript', () => {
 
   it('creates only the roles the ISP asked for', () => {
     const hotspotOnly = commands(buildRouterScript({ ...base, role: 'hotspot' }))
-    expect(hotspotOnly).toMatch(/\/ip\/hotspot\//)
+    expect(hotspotOnly).toMatch(/\/ip hotspot /)
     expect(hotspotOnly).not.toMatch(/pppoe-server/)
 
     const pppoeOnly = commands(buildRouterScript({ ...base, role: 'pppoe' }))
@@ -128,15 +126,16 @@ describe('buildProvisioningCommand', () => {
     expect(cmd).not.toMatch(/keep-result/)
   })
 
-  it('keeps the transport mode and the safe self-report parameters', () => {
+  it('uses HTTPS and reads the self-report parameters from this router', () => {
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
     expect(fetchLine).toMatch(/mode=https/)
-    // The documented command pins the certificate check off by design; the
-    // request itself still travels over TLS.
-    expect(fetchLine).toMatch(/check-certificate=no/)
-    // The fixed self-report parameters, both URL-safe by construction.
-    expect(fetchLine).toMatch(/&vm=7/)
-    expect(fetchLine).toMatch(/&arch=x86_64/)
+    expect(fetchLine).toMatch(/check-certificate=yes/)
+    expect(cmd).toContain('/system resource get version')
+    expect(cmd).toContain('/system resource get architecture-name')
+    expect(cmd).toContain('&vm=')
+    expect(cmd).toContain('&arch=')
+    expect(cmd).not.toContain('&vm=7')
+    expect(cmd).not.toContain('&arch=x86_64')
   })
 
   it('keeps free text out of the request target', () => {
@@ -173,8 +172,10 @@ describe('buildProvisioningCommand', () => {
   })
 
   it('is exactly the documented one-line contract', () => {
-    // Pin the bytes the panel hands the operator, statement for statement.
-    expect(cmd).toBe('/tool fetch url="https://example.supabase.co/functions/v1/router-provision?token=tok_abcdefghijklmnop&vm=7&arch=x86_64" mode=https check-certificate=no output=file dst-path=ispflow-bootstrap.rsc; /import file-name=ispflow-bootstrap.rsc; /file remove ispflow-bootstrap.rsc;')
+    expect(cmd).toMatch(/^:local ispflowVersion \[\/system resource get version\];/)
+    expect(cmd).toContain('/tool fetch url=("https://example.supabase.co/functions/v1/router-provision?token=tok_abcdefghijklmnop&vm=" . $ispflowVersion . "&arch=" . $ispflowArch)')
+    expect(cmd).toContain('mode=https check-certificate=yes output=file dst-path=ispflow-bootstrap.rsc;')
+    expect(cmd).toContain('/import file-name=ispflow-bootstrap.rsc; /file remove ispflow-bootstrap.rsc;')
   })
 
   it('never claims a result it cannot verify', () => {
@@ -217,7 +218,7 @@ describe('buildAccessScript version gating', () => {
 
   it('adds a WireGuard tunnel only when both the device and the peer exist', () => {
     const withVpn = buildAccessScript({ tag: 't1', profile: ros7, vpn })
-    expect(withVpn).toMatch(/\/interface\/wireguard/)
+    expect(withVpn).toMatch(/\/interface wireguard/)
     expect(withVpn).toMatch(/persistent-keepalive=25/)
     expect(withVpn).toMatch(/10\.77\.0\.2\/32/)
 
@@ -234,10 +235,10 @@ describe('buildAccessScript version gating', () => {
 
   it('never removes a service it did not create', () => {
     const s = buildAccessScript({ tag: 't1', profile: ros7, vpn })
-    expect(s).not.toMatch(/\/ip\/service\/remove/)
+    expect(s).not.toMatch(/\/ip service remove/)
     // The lookup that makes the add idempotent. A full path is required because
     // the script's top level has no menu context.
-    expect(s).toMatch(/\[\/ip\/service\/find name="api"\]/)
+    expect(s).toMatch(/\[\/ip service find name="api"\]/)
   })
 
   it('never resets the configuration', () => {
