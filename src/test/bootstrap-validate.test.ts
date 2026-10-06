@@ -35,6 +35,7 @@ describe('the validator rejects known-bad constructs', () => {
     ['json-js', ':local x ""\n:put (JSON.stringify $x)'],
     ['fetch-method', '/tool fetch url="https://a/b" method=POST'],
     ['cli-path', ':local api [/ip/service/add name="api"]'],
+    ['variable-name', ':local v_name ""'],
     ['unsafe-url-param', '/tool fetch url="https://a?identity=x" method=POST'],
   ])('catches %s', (rule, script) => {
     expect(validateRouterOsScript(script).map((i) => i.rule)).toContain(rule)

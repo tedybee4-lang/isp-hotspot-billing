@@ -67,6 +67,11 @@ describe('buildRouterScript', () => {
     expect(script).toContain('NETISP:a1b2c3d4')
   })
 
+  it('uses RouterOS-safe names for global variables', () => {
+    expect(body).toContain(':global NETISPDNS ')
+    expect(body).not.toMatch(/:(?:local|global)\s+[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*/i)
+  })
+
   it('never embeds a password', () => {
     expect(body).not.toMatch(/password=/i)
     // The RADIUS secret is no longer written into the script at all, not even

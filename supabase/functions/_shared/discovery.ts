@@ -258,9 +258,10 @@ function endGuard(key: Survey | string): string[] {
  *
  * There is deliberately not one backslash in this function.
  */
-function fieldLocalName(jsonKey: string, index: number): string {
-  const name = jsonKey.replace(/[^A-Za-z0-9_]/g, '_')
-  return `v_${name || `n${index}`}`
+function fieldLocalName(index: number): string {
+  // RouterOS identifiers do not accept underscores. Use the stable field
+  // index instead of deriving a scripting variable from an API/JSON key.
+  return `v${index}`
 }
 
 function serializeRows(
@@ -280,14 +281,14 @@ function serializeRows(
   if (mode === 'serialize') out.push('    :local r [:toarray ""]')
   else out.push('    :local j "{"')
   for (const [index, [jsonKey, prop]] of fields.entries()) {
-    const local = fieldLocalName(jsonKey, index)
+    const local = fieldLocalName(index)
     out.push(`    :local ${local} ($i->"${prop}")`)
     if (mode === 'serialize') {
       // An unset property is an empty array. Skipping it keeps the payload to
       // values that exist rather than a wall of empty arrays.
       out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
     } else {
-      const escaped = `json_${local}`
+      const escaped = `json${local}`
       out.push(`    :if ([:typeof $${local}] != "array") do={`)
       out.push(`      :local ${escaped} [:tostr $${local}]`)
       out.push(...jsonEscapeSteps(escaped, escaped).map((line) => `      ${line}`))
@@ -318,12 +319,12 @@ function serializeScalars(
   if (mode === 'serialize') out.push('  :local r [:toarray ""]')
   else out.push('  :local jsonPayload "{"')
   for (const [index, [jsonKey, expr]] of reads.entries()) {
-    const local = fieldLocalName(jsonKey, index)
+    const local = fieldLocalName(index)
     out.push(`  :local ${local} [${expr}]`)
     if (mode === 'serialize') {
       out.push(`  :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
     } else {
-      const escaped = `json_${local}`
+      const escaped = `json${local}`
       out.push(`  :if ([:typeof $${local}] != "array") do={`)
       out.push(`    :local ${escaped} [:tostr $${local}]`)
       out.push(...jsonEscapeSteps(escaped, escaped).map((line) => `    ${line}`))
@@ -352,12 +353,12 @@ function guardedScalars(
   if (mode === 'serialize') out.push('    :local r [:toarray ""]')
   else out.push('    :local jsonPayload "{"')
   for (const [index, [jsonKey, expr]] of reads.entries()) {
-    const local = fieldLocalName(jsonKey, index)
+    const local = fieldLocalName(index)
     out.push(`    :local ${local} [${expr}]`)
     if (mode === 'serialize') {
       out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
     } else {
-      const escaped = `json_${local}`
+      const escaped = `json${local}`
       out.push(`    :if ([:typeof $${local}] != "array") do={`)
       out.push(`      :local ${escaped} [:tostr $${local}]`)
       out.push(...jsonEscapeSteps(escaped, escaped).map((line) => `      ${line}`))

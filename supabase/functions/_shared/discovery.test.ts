@@ -73,6 +73,11 @@ describe('the discovery script is RouterOS a router can actually run', () => {
     expect(opens, 'every { must be closed').toBe(closes)
   })
 
+  it('uses RouterOS-safe temporary variable identifiers', () => {
+    expect(script).not.toMatch(/:(?:local|global)\s+[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*/i)
+    expect(script).not.toMatch(/\$[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*/)
+  })
+
   it('wraps each survey so one failure cannot stop the rest', () => {
     // The canonical guard is `:do { ... } on-error={ ... }` - not `:onerror`.
     const blocks = script.split('on-error={').length - 1

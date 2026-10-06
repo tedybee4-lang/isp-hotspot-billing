@@ -103,7 +103,7 @@ export function buildRouterScript(o: ProvisionOptions): string {
 
   if (o.dns.length) {
     L.push('# --- DNS resolvers ---')
-    L.push(':global NETISP_DNS ' + o.dns.join(' '))
+    L.push(':global NETISPDNS ' + o.dns.join(' '))
     o.dns.forEach((server, i) => {
       // A `:local` per server, not one reused name: reusing a name across blocks
       // is legal but makes the generated script harder to read when diagnosing.

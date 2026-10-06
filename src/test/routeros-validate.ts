@@ -77,6 +77,10 @@ export function validateRouterOsScript(
     if (/\/(?:ip|interface|system|ppp|radius|user|file)\/(?:[^ \]\r\n]+\/)*(?:add|find|set|print|get|remove|save|run)\b/.test(l)) {
       add(i, 'cli-path', 'RouterOS CLI menus must be space-delimited, not API-style slash paths')
     }
+    if (/:(?:local|global)\s+[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*/i.test(l)
+      || /\$[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*/.test(l)) {
+      add(i, 'variable-name', 'RouterOS variable identifiers must not contain underscores')
+    }
   })
 
   // --- 2. unbalanced braces and parens, ignoring string contents ----------
