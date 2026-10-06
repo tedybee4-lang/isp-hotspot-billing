@@ -315,7 +315,13 @@ async function handleCallback(req: Request, url: URL): Promise<Response> {
   // discovery needs its own short-lived credential. Minting it HERE, inside the
   // same handler, means it only ever exists for a router that has already
   // proved it holds a valid claim token.
-  const discovery = await buildDiscoveryTail(sessionId, tag, profile, detected.version)
+  const discovery = await buildDiscoveryTail(
+    sessionId,
+    tag,
+    profile,
+    detected.version,
+    detected.architecture,
+  )
 
   const body = buildAccessScript({ tag, profile, vpn: null })
 
@@ -367,6 +373,7 @@ async function buildDiscoveryTail(
   tag: string,
   profile: CompatibilityProfile,
   version: string | null,
+  architecture: string | null,
 ): Promise<string> {
   const { data, error } = await admin.rpc('mint_discovery_token', { p_session_id: sessionId })
   if (error || !data?.ok || !data?.token) return ''
@@ -389,7 +396,7 @@ async function buildDiscoveryTail(
     // exists from 7.13. Below that - and on every RouterOS 6 build - the script
     // falls back to `:replace` escaping, which runs everywhere.
     minor: parsed?.minor ?? null,
-    architecture: detected.architecture,
+    architecture,
     tag,
   })
 }

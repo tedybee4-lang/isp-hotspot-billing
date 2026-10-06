@@ -46,6 +46,19 @@ const has = (...parts: string[]) => existsSync(join(ROOT, ...parts))
  * segments are joined against ROOT directly instead.
  */
 const harness = (...parts: string[]) => code(...parts)
+describe('router provisioning claim response', () => {
+  it('passes the detected architecture into discovery generation', () => {
+    const provision = code('supabase', 'functions', 'router-provision', 'index.ts')
+    expect(provision).toMatch(
+      /buildDiscoveryTail\(\s*sessionId,\s*tag,\s*profile,\s*detected\.version,\s*detected\.architecture,\s*\)/,
+    )
+    expect(provision).toMatch(
+      /async function buildDiscoveryTail\([\s\S]*?version: string \| null,\s*architecture: string \| null,/,
+    )
+    expect(provision).toMatch(/architecture,\s*tag,/)
+  })
+})
+
 describe('live VPS checks cannot strand the RADIUS service', () => {
   it('ships the service-state guard the live checks depend on', () => {
     expect(has('scripts', 'live', 'service-state.ts')).toBe(true)
