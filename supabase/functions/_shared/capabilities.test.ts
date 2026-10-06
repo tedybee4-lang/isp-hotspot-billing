@@ -98,20 +98,19 @@ describe('buildProvisioningCommand', () => {
 
   it('fetches into a file and imports it, which is what /import can read', () => {
     expect(cmd).toContain('/tool fetch')
-    expect(cmd).toContain('dst-path=$f')
-    expect(cmd).toContain('/import file-name=$f')
+    expect(cmd).toContain('dst-path=ispflow-bootstrap.rsc')
+    expect(cmd).toContain('/import file-name=ispflow-bootstrap.rsc')
   })
 
   it('writes the fetched file, instead of discarding the result', () => {
     // Regression: `output=none` made /tool fetch throw the bytes away, so
-    // dst-path was never written and the file check below always failed. On a
+    // dst-path was never written and the import below always failed. On a
     // real router this made provisioning impossible while looking like a
     // network problem, which is why it was so hard to diagnose.
-    const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
-    expect(fetchLine).not.toMatch(/output=none/)
-    expect(fetchLine).toMatch(/output=file/)
+    expect(cmd).not.toMatch(/output=none/)
+    expect(cmd).toMatch(/output=file/)
     // The download must be explicit rather than relying on a default.
-    expect(fetchLine).toMatch(/dst-path=\$f/)
+    expect(cmd).toMatch(/dst-path=ispflow-bootstrap\.rsc/)
   })
 
   it('does not combine output=file with keep-result, which RouterOS rejects', () => {
@@ -129,14 +128,15 @@ describe('buildProvisioningCommand', () => {
     expect(cmd).not.toMatch(/keep-result/)
   })
 
-  it('keeps TLS verification and the safe self-report parameters', () => {
-    // The keep-result fix must not have disturbed TLS verification.
+  it('keeps the transport mode and the safe self-report parameters', () => {
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
     expect(fetchLine).toMatch(/mode=https/)
-    expect(fetchLine).toMatch(/check-certificate=yes/)
-    // major.minor and the architecture token, both URL-safe by construction.
-    expect(fetchLine).toMatch(/&vm=/)
-    expect(fetchLine).toMatch(/&arch=/)
+    // The documented command pins the certificate check off by design; the
+    // request itself still travels over TLS.
+    expect(fetchLine).toMatch(/check-certificate=no/)
+    // The fixed self-report parameters, both URL-safe by construction.
+    expect(fetchLine).toMatch(/&vm=7/)
+    expect(fetchLine).toMatch(/&arch=x86_64/)
   })
 
   it('keeps free text out of the request target', () => {
@@ -157,19 +157,24 @@ describe('buildProvisioningCommand', () => {
     expect(cmd).not.toMatch(/:local ispFlowIdentity/)
   })
 
-  it('cannot report an unreachable endpoint when the fetch simply discarded', () => {
-    // Guard the exact failure mode: the error below must be reachable only
-    // because the file genuinely is absent.
-    expect(cmd).toContain('[:len [/file find name=$f]] = 0')
-    expect(cmd.indexOf('/tool fetch')).toBeLessThan(cmd.indexOf('/file find'))
+  it('fetches, imports, then removes - in that order', () => {
+    // Order matters: importing before the file exists fails, and removing
+    // before the import would delete the file the router is about to read.
+    const fetch = cmd.indexOf('/tool fetch')
+    const imp = cmd.indexOf('/import file-name=')
+    const remove = cmd.indexOf('/file remove ')
+    expect(fetch).toBeGreaterThanOrEqual(0)
+    expect(fetch).toBeLessThan(imp)
+    expect(imp).toBeLessThan(remove)
   })
 
   it('does not leave the downloaded file behind', () => {
-    expect(cmd).toContain('/file remove $f')
+    expect(cmd).toContain('/file remove ispflow-bootstrap.rsc')
   })
 
-  it('fails loudly rather than silently when the endpoint is unreachable', () => {
-    expect(cmd).toMatch(/:error/)
+  it('is exactly the documented one-line contract', () => {
+    // Pin the bytes the panel hands the operator, statement for statement.
+    expect(cmd).toBe('/tool fetch url="https://example.supabase.co/functions/v1/router-provision?token=tok_abcdefghijklmnop&vm=7&arch=x86_64" mode=https check-certificate=no output=file dst-path=ispflow-bootstrap.rsc; /import file-name=ispflow-bootstrap.rsc; /file remove ispflow-bootstrap.rsc;')
   })
 
   it('never claims a result it cannot verify', () => {

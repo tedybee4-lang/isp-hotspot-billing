@@ -80,10 +80,13 @@ describe('the RADIUS secret can never reach a browser', () => {
 
   it('is never echoed by the Edge Function that accepts it', () => {
     const fn = read(PROVISION_FN)
-    expect(fn).toMatch(/encryptSecret\(secret\)/)
-    // The success response must not carry the value or a fragment of it.
-    const ok = fn.slice(fn.indexOf("stored: true,"), fn.indexOf("stored: true,") + 300)
-    expect(ok).not.toMatch(/secret:/)
+    // The provisioning endpoint serves a script to a token holder over GET.
+    // It accepts no secret from the caller, so there is no request value that
+    // could ever be reflected back to a browser.
+    expect(fn).not.toMatch(/req\.json\(\)/)
+    // And it builds no JSON success envelope that could carry one.
+    expect(fn).not.toMatch(/stored:\s*true/)
+    expect(fn).not.toMatch(/secret:\s/)
   })
 
   it('is redacted even if a stage result ever contained it', () => {

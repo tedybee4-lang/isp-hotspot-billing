@@ -72,20 +72,24 @@ describe('the discovery script is RouterOS a router can actually run', () => {
   })
 
   it('wraps each survey so one failure cannot stop the rest', () => {
-    const blocks = script.split(':onerror').length - 1
+    // The canonical guard is `:do { ... } on-error={ ... }` - not `:onerror`.
+    const blocks = script.split('on-error={').length - 1
     expect(blocks, 'every survey needs its own error trap').toBeGreaterThan(15)
   })
 
   it('groups the POST body as one argument', () => {
-    // Found by reading the script the function actually emits. Without the
-    // parentheses, `http-data="{" . $o . "}"` parses as a body of literally
-    // `{` followed by a dangling concatenation: the quotes close the string
-    // immediately and the survey posts `{"name":""}`, silently discarding
-    // everything the router had read. No unit test on a return value would ever
-    // have caught this - only looking at the generated RouterOS did.
-    const post = script.split('\n').find((l) => l.includes('http-data='))!
-    expect(post).toMatch(/http-data=\("[^"]*" \. \$/)
-    expect(post).not.toMatch(/http-data="\{"/)
+    // The canonical fetch takes the payload as ONE variable, declared right
+    // above it as one parenthesised expression. An unparenthesised
+    // `http-data="{" . $o . "}"` parses as a body of literally `{` followed by
+    // a dangling concatenation: the quotes close the string immediately and the
+    // survey posts `{"name":""}`, silently discarding everything the router had
+    // read. No unit test on a return value would ever have caught this - only
+    // looking at the generated RouterOS did.
+    const posts = script.split('\n').filter((l) => l.includes('http-data='))
+    expect(posts.length).toBeGreaterThan(5)
+    for (const p of posts) expect(p).toMatch(/http-data=\$jsonPayload;$/)
+    expect(script).toContain(':local jsonPayload ("[" . $rows . "]")')
+    expect(script).not.toMatch(/http-data="\{"/)
   })
 
   it('never uses a ternary, which is absent on older RouterOS 6 builds', () => {
@@ -176,7 +180,7 @@ describe('the script is sized for the routers it must run on', () => {
     // silently truncated on a router with many interfaces, and one missing menu
     // would lose every other answer.
     const script = buildDiscoveryScript(OPTS)
-    for (const survey of ['interfaces', 'pools', 'hotspot', 'firewall']) {
+    for (const survey of ['interfaces', 'ip_pools', 'hotspot', 'firewall']) {
       expect(script).toContain(`survey=${survey}`)
     }
     // 25 separate posts, not one.
@@ -197,10 +201,12 @@ describe('untrusted values cannot break out of the generated script', () => {
     })
     // The payload text is present, but it can only ever be DATA: the quote that
     // would end the string literal is escaped, so the reboot stays inside the
-    // quoted URL instead of becoming a second command. The exact delimiter
-    // count is not the property under test - other arguments are legitimately
-    // quoted too - so assert the escape itself.
-    const line = evil.split('\n').find((l) => l.includes('/tool fetch'))!
+    // quoted URL instead of becoming a second command. The URL is declared
+    // once as `$baseUrl` and referenced from the fetch lines, so that
+    // declaration is the line to assert on. The exact delimiter count is not
+    // the property under test - other arguments are legitimately quoted too -
+    // so assert the escape itself.
+    const line = evil.split('\n').find((l) => l.includes(':local baseUrl'))!
     expect(line).toContain('\\"; /system/reboot; #')
     // A bare, unescaped `";` would close the literal and start a new command.
     expect(line).not.toMatch(/(?<!\\)"; /)

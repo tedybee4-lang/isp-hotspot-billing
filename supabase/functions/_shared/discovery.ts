@@ -41,9 +41,31 @@
 // =============================================================================
 
 /** One subsystem the router reports on. */
+//
+// The thirteen subsystems the platform is required to report are named here in
+// the form the report endpoint stores them under: identity, resource (the
+// system-resource survey), interfaces, bridge, bridge_ports, ip_addresses,
+// routes, hotspot, pppoe, ip_pools, dhcp, firewall, services and ispflow.
+// Everything else in the list is an additional read-only survey that has
+// always been part of the report and costs one more POST.
+//
+// Two renames matter and are deliberate:
+//
+//   bridges      -> bridge
+//   addresses    -> ip_addresses
+//   pools        -> ip_pools
+//
+// plus one new subsystem, `bridge_ports`, which previously did not exist at
+// all. Knowing a bridge exists without knowing which interfaces are enslaved
+// to it is half an answer: it is the difference between "there is a bridge"
+// and "your uplink sits behind bridge1 with vlan-filtering off".
+//
+// The key is stored as free text (`router_surveys.survey`) and capped at 40
+// characters, so `ip_addresses` and `bridge_ports` fit without a migration.
 export const SURVEYS = [
-  'identity', 'resource', 'board', 'packages', 'interfaces', 'bridges',
-  'vlans', 'addresses', 'dhcp', 'pools', 'hotspot', 'pppoe',
+  'identity', 'resource', 'board', 'packages', 'interfaces', 'bridge',
+  'bridge_ports', 'vlans', 'ip_addresses', 'dhcp', 'ip_pools', 'hotspot',
+  'pppoe',
   // The PPPoE and RADIUS subsystems are each split across the menus RouterOS
   // actually uses, rather than one menu being filed under another service's
   // name. `/ppp secret` holds the customers, `/interface/pppoe-server/server`
@@ -143,18 +165,31 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
 }
 
 /**
- * A POST of a finished JSON document; the reply is discarded.
+ * THE CANONICAL POST. Every survey and every service block fetches this way.
+ *
+ * The argument order, the parentheses around `url` and the payload variable
+ * name are all part of the canonical script format and are asserted by test:
+ *
+ *   /tool fetch mode=https url=(...) method=POST check-certificate=yes
+ *     http-header-field="Content-Type:application/json" output=none
+ *     http-data=$jsonPayload;
+ *
+ * `url` is an EXPRESSION, not a quoted literal, so the whole URL is assembled
+ * from the `$baseUrl` / `$token` / `$tag` locals declared once at the top of
+ * the master block. That is what keeps a token out of thirty string literals
+ * and gives the validator one place to check the report endpoint.
  *
  * `method=POST` is the real RouterOS property name. (`http-method=post` appears
  * in some reference scripts and is NOT valid RouterOS - the fetch fails and the
  * survey is silently lost.)
  *
- * `check-certificate=yes` because RouterOS does not verify TLS by default, and
- * this body carries the discovery token.
+ * `mode=https` plus `check-certificate=yes`: RouterOS does NOT verify TLS
+ * certificates by default (current manual, /tool/fetch), and this body carries
+ * the discovery token.
  *
- * `http-data` is parenthesised so the whole concatenation is one argument
- * value; without the parentheses the quotes close the literal immediately and
- * the body silently collapses.
+ * `output=none` because the reply is discarded - the router is not saving the
+ * response, it is posting a document. `keep-result` is deliberately absent: it
+ * only means anything for `output=file` and RouterOS rejects it elsewhere.
  *
  * `http-header-field` is REQUIRED, not decoration. The report endpoint branches
  * on content-type: with `application/json` it calls `req.json()`, otherwise it
@@ -162,26 +197,46 @@ export function jsonEscapeSteps(srcVar: string, dstVar: string): string[] {
  * on its own, so without this header every survey body failed to parse and was
  * stored as `{}` - surveys counted as reported, with no data in them.
  *
- * `keep-result` is NOT emitted. It only means anything for `output=file`, and
- * RouterOS rejects the combination; with `output=user as-value` it is dead
- * weight and a second thing to be wrong about.
+ * The payload is ALWAYS the local `jsonPayload`, declared immediately above.
+ * The canonical format names it that so a single rule - "`http-data` must be
+ * `$jsonPayload`" - holds for scalars and arrays alike.
+ *
+ * @param urlExpr  a RouterOS expression (no surrounding quotes) that yields
+ *                 the absolute URL, e.g. `$baseUrl . "?survey=x&token=" . $token`
+ * @param bodyVar  must be `$jsonPayload`
  */
-function post(url: string, body: string): string {
-  return `/tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
+function post(urlExpr: string, bodyVar = '$jsonPayload'): string {
+  return `/tool fetch mode=https url=(${urlExpr}) method=POST check-certificate=yes ` +
     `http-header-field="Content-Type:application/json" ` +
-    `output=user as-value http-data=(${body})`
+    `output=none http-data=${bodyVar};`
 }
 
-/** The scoped `:onerror` wrapper every survey is emitted inside. */
-function guard(key: Survey): string[] {
-  return [
-    // `in={...} do={...}` scopes the handler to this block. The older
-    // `:onerror e do={...}` followed by a bare `{ ... }` relied on the handler
-    // persisting for the rest of the script, which is not what it does.
-    `:onerror e in={`,
-    `  :put ("ISPFlow: ${key} not reported: " . $e)`,
-    `} do={`,
-  ]
+/** The report URL expression for one survey, built from the session locals. */
+function urlExpr(key: string): string {
+  return `$baseUrl . "?survey=${key}&token=" . $token . "&tag=" . $tag`
+}
+
+/**
+ * The opening line of a guarded block.
+ *
+ * The canonical format uses `:do { ... } on-error={ ... }`, not `:onerror e
+ * in={ ... } do={ ... }`. `:do/on-error` is the pair RouterOS documents for a
+ * single block, it binds its handler to that block alone, and the failure
+ * message is a fixed literal - so one menu a given firmware does not have costs
+ * exactly one `:put` instead of aborting the import halfway down the file.
+ */
+function guard(key: Survey | string): string[] {
+  return ['', '# --- ' + key + ' ---', ':do {']
+}
+
+/**
+ * The matching close. The message is the canonical one: the survey name, then
+ * "skipped/failed". A survey that did not happen is reported as not happening;
+ * it is never silently omitted, because "we did not ask" and "it is not there"
+ * are different answers and only one of them is honest.
+ */
+function endGuard(key: Survey | string): string[] {
+  return ['} on-error={', `  :put "ISPFlow: ${key} skipped/failed"`, '};']
 }
 
 /**
@@ -206,26 +261,30 @@ function guard(key: Survey): string[] {
 function serializeRows(
   menu: string,
   fields: Array<[json: string, prop: string]>,
-  opts: DiscoveryOptions,
+  _opts: DiscoveryOptions,
   key: Survey,
 ): string[] {
-  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
-  const out: string[] = ['', '# --- ' + key + ' ---', ...guard(key)]
+  const out = [...guard(key)]
   out.push('  :local rows ""')
   out.push(`  :foreach i in=[${menu}/find] do={`)
-  out.push('    :local r {}')
+  // The canonical map declaration. `[:toarray ""]` is understood by every
+  // RouterOS build ISPFlow supports, which is why it appears rather than an
+  // array literal: the map is the one construct that has to work on a 6.x box
+  // and on a 7.24 CHR alike.
+  out.push('    :local r [:toarray ""]')
   for (const [jsonKey, prop] of fields) {
     out.push(`    :local v ($i->"${prop}")`)
     // An unset property is an empty array. Skipping it keeps the payload to
     // values that exist rather than a wall of empty arrays.
-    out.push(`    :if ([:typeof $v] != "array") do={ :set r ($r . "${jsonKey}"=$v) }`)
+    out.push(`    :if ([:typeof $v] != "array") do={ :set ($r->"${jsonKey}") $v }`)
   }
   out.push('    :local j [:serialize to=json value=$r]')
   out.push('    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }')
   out.push('    :set rows ($rows . $j)')
   out.push('  }')
-  out.push(`  ${post(url, '"[" . $rows . "]"')}`)
-  out.push('}')
+  out.push('  :local jsonPayload ("[" . $rows . "]")')
+  out.push(`  ${post(urlExpr(key))}`)
+  out.push(...endGuard(key))
   return out
 }
 
@@ -233,135 +292,68 @@ function serializeRows(
 function serializeScalars(
   key: Survey,
   reads: Array<[json: string, routeros: string]>,
-  opts: DiscoveryOptions,
+  _opts: DiscoveryOptions,
 ): string[] {
-  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
-  const out: string[] = ['', '# --- ' + key + ' ---', ...guard(key)]
-  out.push('  :local r {}')
+  const out = [...guard(key)]
+  out.push('  :local r [:toarray ""]')
   for (const [jsonKey, expr] of reads) {
     out.push(`  :local v [${expr}]`)
-    out.push(`  :if ([:typeof $v] != "array") do={ :set r ($r . "${jsonKey}"=$v) }`)
+    out.push(`  :if ([:typeof $v] != "array") do={ :set ($r->"${jsonKey}") $v }`)
   }
-  out.push('  :local j [:serialize to=json value=$r]')
-  out.push(`  ${post(url, '$j')}`)
-  out.push('}')
+  out.push('  :local jsonPayload [:serialize to=json value=$r]')
+  out.push(`  ${post(urlExpr(key))}`)
+  out.push(...endGuard(key))
   return out
 }
 
-/** Row-collection block, using whichever JSON strategy the firmware supports. */
+/**
+ * Row-collection block.
+ *
+ * There is one JSON strategy now. `:serialize to=json` is the only mechanism
+ * the canonical format permits: it escapes the router's own free text itself,
+ * and the hand-escaped `:replace` path is banned outright. A firmware too old
+ * to provide `:serialize` fails inside this `:do` block and the survey reports
+ * itself as skipped - which is a true statement about what happened, unlike a
+ * survey that half-serialized.
+ */
 function rows(
   menu: string,
   fields: Array<[json: string, prop: string]>,
   opts: DiscoveryOptions,
   key: Survey,
 ): string[] {
-  return jsonMode(opts) === 'serialize'
-    ? serializeRows(menu, fields, opts, key)
-    : escapeRows(menu, fields, opts, key)
+  return serializeRows(menu, fields, opts, key)
 }
 
-/** Single-object block, using whichever JSON strategy the firmware supports. */
+/** Single-object block. */
 function scalars(
   key: Survey,
   reads: Array<[json: string, routeros: string]>,
   opts: DiscoveryOptions,
 ): string[] {
-  return jsonMode(opts) === 'serialize'
-    ? serializeScalars(key, reads, opts)
-    : escapeScalars(key, reads, opts)
-}
-
-function escapeRows(
-  menu: string,
-  fields: Array<[json: string, prop: string]>,
-  opts: DiscoveryOptions,
-  key: Survey,
-): string[] {
-  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
-  const out: string[] = [
-    '',
-    '# --- ' + key + ' ---',
-    ':onerror e do={ :put ("ISPFlow: ' + key + ' not reported: " . $e) }',
-    '{',
-    '  :local rows "";',
-    `  :foreach i in=[${menu}/find] do={`,
-    '    :local o "";',
-    // Declared ONCE per block, not once per property. `:set` on an undeclared
-    // variable is not valid RouterOS, and reusing one target keeps the script
-    // small enough to import on a 32 MB RB951.
-    '    :local j ""',
-  ]
-  for (const [jsonKey, prop] of fields) {
-    out.push(`    :local p ($i->"${prop}")`)
-    // An unset property comes back as an empty array, which cannot be
-    // concatenated onto a string. Normalise it to nothing.
-    out.push(`    :if ([:typeof $p] = "array") do={ :set p "" }`)
-    // The separator is a local rather than a `? :` ternary: the ternary is not
-    // available on every RouterOS 6 build, and this script has to run on the
-    // oldest hardware ISPFlow supports.
-    out.push(`    :if ($p != "") do={`)
-    // `$j` MUST be declared before it is set. `:set` on an undeclared variable
-    // is not valid RouterOS, so the escape target is a real local. The
-    // indentation is kept flush with the block so the emitted script reads the
-    // way an operator would have typed it.
-    out.push(...jsonEscapeSteps('p', 'j').map((l) => '      ' + l))
-    out.push(`      :local s ""`)
-    out.push(`      :if ([:len $o] > 0) do={ :set s "," }`)
-    out.push(`      :set o ($o . $s . "\\"${jsonKey}\\":\\"" . $j . "\\"")`)
-    out.push('    }')
-  }
-  out.push('    :if ([:len $o] > 0) do={')
-  out.push('      :local s ""')
-  out.push('      :if ([:len $rows] > 0) do={ :set s "," }')
-  out.push('      :set rows ($rows . $s . "{" . $o . "}")')
-  out.push('    }')
-  out.push('  }')
-  out.push(`  ${post(url, '"[" . $rows . "]"')}`)
-  out.push('}')
-  return out
+  return serializeScalars(key, reads, opts)
 }
 
 /**
- * Emits a block that posts a single JSON object of scalar values.
+ * The session locals every survey URL is built from.
  *
- * Used for the identity/resource style surveys, where there is exactly one row
- * and the interesting values are strings and numbers rather than a list.
+ * Declared once, at the top of the master block, and referenced by every
+ * `/tool fetch url=(...)` through `$baseUrl`, `$token` and `$tag`. The
+ * alternative - a fully quoted URL in each of the thirty fetches - puts a live
+ * credential in thirty string literals and leaves the report endpoint itself
+ * unchecked in one place.
  */
-function escapeScalars(
-  key: Survey,
-  reads: Array<[json: string, routeros: string]>,
-  opts: DiscoveryOptions,
-): string[] {
-  const url = `${opts.reportUrl}?survey=${key}&token=${opts.token}&tag=${opts.tag}`
-  const out: string[] = [
-    '',
-    '# --- ' + key + ' ---',
-    ':onerror e do={ :put ("ISPFlow: ' + key + ' not reported: " . $e) }',
-    '{',
-    '  :local o "";',
-    // One escape target for the whole block; see the row emitter.
-    '  :local j ""',
+export function sessionLocals(o: DiscoveryOptions): string[] {
+  return [
+    `:local token "${ros(o.token)}";`,
+    `:local tag "${ros(o.tag)}";`,
+    `:local baseUrl "${ros(o.reportUrl)}";`,
   ]
-  for (const [jsonKey, expr] of reads) {
-    out.push(`  :local p [${expr}]`)
-    out.push(`  :if ([:typeof $p] = "array") do={ :set p "" }`)
-    out.push('  :if ($p != "") do={')
-    out.push('    :local s ""')
-    out.push('    :if ([:len $o] > 0) do={ :set s "," }')
-    // Escaped for the same reason as the row surveys: the identity and the
-    // board name are free text, and one quote in either silently voided
-    // the whole survey on the server.
-    out.push(...jsonEscapeSteps('p', 'j').map((l) => '    ' + l))
-    out.push(`    :set o ($o . $s . "\\"${jsonKey}\\":\\"" . $j . "\\"")`)
-    out.push('  }')
-  }
-  out.push(`  ${post(url, '"{" . $o . "}"')}`)
-  out.push('}')
-  return out
 }
 
 /**
- * The full discovery script.
+ * The discovery survey section: everything that goes BETWEEN the master `{`
+ * and `}` of a generated `.rsc`.
  *
  * Order is deliberate: the cheapest and most informative surveys first, so a
  * router on a marginal link still says what it is before the heavier firewall
@@ -372,8 +364,16 @@ function escapeScalars(
  * and the REST service arrived in RouterOS 7; a 6.x box must never be sent a
  * 7.x path, because the menu does not exist there and the survey would report
  * a false "unsupported" for a feature the box does have under another name.
+ *
+ * `declareLocals` is false when the caller has already put the session locals
+ * into its own preamble - which is what `router-provision/generate.ts` does,
+ * so that `token`, `tag` and `baseUrl` sit where the canonical template puts
+ * them, ahead of the service block.
  */
-export function buildDiscoveryScript(o: DiscoveryOptions): string {
+export function buildSurveySection(
+  o: DiscoveryOptions,
+  declareLocals = true,
+): string {
   const seven = o.major !== null && o.major >= 7
   const L: string[] = [
     // MARKERS (see capabilities.ts). Present in the HTTP response, not just in a
@@ -383,9 +383,11 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
     '# =============================================================================',
     `# ISPFlow router discovery - session ${o.tag}`,
     '# =============================================================================',
-    '# READ ONLY. This script changes nothing on your router. It reads what is',
-    '# already configured and reports it, so ISPFlow can configure safely.',
+    '# READ ONLY. This script reads what is already configured and reports it,',
+    '# so ISPFlow can configure safely. Every block is guarded: one menu this',
+    '# firmware does not have costs one line of output, never the whole run.',
     '',
+    ...(declareLocals ? sessionLocals(o) : []),
     ':put "Starting ISPFlow router discovery...";',
     ':put "";',
   ]
@@ -433,7 +435,15 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
   L.push(...rows('/interface bridge', [
     ['name', 'name'], ['comment', 'comment'],
     ['vlan_filtering', 'vlan-filtering'], ['pvid', 'pvid'],
-  ], o, 'bridges'))
+  ], o, 'bridge'))
+
+  // Which ports belong to which bridge. Without this the bridge survey only
+  // says that a bridge exists, not that ether2 is enslaved to it - which is
+  // the fact an ISP actually needs before touching an uplink.
+  L.push(...rows('/interface bridge port', [
+    ['bridge', 'bridge'], ['interface', 'interface'],
+    ['comment', 'comment'], ['disabled', 'disabled'], ['edge', 'edge'],
+  ], o, 'bridge_ports'))
 
   // VLAN filtering replaced pvid on older bridges; both are asked so the panel
   // can say which model of VLAN the box actually uses.
@@ -445,7 +455,7 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
   L.push(...rows('/ip address', [
     ['address', 'address'], ['network', 'network'],
     ['interface', 'interface'], ['disabled', 'disabled'], ['comment', 'comment'],
-  ], o, 'addresses'))
+  ], o, 'ip_addresses'))
 
 // --- services already on the box ------------------------------------------
   L.push(...rows('/ip dhcp-server', [
@@ -455,7 +465,7 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
 
   L.push(...rows('/ip pool', [
     ['name', 'name'], ['ranges', 'ranges'], ['next_pool', 'next-pool'],
-  ], o, 'pools'))
+  ], o, 'ip_pools'))
 
   L.push(...rows('/ip hotspot', [
     ['name', 'name'], ['interface', 'interface'], ['address_pool', 'address-pool'],
@@ -605,22 +615,45 @@ export function buildDiscoveryScript(o: DiscoveryOptions): string {
 }
 
 /**
+ * The full discovery script: a COMPLETE generated `.rsc`, not a fragment.
+ *
+ * One master outer block, exactly as the canonical format requires. Everything
+ * the section declares - `$token`, `$tag`, `$baseUrl` - is scoped to that
+ * block, so importing this file cannot collide with a `$token` an operator
+ * already had open in their terminal, and the file reads top-to-bottom the way
+ * a person would have written it.
+ *
+ * `buildSurveySection` is the same content without the wrapper, for the two
+ * callers that add discovery to a larger script: `router-provision/index.ts`
+ * (claim response) and `router-provision/generate.ts` (all-in-one bootstrap).
+ */
+export function buildDiscoveryScript(o: DiscoveryOptions): string {
+  return '{\n' + buildSurveySection(o) + '}\n'
+}
+
+/**
  * Records that a survey was deliberately skipped, and why.
  *
  * A skipped survey has to be visible. "We did not ask" and "we asked and the
  * box does not support it" are different answers, and conflating them is how
  * a platform ends up telling an ISP their router lacks a feature when the
  * real reason is that nobody ever looked.
+ *
+ * It is reported through the same canonical `:do { ... } on-error={ ... }`
+ * block and the same `http-data=$jsonPayload` fetch as a survey that ran,
+ * because the panel should not have to know which kind of block produced a row.
  */
-function skipped(key: Survey, reason: string, o: DiscoveryOptions): string[] {
-  const url = `${o.reportUrl}?survey=${key}&token=${o.token}&tag=${o.tag}`
+function skipped(key: Survey, reason: string, _o: DiscoveryOptions): string[] {
   return [
     '',
     '# --- ' + key + ' (skipped: not applicable to this firmware) ---',
-    `:put "ISPFlow: ${key} skipped - ${reason}";`,
-    `  /tool fetch url="${ros(url)}" method=POST check-certificate=yes ` +
-      `http-header-field="Content-Type:application/json" ` +
-      `output=user as-value ` +
-      `http-data="{\\"unsupported\\":\\"${ros(reason)}\\"}"`,
+    ':do {',
+    `  :put "ISPFlow: ${key} skipped - ${reason}";`,
+    '  :local r [:toarray ""]',
+    `  :set ($r->"unsupported") "${ros(reason)}"`,
+    '  :local jsonPayload [:serialize to=json value=$r]',
+    `  ${post(urlExpr(key))}`,
+    ...endGuard(key),
   ]
 }
+

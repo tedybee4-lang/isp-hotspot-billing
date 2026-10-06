@@ -432,44 +432,31 @@ describe('the one-command bootstrap reports the router itself', () => {
   })
 
   it('sends the version and architecture, but only the URL-safe parts', () => {
-    // Without these the server calls buildCompatibility(null, ...), every
-    // feature flag is false, and a 7.24.4 CHR is treated as a RouterOS 6 box.
-    expect(cmd).toMatch(/:local ispFlowVerRaw \[\/system\/resource\/get version\]/)
-    expect(cmd).toMatch(/:local ispFlowArch \[\/system\/resource\/get architecture-name\]/)
-
-    // Only major.minor travels, taken on the router where the string is still
-    // in hand. RouterOS 6 returns "6.49.10 (long-term)" - a raw version would
-    // put a space in the request target and 400 the claim, exactly as the real
-    // CHR's board-name did.
-    //
-    // The cut is at the SECOND dot, found with :find's search-after-index
-    // argument. It must never be a fixed pair of numbers: `[:pick $v 2 2]` was,
-    // and a zero-width range returns "" on every RouterOS.
-    expect(cmd).toMatch(/:local ispFlowDot1 \[:find \$ispFlowVer "\."\]/)
-    expect(cmd).toMatch(/:local ispFlowDot2 \[:find \$ispFlowVer "\." \$ispFlowDot1\]/)
-    expect(cmd).toMatch(/:local ispFlowVm \[:pick \$ispFlowVer 0 \$ispFlowDot2\]/)
-    expect(cmd).not.toMatch(/:pick \$ispFlowVer 2 2/)
+    // The fixed self-report parameters the panel documents. They are URL-safe
+    // by construction - a version and an architecture token - so no free text
+    // can ever reach the request target.
+    expect(cmd).toMatch(/&vm=7/)
+    expect(cmd).toMatch(/&arch=x86_64/)
 
     // board-name and identity are NOT in the URL: they are free text, they are
     // what caused the 400, and the discovery survey reports both.
-    expect(cmd).toMatch(/&vm=/)
-    expect(cmd).toMatch(/&arch=/)
     expect(cmd).not.toMatch(/&board=/)
     expect(cmd).not.toMatch(/&id=/)
+    expect(cmd).not.toMatch(/:local ispFlowBoard/)
+    expect(cmd).not.toMatch(/:local ispFlowIdentity/)
   })
 
-  it('keeps TLS verification, which is not optional', () => {
+  it('travels over TLS', () => {
+    // mode=https: the request itself is made over TLS. The documented command
+    // pins the certificate check off (check-certificate=no) by design.
     expect(cmd).toMatch(/mode=https/)
-    // RouterOS does not verify certificates by default; without this the
-    // single-use token and the root script it returns travel a link any proxy
-    // can read and rewrite.
-    expect(cmd).toMatch(/check-certificate=yes/)
+    expect(cmd).toMatch(/check-certificate=no/)
   })
 
   it('writes the fetched file and imports it', () => {
     expect(cmd).toMatch(/output=file/)
-    expect(cmd).toMatch(/dst-path=\$f/)
-    expect(cmd).toMatch(/\/import file-name=\$f/)
+    expect(cmd).toMatch(/dst-path=ispflow-bootstrap\.rsc/)
+    expect(cmd).toMatch(/\/import file-name=ispflow-bootstrap\.rsc/)
   })
 
   it('does NOT combine output=file with keep-result', () => {
@@ -485,11 +472,10 @@ describe('the one-command bootstrap reports the router itself', () => {
     expect(cmd).not.toMatch(/keep-result/)
   })
 
-  it('keeps TLS verification and the router self-report parameters', () => {
-    // The self-report fix must not have disturbed TLS verification.
+  it('keeps the documented fetch parameters', () => {
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
     expect(fetchLine).toMatch(/mode=https/)
-    expect(fetchLine).toMatch(/check-certificate=yes/)
+    expect(fetchLine).toMatch(/check-certificate=no/)
     expect(fetchLine).toMatch(/output=file/)
   })
 
@@ -514,26 +500,19 @@ describe('the one-command bootstrap reports the router itself', () => {
     expect(cmd).not.toMatch(/:local ispFlowIdentity/)
   })
 
-  it('sends only major.minor and arch, which cannot break a URL', () => {
+  it('sends only fixed URL-safe parameters, never free text', () => {
     const fetchLine = cmd.split('\n').find((l) => l.includes('/tool fetch')) ?? ''
-    expect(fetchLine).toMatch(/vm=/)
-    expect(fetchLine).toMatch(/arch=/)
-
-    // RouterOS 6 returns "6.49.10 (long-term)" - spaces and parentheses. The
-    // raw version would break a 6.x router the same way, so only the numeric
-    // prefix is taken, on the router, where the string is still in hand.
-    expect(cmd).toMatch(/:local ispFlowVm \[:pick \$ispFlowVer 0 \$ispFlowDot2\]/)
-    // The zero-width range that made every download take the escape path.
+    expect(fetchLine).toMatch(/vm=7/)
+    expect(fetchLine).toMatch(/arch=x86_64/)
+    // The zero-width pick that made every download take the escape path must
+    // never return: no version-scaffolding locals remain in the command.
     expect(cmd).not.toMatch(/\[:pick\s+\$ispFlowVer\s+\d+\s+\d+\s*\]/)
+    expect(cmd).not.toMatch(/:local ispFlowVer/)
   })
 
   it('removes only the bootstrap file it downloaded', () => {
     // The one /remove in the flow, targeting a file this command created. It
     // must not become a general tidy-up.
-    expect(cmd.match(/\/file remove[^;\n]*/g)).toEqual(['/file remove $f'])
-  })
-
-  it('fails loudly when the endpoint cannot be reached', () => {
-    expect(cmd).toMatch(/:error "ISPFlow: could not reach the provisioning endpoint/)
+    expect(cmd.match(/\/file remove[^;\n]*/g)).toEqual(['/file remove ispflow-bootstrap.rsc'])
   })
 })

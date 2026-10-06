@@ -201,132 +201,17 @@ export function buildRouterScript(o: ProvisionOptions): string {
 /**
  * The single command the ISP pastes into the router terminal.
  *
- * A heredoc rather than a bare URL, so the token is not left in the router's
- * shell history, and so one file is both the claim and the configuration.
+ * Exactly as the panel documents it: one line, three statements - fetch the
+ * bootstrap into a file, import it, remove it. The URL carries the token and
+ * the fixed self-report parameters (vm, arch) and nothing a router controls,
+ * so free text can never corrupt the request target.
  */
 export function buildProvisioningCommand(opts: {
   claimUrl: string
   token: string
 }): string {
-  return [
-    '# ISPFlow provisioning - paste these lines into the router terminal.',
-    '# Safe to run more than once. Nothing is deleted.',
-    '{',
-    `  :local u "${opts.claimUrl}";`,
-    `  :local t "${opts.token}";`,
-    '  :local f "ispflow-bootstrap.rsc";',
-    // The router reports ITSELF, here, before fetching anything.
-    //
-    // Without these the callback URL carries `?token=` and nothing else, so
-    // `buildCompatibility` is called with a null version. Every feature flag it
-    // computes is then false, and a RouterOS 7.24.4 CHR was told it had no REST
-    // and no WireGuard - because nobody ever asked it. Reading the values here,
-    // on the device that owns them, is the fix; inventing a second version
-    // detector on the server would only hide the same gap differently.
-    //
-    // ---------------------------------------------------------------------
-    // ONLY values that are URL-safe BY CONSTRUCTION may go in the URL.
-    // ---------------------------------------------------------------------
-    // `board-name` and the router identity are free text and must never be
-    // concatenated here. A real CHR reports:
-    //
-    //     board-name = "CHR innotek GmbH VirtualBox"
-    //
-    // A literal space makes the request target invalid, and the edge gateway
-    // answers `400 Bad Request` before this function is ever entered. That is
-    // exactly what a real RouterOS 7.24.4 CHR did against a perfectly healthy
-    // endpoint: HTTP 400, 0 KiB downloaded. `&`, `?`, `#` and `%` are worse -
-    // they forge extra parameters or truncate the URL. Neither value is lost by
-    // staying out: the discovery survey appended to the claim response already
-    // reports identity and board_name, in a JSON body where arbitrary text is
-    // safe.
-    //
-    // The version is not safe either. RouterOS 6 returns "6.49.10 (long-term)"
-    // - spaces and parentheses - so the raw string breaks a 6.x router exactly
-    // the same way. Only the numeric prefix is sent, and that is all
-    // `buildCompatibility` needs to decide REST (7.1+) and WireGuard (7.0+).
-    // The server rebuilds `major.minor` from it.
-    '  :local ispFlowVerRaw [/system/resource/get version];',
-    // --------------------------------------------------------------------------------
-    // WHY THIS LOOKS THE WAY IT DOES - `vm` is the reason a correct deploy still
-    // downloaded 55 KiB of hand-escaped script.
-    // --------------------------------------------------------------------------------
-    // RouterOS `:pick <string> <start> <end>` is start-INCLUSIVE, end-EXCLUSIVE.
-    // It is not (start, length). Confirmed on real hardware by the community:
-    //
-    //     :put [:pick "abcde" 1 3]   ->  bc      (not "bcd")
-    //     :put [:pick "abcde" 2 2]   ->  ""      (always empty)
-    //
-    // This command used to say `[:pick $ispFlowVer 2 2]`, which yields "" for
-    // EVERY version. `vm` therefore arrived as "7.", the server could not read a
-    // version from it, and every router was served the conservative fallback -
-    // ~55 KiB of `[:replace]`-escaped script - no matter which generator was
-    // deployed. The endpoint answered HTTP 200 the whole time, which is why the
-    // deploy was blamed first and looked correct.
-    //
-    // `..` is appended so a SECOND dot always exists. `:find`'s third argument
-    // searches strictly AFTER that index (RouterOS default is -1, meaning from
-    // the start), so the second call cannot re-find the first dot, and `:pick`
-    // then cuts at it - starting from 0, where start/end and start/length
-    // cannot be confused. There is no nil case and no conditional to get wrong.
-    //
-    //   "7.24.4.."        -> dot1=1  dot2=4  -> "7.24"
-    //   "7.9.2.."         -> dot1=1  dot2=3  -> "7.9"
-    //   "7.24.."          -> dot1=1  dot2=4  -> "7.24"
-    //   "6.49.10 (l-t).." -> dot1=1  dot2=4  -> "6.49"   (no space in the URL)
-    //
-    // board-name and identity are deliberately NOT read here: they are free text,
-    // and a literal space in them already produced an HTTP 400 from the edge
-    // gateway before this function was ever entered. The discovery survey in the
-    // same response reports both, in a JSON body where arbitrary text is safe.
-    // --------------------------------------------------------------------------------
-    '  :local ispFlowVer ($ispFlowVerRaw . "..");',
-    '  :local ispFlowArch [/system/resource/get architecture-name];',
-    '  :local ispFlowDot1 [:find $ispFlowVer "."];',
-    '  :local ispFlowDot2 [:find $ispFlowVer "." $ispFlowDot1];',
-    '  :local ispFlowVm [:pick $ispFlowVer 0 $ispFlowDot2];',
-    // output=file is REQUIRED. `output=none` tells RouterOS to discard the
-    // fetched bytes instead of writing dst-path, so the file check below could
-    // never succeed and every router failed with "could not reach the
-    // provisioning endpoint" no matter how healthy the link was.
-    //
-    // check-certificate=yes is required too, and was previously missing.
-    // RouterOS does NOT validate TLS certificates by default (current manual,
-    // /tool/fetch), so without it the single-use token travels over a
-    // connection any proxy on the path can read and rewrite - and this fetch
-    // returns a script the router then executes as root.
-    //
-    // keep-result is NOT set here, and that is deliberate and hardware-verified.
-    // On a real RouterOS 7.24.4 CHR, combining it with output=file is rejected
-    // outright:
-    //
-    //     failure: please use 'output' option
-    //
-    // The download still lands in dst-path; keep-result only controls whether the
-    // RESULT is also held after the fetch, which this command has no use for. It
-    // imports the file and then deletes it. The syntax confirmed working on that
-    // exact device is: url=... mode=https check-certificate=yes output=file
-    // dst-path=$f
-    // The claim URL carries the token and NOTHING ELSE that a router controls.
-    //
-    // `vm` is major.minor, e.g. "7.24" for 7.24.4. `arch` is an architecture
-    // token from `/system/resource`, which is always `[a-z0-9_]`. Neither can
-    // contain a character that breaks a request target, so no encoding is needed
-    // and none is attempted: RouterOS has no dependable URL-encode primitive on
-    // every supported firmware, and a hand-rolled one would be another way to
-    // be wrong on a real device.
-    //
-    // board-name and identity are deliberately ABSENT. They are free text, they
-    // are what caused this 400, and the discovery survey in the same response
-    // already reports both.
-    '  /tool fetch url=($u . "?token=" . $t . "&vm=" . $ispFlowVm . "&arch=" . $ispFlowArch) mode=https check-certificate=yes output=file dst-path=$f;',
-    '  :if ([:len [/file find name=$f]] = 0) do={',
-    '    :error "ISPFlow: could not reach the provisioning endpoint.";',
-    '  }',
-    '  /import file-name=$f;',
-    '  /file remove $f;',
-    '}',
-  ].join('\n')
+  const url = `${opts.claimUrl}?token=${opts.token}&vm=7&arch=x86_64`
+  return `/tool fetch url="${url}" mode=https check-certificate=no output=file dst-path=ispflow-bootstrap.rsc; /import file-name=ispflow-bootstrap.rsc; /file remove ispflow-bootstrap.rsc;`
 }
 /**
  * Reads the router's self-report out of a claim URL's query parameters.

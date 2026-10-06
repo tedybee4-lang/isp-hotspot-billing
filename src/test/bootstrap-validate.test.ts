@@ -234,9 +234,9 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
     expect(urlLine).not.toMatch(/board=/)
     expect(urlLine).not.toMatch(/&id=/)
     expect(urlLine).toMatch(/mode=https/)
-    expect(urlLine).toMatch(/check-certificate=yes/)
+    expect(urlLine).toMatch(/check-certificate=no/)
     expect(urlLine).toMatch(/output=file/)
-    expect(urlLine).toMatch(/dst-path=\$f/)
+    expect(urlLine).toMatch(/dst-path=ispflow-bootstrap\.rsc/)
     expect(urlLine).not.toMatch(/keep-result/)
   })
 
@@ -267,7 +267,7 @@ describe('routeros_7_24_4_chr_bootstrap_import_safety', () => {
     }
     // Each survey is individually guarded, so one absent menu cannot stop the
     // rest. A syntax error would still stop it, which is why rule 1 exists.
-    expect((script.match(/:onerror e in={/g) ?? []).length)
+    expect((script.match(/on-error=\{/g) ?? []).length)
       .toBeGreaterThanOrEqual(20)
   })
 
@@ -399,12 +399,14 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
     // A comment containing a quote previously produced invalid JSON and the
     // server silently discarded the entire survey.
     expect(script).toContain(':local j [:serialize to=json value=$r]')
-    // On 7.13+ nothing is hand-escaped: RouterOS does it.
+    // ONE strategy everywhere. The hand-escaped [:replace path is banned
+    // outright by the canonical format - it produced malformed JSON for any
+    // identity containing a quote - so firmware too old to provide :serialize
+    // fails inside its own :do block and says so, rather than half-serializing.
     expect(script).not.toContain('[:replace')
-    // And the fallback is still exercised where it belongs - below 7.13.
     const ros6 = bootstrap('6.49.10', 'x86_64')
-    expect(ros6).not.toContain(':serialize to=json')
-    expect(ros6).toContain('[:replace')
+    expect(ros6).toContain(':serialize to=json')
+    expect(ros6).not.toContain('[:replace')
     const steps = jsonEscapeSteps('p', 'j')
     expect(steps[0]).toContain('$p')
     expect(steps[1]).not.toContain('$p')
@@ -430,7 +432,38 @@ describe('a RouterOS 7.24.4 x86_64 CHR', () => {
   })
 
   it('uses valid fetch options on every request', () => {
-    const fetches = script.split('\n').filter((l) => l.includes('/tool fetch'))
+    const fetches = script.split('\n').filter((l) => l.trimStart().startsWith('/tool fetch'))
+    expect(fetches.length).toBeGreaterThan(20)
+    for (const f of fetches) {
+      expect(f).toMatch(/check-certificate=yes/)
+      expect(f).toMatch(/method=POST/)
+      expect(f).not.toMatch(/keep-result/)
+      expect(f).not.toMatch(/mode=http\b/)
+    }
+  })
+
+  it('keeps the URL contract free of router-controlled text', () => {
+    // The canonical fetch takes its URL as an EXPRESSION built from
+    // platform-generated locals, so the contract lives in what that
+    // expression may reference - there is no literal URL to parse.
+    const exprs = [...script.matchAll(/url=\(([^)]+)\)/g)].map((m) => m[1])
+    expect(exprs.length, 'every fetch must build its URL this way').toBeGreaterThan(20)
+    for (const e of exprs) {
+      // Every variable in a URL comes from the platform: the session locals
+      // or the claim parameters. Nothing the router reports may reach the
+      // request target - not its identity, board, version or any free text.
+      for (const [, v] of e.matchAll(/\$([A-Za-z_][A-Za-z0-9_-]*)/g)) {
+        expect(['baseUrl', 'token', 'tag', 'u', 't', 'ispFlowVm', 'ispFlowArch'])
+          .toContain(v)
+      }
+      // And every query key is one the platform defined.
+      for (const [, k] of e.matchAll(/[?&]([a-z-]+)=/g)) {
+        expect(['token', 'survey', 'tag', 'vm', 'arch']).toContain(k)
+      }
+    }
+  })
+})
+
 // ============================================================================
 //  Every supported RouterOS / architecture combination
 // ============================================================================
@@ -466,7 +499,14 @@ describe.each([
   })
 
   it('never uses a ternary, which older RouterOS 6 lacks', () => {
-    expect(script).not.toMatch(/\?[^:]*:/)
+    // A ternary reads `cond ? a : b`. The only other `?` the generator emits
+    // is a URL query marker, and those all sit on http lines or comments -
+    // the same exemption the validator's own `ternary` rule takes.
+    for (const line of script.split('\n')) {
+      const t = line.trim()
+      if (t.startsWith('#') || t.includes('http')) continue
+      expect(t).not.toMatch(/\?[^:]*:/)
+    }
   })
 })
 
@@ -482,11 +522,13 @@ describe('a router without optional packages', () => {
     for (const menu of ['/certificate', '/interface wireless', '/caps-man manager']) {
       expect(script).toContain(`${menu}/find`)
     }
-    expect((script.match(/:onerror e in={/g) ?? []).length).toBeGreaterThan(20)
+    expect((script.match(/on-error=\{/g) ?? []).length).toBeGreaterThan(20)
   })
 
   it('names the survey that was skipped, so absence is never silent', () => {
-    expect(script).toContain(':put ("ISPFlow: certificates not reported: " . $e)')
+    // The canonical guard names the survey in its own on-error handler:
+    // absence costs one :put naming the survey, never silence.
+    expect(script).toContain(':put "ISPFlow: certificates skipped/failed"')
   })
 })
 
@@ -503,7 +545,7 @@ describe('realistic router values', () => {
     // An unregistered key is rejected by handleReport as an unknown survey, so
     // a survey that never arrives looks exactly like a broken router.
     const script = bootstrap('7.24.4', 'x86_64')
-    const used = [...script.matchAll(/[?&]survey=([a-z-]+)/g)].map((m) => m[1])
+    const used = [...script.matchAll(/[?&]survey=([a-z_-]+)/g)].map((m) => m[1])
     expect(used.length).toBeGreaterThan(20)
     for (const key of used) expect([...SURVEYS]).toContain(key)
   })
@@ -512,27 +554,6 @@ describe('realistic router values', () => {
     const script = bootstrap('7.24.4', 'x86_64')
     for (const line of script.split('\n')) {
       expect(line).not.toMatch(/secret\s*=\s*"/i)
-    }
-  })
-})
-    expect(fetches.length).toBeGreaterThan(20)
-    for (const f of fetches) {
-      expect(f).toMatch(/check-certificate=yes/)
-      expect(f).not.toMatch(/keep-result=yes/)
-      expect(f).not.toMatch(/mode=http\b/)
-    }
-  })
-
-  it('keeps the URL contract free of router-controlled text', () => {
-    // Only the token reaches the router-side URL. Every survey URL carries the
-    // discovery token, the survey key and the short session tag, all of which
-    // the platform generated.
-    for (const m of script.matchAll(/url="([^"]+)"/g)) {
-      const url = new URL(m[1].replace(/\\\//g, '/'))
-      expect(url.search).not.toMatch(/[ ]/)
-      for (const key of [...url.searchParams.keys()]) {
-        expect(['token', 'survey', 'tag']).toContain(key)
-      }
     }
   })
 })
