@@ -53,10 +53,10 @@
 # --- identity ---
 :do {
   :local r [:toarray ""]
-  :local v [/system identity/get name]
-  :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-  :local v [/system resource/get version]
-  :if ([:typeof $v] != "array") do={ :set ($r->"version") $v }
+  :local v_name [/system identity/get name]
+  :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+  :local v_version [/system resource/get version]
+  :if ([:typeof $v_version] != "array") do={ :set ($r->"version") $v_version }
   :local jsonPayload [:serialize to=json value=$r]
   /tool fetch mode=https url=($baseUrl . "?survey=identity&token=" . $token . "&tag=" . $tag) method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
 } on-error={
@@ -66,43 +66,39 @@
 # --- resource ---
 :do {
   :local r [:toarray ""]
-  :local v [/system resource/get board-name]
-  :if ([:typeof $v] != "array") do={ :set ($r->"board_name") $v }
-  :local v [/system resource/get platform]
-  :if ([:typeof $v] != "array") do={ :set ($r->"platform") $v }
-  :local v [/system resource/get architecture-name]
-  :if ([:typeof $v] != "array") do={ :set ($r->"architecture") $v }
-  :local v [/system resource/get cpu]
-  :if ([:typeof $v] != "array") do={ :set ($r->"cpu") $v }
-  :local v [/system resource/get cpu-count]
-  :if ([:typeof $v] != "array") do={ :set ($r->"cpu_count") $v }
-  :local v [/system resource/get cpu-load]
-  :if ([:typeof $v] != "array") do={ :set ($r->"cpu_load") $v }
-  :local v [/system resource/get free-memory]
-  :if ([:typeof $v] != "array") do={ :set ($r->"free_memory") $v }
-  :local v [/system resource/get total-memory]
-  :if ([:typeof $v] != "array") do={ :set ($r->"total_memory") $v }
-  :local v [/system resource/get free-hdd-space]
-  :if ([:typeof $v] != "array") do={ :set ($r->"free_hdd") $v }
-  :local v [/system resource/get total-hdd-space]
-  :if ([:typeof $v] != "array") do={ :set ($r->"total_hdd") $v }
-  :local v [/system resource/get uptime]
-  :if ([:typeof $v] != "array") do={ :set ($r->"uptime") $v }
+  :local v_board_name [/system resource/get board-name]
+  :if ([:typeof $v_board_name] != "array") do={ :set ($r->"board_name") $v_board_name }
+  :local v_platform [/system resource/get platform]
+  :if ([:typeof $v_platform] != "array") do={ :set ($r->"platform") $v_platform }
+  :local v_architecture [/system resource/get architecture-name]
+  :if ([:typeof $v_architecture] != "array") do={ :set ($r->"architecture") $v_architecture }
+  :local v_cpu [/system resource/get cpu]
+  :if ([:typeof $v_cpu] != "array") do={ :set ($r->"cpu") $v_cpu }
+  :local v_cpu_count [/system resource/get cpu-count]
+  :if ([:typeof $v_cpu_count] != "array") do={ :set ($r->"cpu_count") $v_cpu_count }
+  :local v_cpu_load [/system resource/get cpu-load]
+  :if ([:typeof $v_cpu_load] != "array") do={ :set ($r->"cpu_load") $v_cpu_load }
+  :local v_free_memory [/system resource/get free-memory]
+  :if ([:typeof $v_free_memory] != "array") do={ :set ($r->"free_memory") $v_free_memory }
+  :local v_total_memory [/system resource/get total-memory]
+  :if ([:typeof $v_total_memory] != "array") do={ :set ($r->"total_memory") $v_total_memory }
+  :local v_free_hdd [/system resource/get free-hdd-space]
+  :if ([:typeof $v_free_hdd] != "array") do={ :set ($r->"free_hdd") $v_free_hdd }
+  :local v_total_hdd [/system resource/get total-hdd-space]
+  :if ([:typeof $v_total_hdd] != "array") do={ :set ($r->"total_hdd") $v_total_hdd }
+  :local v_uptime [/system resource/get uptime]
+  :if ([:typeof $v_uptime] != "array") do={ :set ($r->"uptime") $v_uptime }
   :local jsonPayload [:serialize to=json value=$r]
   /tool fetch mode=https url=($baseUrl . "?survey=resource&token=" . $token . "&tag=" . $tag) method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
 } on-error={
   :put "ISPFlow: resource skipped/failed"
 };
 
-# --- board ---
+# --- board (skipped: not applicable to this firmware) ---
 :do {
+  :put "ISPFlow: board skipped - CHR/x86_64 does not expose a RouterBOARD menu";
   :local r [:toarray ""]
-  :local v [/system routerboard/get serial-number]
-  :if ([:typeof $v] != "array") do={ :set ($r->"serial_number") $v }
-  :local v [/system routerboard/get model]
-  :if ([:typeof $v] != "array") do={ :set ($r->"model") $v }
-  :local v [/system routerboard/get firmware-type]
-  :if ([:typeof $v] != "array") do={ :set ($r->"firmware_type") $v }
+  :set ($r->"unsupported") "CHR/x86_64 does not expose a RouterBOARD menu"
   :local jsonPayload [:serialize to=json value=$r]
   /tool fetch mode=https url=($baseUrl . "?survey=board&token=" . $token . "&tag=" . $tag) method=POST check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
 } on-error={
@@ -114,12 +110,12 @@
   :local rows ""
   :foreach i in=[/system package/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"version")
-    :if ([:typeof $v] != "array") do={ :set ($r->"version") $v }
-    :local v ($i->"installed")
-    :if ([:typeof $v] != "array") do={ :set ($r->"installed") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_version ($i->"version")
+    :if ([:typeof $v_version] != "array") do={ :set ($r->"version") $v_version }
+    :local v_installed ($i->"installed")
+    :if ([:typeof $v_installed] != "array") do={ :set ($r->"installed") $v_installed }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -135,18 +131,18 @@
   :local rows ""
   :foreach i in=[/interface/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"type")
-    :if ([:typeof $v] != "array") do={ :set ($r->"type") $v }
-    :local v ($i->"running")
-    :if ([:typeof $v] != "array") do={ :set ($r->"running") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"mtu")
-    :if ([:typeof $v] != "array") do={ :set ($r->"mtu") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_type ($i->"type")
+    :if ([:typeof $v_type] != "array") do={ :set ($r->"type") $v_type }
+    :local v_running ($i->"running")
+    :if ([:typeof $v_running] != "array") do={ :set ($r->"running") $v_running }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_mtu ($i->"mtu")
+    :if ([:typeof $v_mtu] != "array") do={ :set ($r->"mtu") $v_mtu }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -162,14 +158,14 @@
   :local rows ""
   :foreach i in=[/interface bridge/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"vlan-filtering")
-    :if ([:typeof $v] != "array") do={ :set ($r->"vlan_filtering") $v }
-    :local v ($i->"pvid")
-    :if ([:typeof $v] != "array") do={ :set ($r->"pvid") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_vlan_filtering ($i->"vlan-filtering")
+    :if ([:typeof $v_vlan_filtering] != "array") do={ :set ($r->"vlan_filtering") $v_vlan_filtering }
+    :local v_pvid ($i->"pvid")
+    :if ([:typeof $v_pvid] != "array") do={ :set ($r->"pvid") $v_pvid }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -185,16 +181,16 @@
   :local rows ""
   :foreach i in=[/interface bridge port/find] do={
     :local r [:toarray ""]
-    :local v ($i->"bridge")
-    :if ([:typeof $v] != "array") do={ :set ($r->"bridge") $v }
-    :local v ($i->"interface")
-    :if ([:typeof $v] != "array") do={ :set ($r->"interface") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"edge")
-    :if ([:typeof $v] != "array") do={ :set ($r->"edge") $v }
+    :local v_bridge ($i->"bridge")
+    :if ([:typeof $v_bridge] != "array") do={ :set ($r->"bridge") $v_bridge }
+    :local v_interface ($i->"interface")
+    :if ([:typeof $v_interface] != "array") do={ :set ($r->"interface") $v_interface }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_edge ($i->"edge")
+    :if ([:typeof $v_edge] != "array") do={ :set ($r->"edge") $v_edge }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -210,16 +206,16 @@
   :local rows ""
   :foreach i in=[/interface vlan/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"interface")
-    :if ([:typeof $v] != "array") do={ :set ($r->"interface") $v }
-    :local v ($i->"vlan-id")
-    :if ([:typeof $v] != "array") do={ :set ($r->"vlan_id") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_interface ($i->"interface")
+    :if ([:typeof $v_interface] != "array") do={ :set ($r->"interface") $v_interface }
+    :local v_vlan_id ($i->"vlan-id")
+    :if ([:typeof $v_vlan_id] != "array") do={ :set ($r->"vlan_id") $v_vlan_id }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -235,16 +231,16 @@
   :local rows ""
   :foreach i in=[/ip address/find] do={
     :local r [:toarray ""]
-    :local v ($i->"address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"address") $v }
-    :local v ($i->"network")
-    :if ([:typeof $v] != "array") do={ :set ($r->"network") $v }
-    :local v ($i->"interface")
-    :if ([:typeof $v] != "array") do={ :set ($r->"interface") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_address ($i->"address")
+    :if ([:typeof $v_address] != "array") do={ :set ($r->"address") $v_address }
+    :local v_network ($i->"network")
+    :if ([:typeof $v_network] != "array") do={ :set ($r->"network") $v_network }
+    :local v_interface ($i->"interface")
+    :if ([:typeof $v_interface] != "array") do={ :set ($r->"interface") $v_interface }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -260,14 +256,14 @@
   :local rows ""
   :foreach i in=[/ip dhcp-server/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"interface")
-    :if ([:typeof $v] != "array") do={ :set ($r->"interface") $v }
-    :local v ($i->"address-pool")
-    :if ([:typeof $v] != "array") do={ :set ($r->"address_pool") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_interface ($i->"interface")
+    :if ([:typeof $v_interface] != "array") do={ :set ($r->"interface") $v_interface }
+    :local v_address_pool ($i->"address-pool")
+    :if ([:typeof $v_address_pool] != "array") do={ :set ($r->"address_pool") $v_address_pool }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -283,12 +279,12 @@
   :local rows ""
   :foreach i in=[/ip pool/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"ranges")
-    :if ([:typeof $v] != "array") do={ :set ($r->"ranges") $v }
-    :local v ($i->"next-pool")
-    :if ([:typeof $v] != "array") do={ :set ($r->"next_pool") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_ranges ($i->"ranges")
+    :if ([:typeof $v_ranges] != "array") do={ :set ($r->"ranges") $v_ranges }
+    :local v_next_pool ($i->"next-pool")
+    :if ([:typeof $v_next_pool] != "array") do={ :set ($r->"next_pool") $v_next_pool }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -304,18 +300,18 @@
   :local rows ""
   :foreach i in=[/ip hotspot/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"interface")
-    :if ([:typeof $v] != "array") do={ :set ($r->"interface") $v }
-    :local v ($i->"address-pool")
-    :if ([:typeof $v] != "array") do={ :set ($r->"address_pool") $v }
-    :local v ($i->"profile")
-    :if ([:typeof $v] != "array") do={ :set ($r->"profile") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_interface ($i->"interface")
+    :if ([:typeof $v_interface] != "array") do={ :set ($r->"interface") $v_interface }
+    :local v_address_pool ($i->"address-pool")
+    :if ([:typeof $v_address_pool] != "array") do={ :set ($r->"address_pool") $v_address_pool }
+    :local v_profile ($i->"profile")
+    :if ([:typeof $v_profile] != "array") do={ :set ($r->"profile") $v_profile }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -331,14 +327,14 @@
   :local rows ""
   :foreach i in=[/ip hotspot user/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"profile")
-    :if ([:typeof $v] != "array") do={ :set ($r->"profile") $v }
-    :local v ($i->"server")
-    :if ([:typeof $v] != "array") do={ :set ($r->"server") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_profile ($i->"profile")
+    :if ([:typeof $v_profile] != "array") do={ :set ($r->"profile") $v_profile }
+    :local v_server ($i->"server")
+    :if ([:typeof $v_server] != "array") do={ :set ($r->"server") $v_server }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -354,18 +350,18 @@
   :local rows ""
   :foreach i in=[/ppp secret/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"service")
-    :if ([:typeof $v] != "array") do={ :set ($r->"service") $v }
-    :local v ($i->"profile")
-    :if ([:typeof $v] != "array") do={ :set ($r->"profile") $v }
-    :local v ($i->"remote-address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"remote_address") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_service ($i->"service")
+    :if ([:typeof $v_service] != "array") do={ :set ($r->"service") $v_service }
+    :local v_profile ($i->"profile")
+    :if ([:typeof $v_profile] != "array") do={ :set ($r->"profile") $v_profile }
+    :local v_remote_address ($i->"remote-address")
+    :if ([:typeof $v_remote_address] != "array") do={ :set ($r->"remote_address") $v_remote_address }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -381,22 +377,22 @@
   :local rows ""
   :foreach i in=[/interface pppoe-server server/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"service-name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"service_name") $v }
-    :local v ($i->"max-mtu")
-    :if ([:typeof $v] != "array") do={ :set ($r->"max_mtu") $v }
-    :local v ($i->"authentication")
-    :if ([:typeof $v] != "array") do={ :set ($r->"authentication") $v }
-    :local v ($i->"one-session-per-host")
-    :if ([:typeof $v] != "array") do={ :set ($r->"one_session_per_host") $v }
-    :local v ($i->"keepalive-timeout")
-    :if ([:typeof $v] != "array") do={ :set ($r->"keepalive_timeout") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_service_name ($i->"service-name")
+    :if ([:typeof $v_service_name] != "array") do={ :set ($r->"service_name") $v_service_name }
+    :local v_max_mtu ($i->"max-mtu")
+    :if ([:typeof $v_max_mtu] != "array") do={ :set ($r->"max_mtu") $v_max_mtu }
+    :local v_authentication ($i->"authentication")
+    :if ([:typeof $v_authentication] != "array") do={ :set ($r->"authentication") $v_authentication }
+    :local v_one_session_per_host ($i->"one-session-per-host")
+    :if ([:typeof $v_one_session_per_host] != "array") do={ :set ($r->"one_session_per_host") $v_one_session_per_host }
+    :local v_keepalive_timeout ($i->"keepalive-timeout")
+    :if ([:typeof $v_keepalive_timeout] != "array") do={ :set ($r->"keepalive_timeout") $v_keepalive_timeout }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -412,18 +408,18 @@
   :local rows ""
   :foreach i in=[/ppp profile/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"local-address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"local_address") $v }
-    :local v ($i->"remote-address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"remote_address") $v }
-    :local v ($i->"use-compression")
-    :if ([:typeof $v] != "array") do={ :set ($r->"use_compression") $v }
-    :local v ($i->"use-encryption")
-    :if ([:typeof $v] != "array") do={ :set ($r->"use_encryption") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_local_address ($i->"local-address")
+    :if ([:typeof $v_local_address] != "array") do={ :set ($r->"local_address") $v_local_address }
+    :local v_remote_address ($i->"remote-address")
+    :if ([:typeof $v_remote_address] != "array") do={ :set ($r->"remote_address") $v_remote_address }
+    :local v_use_compression ($i->"use-compression")
+    :if ([:typeof $v_use_compression] != "array") do={ :set ($r->"use_compression") $v_use_compression }
+    :local v_use_encryption ($i->"use-encryption")
+    :if ([:typeof $v_use_encryption] != "array") do={ :set ($r->"use_encryption") $v_use_encryption }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -439,16 +435,16 @@
   :local rows ""
   :foreach i in=[/radius/find] do={
     :local r [:toarray ""]
-    :local v ($i->"address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"address") $v }
-    :local v ($i->"port")
-    :if ([:typeof $v] != "array") do={ :set ($r->"port") $v }
-    :local v ($i->"timeout")
-    :if ([:typeof $v] != "array") do={ :set ($r->"timeout") $v }
-    :local v ($i->"src-address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"src_address") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_address ($i->"address")
+    :if ([:typeof $v_address] != "array") do={ :set ($r->"address") $v_address }
+    :local v_port ($i->"port")
+    :if ([:typeof $v_port] != "array") do={ :set ($r->"port") $v_port }
+    :local v_timeout ($i->"timeout")
+    :if ([:typeof $v_timeout] != "array") do={ :set ($r->"timeout") $v_timeout }
+    :local v_src_address ($i->"src-address")
+    :if ([:typeof $v_src_address] != "array") do={ :set ($r->"src_address") $v_src_address }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -464,10 +460,10 @@
   :local rows ""
   :foreach i in=[/ppp aaa/find] do={
     :local r [:toarray ""]
-    :local v ($i->"use-radius")
-    :if ([:typeof $v] != "array") do={ :set ($r->"use-radius") $v }
-    :local v ($i->"radius-interim-update")
-    :if ([:typeof $v] != "array") do={ :set ($r->"radius-interim-update") $v }
+    :local v_use_radius ($i->"use-radius")
+    :if ([:typeof $v_use_radius] != "array") do={ :set ($r->"use-radius") $v_use_radius }
+    :local v_radius_interim_update ($i->"radius-interim-update")
+    :if ([:typeof $v_radius_interim_update] != "array") do={ :set ($r->"radius-interim-update") $v_radius_interim_update }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -483,14 +479,14 @@
   :local rows ""
   :foreach i in=[/ip firewall filter/find] do={
     :local r [:toarray ""]
-    :local v ($i->"chain")
-    :if ([:typeof $v] != "array") do={ :set ($r->"chain") $v }
-    :local v ($i->"action")
-    :if ([:typeof $v] != "array") do={ :set ($r->"action") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
+    :local v_chain ($i->"chain")
+    :if ([:typeof $v_chain] != "array") do={ :set ($r->"chain") $v_chain }
+    :local v_action ($i->"action")
+    :if ([:typeof $v_action] != "array") do={ :set ($r->"action") $v_action }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -506,16 +502,16 @@
   :local rows ""
   :foreach i in=[/ip firewall nat/find] do={
     :local r [:toarray ""]
-    :local v ($i->"chain")
-    :if ([:typeof $v] != "array") do={ :set ($r->"chain") $v }
-    :local v ($i->"action")
-    :if ([:typeof $v] != "array") do={ :set ($r->"action") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"to-addresses")
-    :if ([:typeof $v] != "array") do={ :set ($r->"to_addresses") $v }
+    :local v_chain ($i->"chain")
+    :if ([:typeof $v_chain] != "array") do={ :set ($r->"chain") $v_chain }
+    :local v_action ($i->"action")
+    :if ([:typeof $v_action] != "array") do={ :set ($r->"action") $v_action }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_to_addresses ($i->"to-addresses")
+    :if ([:typeof $v_to_addresses] != "array") do={ :set ($r->"to_addresses") $v_to_addresses }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -531,14 +527,14 @@
   :local rows ""
   :foreach i in=[/ip route/find] do={
     :local r [:toarray ""]
-    :local v ($i->"dst-address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"dst_address") $v }
-    :local v ($i->"gateway")
-    :if ([:typeof $v] != "array") do={ :set ($r->"gateway") $v }
-    :local v ($i->"distance")
-    :if ([:typeof $v] != "array") do={ :set ($r->"distance") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_dst_address ($i->"dst-address")
+    :if ([:typeof $v_dst_address] != "array") do={ :set ($r->"dst_address") $v_dst_address }
+    :local v_gateway ($i->"gateway")
+    :if ([:typeof $v_gateway] != "array") do={ :set ($r->"gateway") $v_gateway }
+    :local v_distance ($i->"distance")
+    :if ([:typeof $v_distance] != "array") do={ :set ($r->"distance") $v_distance }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -554,14 +550,14 @@
   :local rows ""
   :foreach i in=[/ip dns/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"servers")
-    :if ([:typeof $v] != "array") do={ :set ($r->"servers") $v }
-    :local v ($i->"dynamic-servers")
-    :if ([:typeof $v] != "array") do={ :set ($r->"dynamic_servers") $v }
-    :local v ($i->"allow-remote-requests")
-    :if ([:typeof $v] != "array") do={ :set ($r->"allow_remote_requests") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_servers ($i->"servers")
+    :if ([:typeof $v_servers] != "array") do={ :set ($r->"servers") $v_servers }
+    :local v_dynamic_servers ($i->"dynamic-servers")
+    :if ([:typeof $v_dynamic_servers] != "array") do={ :set ($r->"dynamic_servers") $v_dynamic_servers }
+    :local v_allow_remote_requests ($i->"allow-remote-requests")
+    :if ([:typeof $v_allow_remote_requests] != "array") do={ :set ($r->"allow_remote_requests") $v_allow_remote_requests }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -577,14 +573,14 @@
   :local rows ""
   :foreach i in=[/interface wireguard/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"listen-port")
-    :if ([:typeof $v] != "array") do={ :set ($r->"listen_port") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_listen_port ($i->"listen-port")
+    :if ([:typeof $v_listen_port] != "array") do={ :set ($r->"listen_port") $v_listen_port }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -600,14 +596,14 @@
   :local rows ""
   :foreach i in=[/ip service/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"port")
-    :if ([:typeof $v] != "array") do={ :set ($r->"port") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"address")
-    :if ([:typeof $v] != "array") do={ :set ($r->"address") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_port ($i->"port")
+    :if ([:typeof $v_port] != "array") do={ :set ($r->"port") $v_port }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_address ($i->"address")
+    :if ([:typeof $v_address] != "array") do={ :set ($r->"address") $v_address }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -623,14 +619,14 @@
   :local rows ""
   :foreach i in=[/certificate/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"common-name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"common_name") $v }
-    :local v ($i->"invalid-after")
-    :if ([:typeof $v] != "array") do={ :set ($r->"invalid_after") $v }
-    :local v ($i->"expired")
-    :if ([:typeof $v] != "array") do={ :set ($r->"expired") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_common_name ($i->"common-name")
+    :if ([:typeof $v_common_name] != "array") do={ :set ($r->"common_name") $v_common_name }
+    :local v_invalid_after ($i->"invalid-after")
+    :if ([:typeof $v_invalid_after] != "array") do={ :set ($r->"invalid_after") $v_invalid_after }
+    :local v_expired ($i->"expired")
+    :if ([:typeof $v_expired] != "array") do={ :set ($r->"expired") $v_expired }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -646,16 +642,16 @@
   :local rows ""
   :foreach i in=[/interface wireless/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"ssid")
-    :if ([:typeof $v] != "array") do={ :set ($r->"ssid") $v }
-    :local v ($i->"mode")
-    :if ([:typeof $v] != "array") do={ :set ($r->"mode") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_ssid ($i->"ssid")
+    :if ([:typeof $v_ssid] != "array") do={ :set ($r->"ssid") $v_ssid }
+    :local v_mode ($i->"mode")
+    :if ([:typeof $v_mode] != "array") do={ :set ($r->"mode") $v_mode }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -671,12 +667,12 @@
   :local rows ""
   :foreach i in=[/caps-man manager/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"enabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"enabled") $v }
-    :local v ($i->"certificate")
-    :if ([:typeof $v] != "array") do={ :set ($r->"certificate") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_enabled ($i->"enabled")
+    :if ([:typeof $v_enabled] != "array") do={ :set ($r->"enabled") $v_enabled }
+    :local v_certificate ($i->"certificate")
+    :if ([:typeof $v_certificate] != "array") do={ :set ($r->"certificate") $v_certificate }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -692,12 +688,12 @@
   :local rows ""
   :foreach i in=[/ip firewall filter/find] do={
     :local r [:toarray ""]
-    :local v ($i->"chain")
-    :if ([:typeof $v] != "array") do={ :set ($r->"chain") $v }
-    :local v ($i->"action")
-    :if ([:typeof $v] != "array") do={ :set ($r->"action") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_chain ($i->"chain")
+    :if ([:typeof $v_chain] != "array") do={ :set ($r->"chain") $v_chain }
+    :local v_action ($i->"action")
+    :if ([:typeof $v_action] != "array") do={ :set ($r->"action") $v_action }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -713,14 +709,14 @@
   :local rows ""
   :foreach i in=[/system scheduler/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"interval")
-    :if ([:typeof $v] != "array") do={ :set ($r->"interval") $v }
-    :local v ($i->"disabled")
-    :if ([:typeof $v] != "array") do={ :set ($r->"disabled") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_interval ($i->"interval")
+    :if ([:typeof $v_interval] != "array") do={ :set ($r->"interval") $v_interval }
+    :local v_disabled ($i->"disabled")
+    :if ([:typeof $v_disabled] != "array") do={ :set ($r->"disabled") $v_disabled }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -736,10 +732,10 @@
   :local rows ""
   :foreach i in=[/system script/find] do={
     :local r [:toarray ""]
-    :local v ($i->"name")
-    :if ([:typeof $v] != "array") do={ :set ($r->"name") $v }
-    :local v ($i->"comment")
-    :if ([:typeof $v] != "array") do={ :set ($r->"comment") $v }
+    :local v_name ($i->"name")
+    :if ([:typeof $v_name] != "array") do={ :set ($r->"name") $v_name }
+    :local v_comment ($i->"comment")
+    :if ([:typeof $v_comment] != "array") do={ :set ($r->"comment") $v_comment }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)

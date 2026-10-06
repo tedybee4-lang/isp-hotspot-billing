@@ -97,6 +97,12 @@ describe('the discovery script is RouterOS a router can actually run', () => {
     // explicit :if for exactly that reason.
     expect(script).not.toMatch(/\)\s*\?/)
   })
+
+  it('guards RouterBOARD-only board reads so CHR does not get an unconditional routerboard probe', () => {
+    expect(script).toContain(':local probe [/system routerboard/find]')
+    expect(script).toContain('ISPFlow: board skipped/failed')
+    expect(script).not.toContain(':local v [/system routerboard/get serial-number]')
+  })
 })
 
 describe('discovery covers what decides whether provisioning is safe', () => {

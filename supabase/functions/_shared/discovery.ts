@@ -103,6 +103,8 @@ export interface DiscoveryOptions {
   minor: number | null
   /** Short session id, so two routers provisioning at once stay apart. */
   tag: string
+  /** Architecture as reported by the claim URL; used to skip RouterBOARD-only probes on CHR. */
+  architecture?: string | null
 }
 
 /**
@@ -258,6 +260,11 @@ function endGuard(key: Survey | string): string[] {
  *
  * There is deliberately not one backslash in this function.
  */
+function fieldLocalName(jsonKey: string, index: number): string {
+  const name = jsonKey.replace(/[^A-Za-z0-9_]/g, '_')
+  return `v_${name || `n${index}`}`
+}
+
 function serializeRows(
   menu: string,
   fields: Array<[json: string, prop: string]>,
@@ -272,11 +279,12 @@ function serializeRows(
   // array literal: the map is the one construct that has to work on a 6.x box
   // and on a 7.24 CHR alike.
   out.push('    :local r [:toarray ""]')
-  for (const [jsonKey, prop] of fields) {
-    out.push(`    :local v ($i->"${prop}")`)
+  for (const [index, [jsonKey, prop]] of fields.entries()) {
+    const local = fieldLocalName(jsonKey, index)
+    out.push(`    :local ${local} ($i->"${prop}")`)
     // An unset property is an empty array. Skipping it keeps the payload to
     // values that exist rather than a wall of empty arrays.
-    out.push(`    :if ([:typeof $v] != "array") do={ :set ($r->"${jsonKey}") $v }`)
+    out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
   }
   out.push('    :local j [:serialize to=json value=$r]')
   out.push('    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }')
@@ -296,12 +304,34 @@ function serializeScalars(
 ): string[] {
   const out = [...guard(key)]
   out.push('  :local r [:toarray ""]')
-  for (const [jsonKey, expr] of reads) {
-    out.push(`  :local v [${expr}]`)
-    out.push(`  :if ([:typeof $v] != "array") do={ :set ($r->"${jsonKey}") $v }`)
+  for (const [index, [jsonKey, expr]] of reads.entries()) {
+    const local = fieldLocalName(jsonKey, index)
+    out.push(`  :local ${local} [${expr}]`)
+    out.push(`  :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
   }
   out.push('  :local jsonPayload [:serialize to=json value=$r]')
   out.push(`  ${post(urlExpr(key))}`)
+  out.push(...endGuard(key))
+  return out
+}
+
+function guardedScalars(
+  key: Survey,
+  reads: Array<[json: string, routeros: string]>,
+  probe: string,
+): string[] {
+  const out = [...guard(key)]
+  out.push(`  :local probe [${probe}]`)
+  out.push('  :if ([:typeof $probe] != "array") do={')
+  out.push('    :local r [:toarray ""]')
+  for (const [index, [jsonKey, expr]] of reads.entries()) {
+    const local = fieldLocalName(jsonKey, index)
+    out.push(`    :local ${local} [${expr}]`)
+    out.push(`    :if ([:typeof $${local}] != "array") do={ :set ($r->"${jsonKey}") $${local} }`)
+  }
+  out.push('    :local jsonPayload [:serialize to=json value=$r]')
+  out.push(`    ${post(urlExpr(key))}`)
+  out.push('  };')
   out.push(...endGuard(key))
   return out
 }
@@ -412,13 +442,21 @@ export function buildSurveySection(
     ['uptime', '/system resource/get uptime'],
   ], o))
 
-  // A CHR has no serial number; the read fails harmlessly, which is why it is
-  // asked for separately from the rest of the board information.
-  L.push(...scalars('board', [
-    ['serial_number', '/system routerboard/get serial-number'],
-    ['model', '/system routerboard/get model'],
-    ['firmware_type', '/system routerboard/get firmware-type'],
-  ], o))
+  const arch = (o.architecture ?? '').trim().toLowerCase()
+  const isChrLike = arch.includes('x86_64') || arch.includes('x86-64') || arch.includes('x86')
+  // CHR and other virtualized devices do not have a RouterBOARD menu at all,
+  // so the board probe must be capability-gated rather than assumed. The
+  // script reports the board survey as skipped on those boxes instead of
+  // emitting an unconditional RouterBOARD command the router cannot parse.
+  if (isChrLike) {
+    L.push(...skipped('board', 'CHR/x86_64 does not expose a RouterBOARD menu', o))
+  } else {
+    L.push(...guardedScalars('board', [
+      ['serial_number', '/system routerboard/get serial-number'],
+      ['model', '/system routerboard/get model'],
+      ['firmware_type', '/system routerboard/get firmware-type'],
+    ], '/system routerboard/find'))
+  }
 
   L.push(...rows('/system package', [
     ['name', 'name'], ['version', 'version'], ['installed', 'installed'],

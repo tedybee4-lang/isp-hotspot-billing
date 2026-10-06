@@ -389,6 +389,7 @@ async function buildDiscoveryTail(
     // exists from 7.13. Below that - and on every RouterOS 6 build - the script
     // falls back to `:replace` escaping, which runs everywhere.
     minor: parsed?.minor ?? null,
+    architecture: detected.architecture,
     tag,
   })
 }
