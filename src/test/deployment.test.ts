@@ -236,14 +236,21 @@ describe('the worker actually starts', () => {
 
   it('bundles to CommonJS on a .cjs extension', () => {
     const pkg = read('worker', 'package.json')
+    const build = read('worker', 'build.mjs')
     const installer = read('deploy', 'install-vps.sh')
     const unit = read('deploy', 'netisp-worker.service')
 
     // package.json declares "type": "module", so a CommonJS bundle written to
     // dist/index.js is loaded as ESM and throws "require is not defined in ES
     // module scope". The extension has to be .cjs.
-    expect(pkg).toMatch(/--outfile=dist\/index\.cjs/)
-    expect(installer).toMatch(/--outfile=dist\/index\.cjs/)
+    expect(pkg).toMatch(/"build":\s*"node build\.mjs"/)
+    expect(build).toContain(
+      "existsSync('src/index.ts') ? 'src/index.ts' : 'worker/src/index.ts'",
+    )
+    expect(build).toMatch(/outfile:\s*'dist\/index\.cjs'/)
+    expect(installer).toMatch(/node build\.mjs/)
+    expect(installer).toMatch(/worker\/src\/assets\.d\.ts/)
+    expect(installer).toMatch(/public\/hotspot/)
     // ExecStart must name the file that is actually produced.
     expect(unit).toMatch(/^ExecStart=.*dist\/index\.cjs$/m)
   })

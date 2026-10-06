@@ -35,6 +35,13 @@
 
 import { RouterConnectError } from './session.ts'
 import type { RouterClient, RouterTarget } from './router-client.ts'
+import hotspotLogin from '../../public/hotspot/login.html?raw'
+import hotspotAutoLogin from '../../public/hotspot/alogin.html?raw'
+import hotspotError from '../../public/hotspot/error.html?raw'
+import hotspotLogout from '../../public/hotspot/logout.html?raw'
+import hotspotStatus from '../../public/hotspot/status.html?raw'
+import hotspotStyles from '../../public/hotspot/style.css?raw'
+import hotspotMd5 from '../../public/hotspot/md5.js?raw'
 
 /** The tag written on everything this platform creates. */
 export const OWNER = 'ISPFlow'
@@ -295,30 +302,6 @@ export function resolvePppPools(
   }
 }
 
-/**
- * Chooses the HotSpot pool.
- *
- * Prefers a platform-owned pool, then the largest one that is not the PPPoE
- * source. HotSpot and PPPoE sharing a range is a common cause of "the session
- * drops every time someone dials in", so they are kept apart wherever the router
- * allows it.
- */
-export function resolveHotspotPool(
-  pools: DiscoveredPool[],
-  opts: { exclude?: string | null } = {},
-): { pool: string | null; source: string | null } {
-  const usable = pools
-    .filter((p) => (p.nextPool ?? null) === null)
-    .filter((p) => p.name !== (opts.exclude ?? null))
-    .map((p) => ({ pool: p, size: rangeSize(p.ranges) ?? 0 }))
-    .filter((x) => x.size >= 2)
-    .sort((a, b) => b.size - a.size)
-
-  if (usable.length === 0) return { pool: null, source: null }
-  const ours = usable.find((u) => u.pool.name.startsWith(OWNER))
-  return { pool: (ours ?? usable[0]).pool.name, source: (ours ?? usable[0]).pool.name }
-}
-
 // APPEND_POOLS_2
 //
 //  Every value comes from the database or from the router. Nothing is hardcoded:
@@ -382,10 +365,9 @@ export interface StageSession {
   radiusSecret: string | null
   sessionTimeoutMin: number
   idleTimeoutMin: number
-  /** Pools resolved from DISCOVERY, never invented here. */
+  /** PPPoE ranges resolved from discovery, never invented here. */
   pppLocal: string | null
   pppRemote: string | null
-  hotspotPool: string | null
 }
 
 export interface StageContext {
@@ -1109,26 +1091,119 @@ export const radiusStage: StageFn = async (client, target, ctx) => {
   }
 }
 
+function ipv4Number(value: string): number | null {
+  const parts = value.split('.')
+  if (parts.length !== 4 || parts.some((part) => !/^\d{1,3}$/.test(part))) return null
+  const octets = parts.map(Number)
+  if (octets.some((part) => part < 0 || part > 255)) return null
+  return (((octets[0] * 256 + octets[1]) * 256 + octets[2]) * 256 + octets[3]) >>> 0
+}
+
+function ipv4Text(value: number): string {
+  const n = value >>> 0
+  return `${n >>> 24}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`
+}
+
+function ipv4Network(value: string): { start: number; end: number } | null {
+  const [address, prefixText] = value.split('/')
+  const ip = ipv4Number(address)
+  if (ip === null) return null
+  const prefix = prefixText === undefined ? 32 : Number(prefixText)
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0
+  const start = (ip & mask) >>> 0
+  const end = (start | (~mask >>> 0)) >>> 0
+  return { start, end }
+}
+
+function networksOverlap(a: string, b: string): boolean {
+  const left = ipv4Network(a)
+  const right = ipv4Network(b)
+  return !!left && !!right && left.start <= right.end && right.start <= left.end
+}
+
+function poolOverlapsNetwork(ranges: string, network: string): boolean {
+  const block = ipv4Network(network)
+  if (!block) return false
+  return ranges.split(',').some((range) => {
+    const [fromText, toText = fromText] = range.trim().split('-')
+    const from = ipv4Number(fromText)
+    const to = ipv4Number(toText)
+    return from !== null && to !== null
+      && Math.min(from, to) <= block.end && block.start <= Math.max(from, to)
+  })
+}
+
+function poolFitsNetwork(
+  ranges: string,
+  network: string,
+  reservedAddresses: string[],
+): boolean {
+  const block = ipv4Network(network)
+  if (!block || !ranges.trim()) return false
+  const reserved = reservedAddresses
+    .map((address) => ipv4Number(address.split('/')[0]))
+    .filter((address): address is number => address !== null)
+  return ranges.split(',').every((range) => {
+    const [fromText, toText = fromText] = range.trim().split('-')
+    const from = ipv4Number(fromText)
+    const to = ipv4Number(toText)
+    if (from === null || to === null) return false
+    const low = Math.min(from, to)
+    const high = Math.max(from, to)
+    return low > block.start && high < block.end
+      && !reserved.some((address) => address >= low && address <= high)
+  })
+}
+
+function availablePoolRanges(network: string, reservedAddresses: string[]): string | null {
+  const block = ipv4Network(network)
+  if (!block) return null
+  const reserved = new Set(reservedAddresses
+    .map((address) => ipv4Number(address.split('/')[0]))
+    .filter((address): address is number => address !== null))
+  const ranges: string[] = []
+  let start: number | null = null
+  let available = 0
+  for (let address = block.start + 1; address < block.end; address += 1) {
+    if (reserved.has(address)) {
+      if (start !== null) ranges.push(`${ipv4Text(start)}-${ipv4Text(address - 1)}`)
+      start = null
+    } else {
+      available += 1
+      if (start === null) start = address
+    }
+  }
+  if (start !== null) ranges.push(`${ipv4Text(start)}-${ipv4Text(block.end - 1)}`)
+  return available >= 2 ? ranges.join(',') : null
+}
+
+const HOTSPOT_ASSETS = {
+  'login.html': hotspotLogin,
+  'alogin.html': hotspotAutoLogin,
+  'error.html': hotspotError,
+  'logout.html': hotspotLogout,
+  'status.html': hotspotStatus,
+  'style.css': hotspotStyles,
+  'md5.js': hotspotMd5,
+}
+
 /**
  * HOTSPOT.
  *
- * Only the interfaces the ISP actually selected. A server is created on each
- * one; a HotSpot server already on that interface is updated rather than
- * duplicated, because two servers on one interface is a support call every time.
- *
- * A HotSpot server on an interface the ISP did NOT select is left completely
- * alone. It may be serving another branch, another ISP's reseller, or the
- * operator's own testing - and this stage has no business knowing which.
+ * A successful stage means a selected LAN has an address, DHCP, a working
+ * resolver path, an installed local login portal, and an enabled HotSpot
+ * server/profile. Existing bridge membership is read-only: if the selected
+ * ports do not form one safe LAN, provisioning fails instead of moving ports.
  */
 export const hotspotStage: StageFn = async (client, target, ctx) => {
-  const ifaces = ctx.session.hotspotInterfaces
-  if (ifaces.length === 0) {
+  const selected = [...new Set(ctx.session.hotspotInterfaces)]
+  if (selected.length === 0) {
     return { status: 'skipped', skipReason: 'No HotSpot interface was selected.' }
   }
 
   const probe = await attempt(client, target, '/ip/hotspot/print')
   if (!probe.ok) {
-    // No HotSpot package on this firmware. Optional, so not a failure.
     return {
       status: 'unsupported',
       skipReason: 'This firmware does not provide HotSpot.',
@@ -1136,66 +1211,431 @@ export const hotspotStage: StageFn = async (client, target, ctx) => {
     }
   }
 
+  if (selected.some((iface) =>
+    iface === ctx.session.wanInterface || ctx.session.managementInterfaces.includes(iface))) {
+    return {
+      status: 'failed',
+      error: 'A HotSpot LAN selection overlaps the WAN or management interface. '
+        + 'Choose customer-facing interfaces that are separate from the management path.',
+      retryable: false,
+    }
+  }
+
+  const interfaces = await attempt(client, target, '/interface/print')
+  const bridges = await attempt(client, target, '/interface/bridge/print')
+  const bridgePorts = await attempt(client, target, '/interface/bridge/port/print')
+  if (!interfaces.ok || !bridges.ok || !bridgePorts.ok) {
+    return {
+      status: 'failed',
+      error: 'The selected LAN topology could not be read safely. '
+        + [interfaces.error, bridges.error, bridgePorts.error].filter(Boolean).join(' '),
+      retryable: true,
+    }
+  }
+  const interfaceNames = new Set(interfaces.rows.map((row) => row.name))
+  if (selected.some((iface) => !interfaceNames.has(iface))) {
+    return {
+      status: 'failed',
+      error: 'One or more selected HotSpot interfaces no longer exist on the router.',
+      retryable: false,
+    }
+  }
+
+  const bridgeNames = new Set(bridges.rows.map((row) => row.name))
+  const parentByPort = new Map(bridgePorts.rows.map((row) => [row.interface ?? '', row.bridge ?? '']))
+  const parentBridges = new Set(selected.map((iface) =>
+    bridgeNames.has(iface) ? iface : parentByPort.get(iface) ?? '').filter(Boolean))
+  if (parentBridges.size > 1) {
+    return {
+      status: 'failed',
+      error: 'The selected HotSpot ports belong to different bridges. Select ports from '
+        + 'one existing bridge; provisioning will not detach or move live bridge ports.',
+      retryable: false,
+    }
+  }
+  const bridge = [...parentBridges][0] ?? ''
+  if (bridge && selected.some((iface) =>
+    iface !== bridge && parentByPort.get(iface) !== bridge)) {
+    return {
+      status: 'failed',
+      error: 'Selected HotSpot ports mix an existing bridge with unbridged ports. '
+        + 'Add the ports to one bridge deliberately, then retry.',
+      retryable: false,
+    }
+  }
+  if (!bridge && selected.length > 1) {
+    return {
+      status: 'failed',
+      error: 'Multiple unbridged HotSpot ports need a shared LAN bridge. Select one '
+        + 'existing bridge or add the customer ports to a bridge before provisioning.',
+      retryable: false,
+    }
+  }
+  const lanInterface = bridge || selected[0]
+  const protectedInterfaces = [
+    ...(ctx.session.wanInterface ? [ctx.session.wanInterface] : []),
+    ...ctx.session.managementInterfaces,
+  ].flatMap((iface) => [
+    iface,
+    bridgeNames.has(iface) ? iface : parentByPort.get(iface) ?? '',
+  ])
+  if (protectedInterfaces.includes(lanInterface)) {
+    return {
+      status: 'failed',
+      error: 'The resolved HotSpot LAN is also the WAN or management interface; '
+        + 'no network changes were made.',
+      retryable: false,
+    }
+  }
+
+  const addresses = await attempt(client, target, '/ip/address/print')
+  const routes = await attempt(client, target, '/ip/route/print')
+  const dhcpServers = await attempt(client, target, '/ip/dhcp-server/print')
+  const dhcpNetworks = await attempt(client, target, '/ip/dhcp-server/network/print')
+  const pools = await attempt(client, target, '/ip/pool/print')
+  const dns = await attempt(client, target, '/ip/dns/print')
+  if (!addresses.ok || !routes.ok || !dhcpServers.ok || !dhcpNetworks.ok
+    || !pools.ok || !dns.ok) {
+    return {
+      status: 'failed',
+      error: 'HotSpot LAN prerequisites could not be inspected. '
+        + [addresses.error, routes.error, dhcpServers.error, dhcpNetworks.error,
+          pools.error, dns.error].filter(Boolean).join(' '),
+      retryable: true,
+    }
+  }
+
+  const staticAddresses = addresses.rows.filter((row) =>
+    row.interface === lanInterface && !truthy(row.dynamic))
+  if (addresses.rows.some((row) => row.interface === lanInterface && truthy(row.dynamic))) {
+    return {
+      status: 'failed',
+      error: `The selected LAN ${lanInterface} has a dynamic address. Assign a stable `
+        + 'LAN address before enabling DHCP and HotSpot.',
+      retryable: false,
+    }
+  }
+  if (staticAddresses.length > 1) {
+    return {
+      status: 'failed',
+      error: `The selected LAN ${lanInterface} has multiple static addresses. `
+        + 'Resolve the gateway choice on the router before enabling DHCP.',
+      retryable: false,
+    }
+  }
+  const serversOnLan = dhcpServers.rows.filter((row) => row.interface === lanInterface)
+  if (serversOnLan.length > 1) {
+    return {
+      status: 'failed',
+      error: `More than one DHCP server is bound to ${lanInterface}. Resolve the duplicate `
+        + 'before provisioning.',
+      retryable: false,
+    }
+  }
+  const existingDhcpServer = serversOnLan[0]
+  if (staticAddresses.length === 0 && existingDhcpServer) {
+    return {
+      status: 'failed',
+      error: `A DHCP server already exists on ${lanInterface}, but it has no stable static `
+        + 'gateway address. Repair that LAN configuration before provisioning.',
+      retryable: false,
+    }
+  }
+  if (existingDhcpServer && !isOwned(existingDhcpServer)
+    && (truthy(existingDhcpServer.disabled) || !existingDhcpServer['address-pool'])) {
+    return {
+      status: 'failed',
+      error: `A non-ISPFlow DHCP server on ${lanInterface} is disabled or lacks a dynamic `
+        + 'pool. Configure it deliberately before attaching HotSpot.',
+      retryable: false,
+    }
+  }
+
+  const occupiedNetworks = [
+    ...addresses.rows.map((row) => row.address ?? ''),
+    ...routes.rows.map((row) => row['dst-address'] ?? ''),
+    ...dhcpNetworks.rows.map((row) => row.address ?? ''),
+  ].filter((value) => value && value !== '0.0.0.0/0')
+  let lanAddress = staticAddresses[0]?.address ?? ''
+  if (!lanAddress) {
+    const offset = [...ctx.session.tag].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 256
+    let candidate = ''
+    for (let i = 0; i < 256; i += 1) {
+      const third = (offset + i) % 256
+      const network = `10.250.${third}.0/24`
+      if (!occupiedNetworks.some((used) => networksOverlap(network, used))
+        && !pools.rows.some((pool) => poolOverlapsNetwork(pool.ranges ?? '', network))) {
+        candidate = network
+        break
+      }
+    }
+    if (!candidate) {
+      return {
+        status: 'failed',
+        error: 'No unused 10.250.0.0/16 /24 subnet was found. Choose a non-overlapping '
+          + 'HotSpot LAN subnet before retrying.',
+        retryable: false,
+      }
+    }
+    const gateway = `${candidate.slice(0, candidate.lastIndexOf('.'))}.1/24`
+    const addAddress = await attempt(client, target, '/ip/address/add', {
+      address: gateway,
+      interface: lanInterface,
+      comment: tag(ctx.session.tag),
+    })
+    if (!addAddress.ok) {
+      return {
+        status: 'failed',
+        error: `The gateway address could not be added to ${lanInterface}: ${addAddress.error}`,
+        retryable: true,
+      }
+    }
+    lanAddress = gateway
+  }
+
+  const [gatewayIp, prefixText] = lanAddress.split('/')
+  const lanNetwork = ipv4Network(lanAddress)
+  const gatewayNumber = ipv4Number(gatewayIp)
+  const prefix = prefixText === undefined ? 32 : Number(prefixText)
+  if (!lanNetwork || gatewayNumber === null || prefix > 30
+    || prefix < 16 || lanNetwork.end - lanNetwork.start < 15
+    || gatewayNumber === lanNetwork.start || gatewayNumber === lanNetwork.end) {
+    return {
+      status: 'failed',
+      error: `The selected LAN address "${lanAddress}" cannot provide a safe DHCP range.`,
+      retryable: false,
+    }
+  }
+  const networkCidr = `${ipv4Text(lanNetwork.start)}/${prefix}`
+  const reservedAddresses = [
+    ...addresses.rows.map((row) => row.address ?? '').filter(Boolean),
+    lanAddress,
+  ]
+  const dhcpNetwork = dhcpNetworks.rows.find((row) => row.address === networkCidr)
+  if (dhcpNetwork && dhcpNetwork.gateway && dhcpNetwork.gateway !== gatewayIp) {
+    return {
+      status: 'failed',
+      error: `A DHCP network already exists for ${networkCidr} with a different gateway. `
+        + 'Resolve that conflict before provisioning.',
+      retryable: false,
+    }
+  }
+  if (dhcpNetwork && (!dhcpNetwork.gateway || !dhcpNetwork['dns-server'])
+    && !isOwned(dhcpNetwork)) {
+    return {
+      status: 'failed',
+      error: `The DHCP network ${networkCidr} is missing its gateway or DNS and is not `
+        + 'ISPFlow-owned. Configure it deliberately before provisioning.',
+      retryable: false,
+    }
+  }
+  const poolName = `${OWNER}-${ctx.session.tag}-hs-clients`
+  const poolRange = availablePoolRanges(networkCidr, reservedAddresses)
+  if (!poolRange) {
+    return {
+      status: 'failed',
+      error: `No safe DHCP addresses remain in ${networkCidr} after excluding assigned addresses.`,
+      retryable: false,
+    }
+  }
+  const configuredDns = ctx.session.dns.length > 0
+    ? ctx.session.dns.join(',')
+    : (dns.rows[0]?.servers || dns.rows[0]?.['dynamic-servers'] || '1.1.1.1,8.8.8.8')
+  const serverPoolName = serversOnLan[0]?.['address-pool'] ?? ''
+  let dhcpPoolName = serverPoolName
+  if (serverPoolName) {
+    const existingPool = pools.rows.find((row) => row.name === serverPoolName)
+    if (!existingPool || !poolFitsNetwork(
+      existingPool.ranges ?? '',
+      networkCidr,
+      reservedAddresses,
+    )) {
+      return {
+        status: 'failed',
+        error: `The existing DHCP pool on ${lanInterface} does not fit ${networkCidr}. `
+          + 'Adjust that pool on the router before enabling HotSpot.',
+        retryable: false,
+      }
+    }
+  } else {
+    const poolRow = pools.rows.find((row) => row.name === poolName)
+    const poolWrite = poolRow
+      ? await attempt(client, target, '/ip/pool/set', {
+        ...addressing(poolRow), name: poolName, ranges: poolRange, comment: tag(ctx.session.tag),
+      })
+      : await attempt(client, target, '/ip/pool/add', {
+        name: poolName, ranges: poolRange, comment: tag(ctx.session.tag),
+      })
+    if (!poolWrite.ok) {
+      return {
+        status: 'failed',
+        error: `The HotSpot DHCP address pool could not be prepared: ${poolWrite.error}`,
+        retryable: true,
+      }
+    }
+    dhcpPoolName = poolName
+  }
+
+  if (dhcpNetwork && dhcpNetwork.gateway && dhcpNetwork['dns-server']) {
+    // An existing selected LAN resolver configuration is preserved.
+  } else {
+    const networkWrite = dhcpNetwork
+      ? await attempt(client, target, '/ip/dhcp-server/network/set', {
+        ...addressing(dhcpNetwork), address: networkCidr, gateway: gatewayIp,
+        'dns-server': configuredDns, comment: tag(ctx.session.tag),
+      })
+      : await attempt(client, target, '/ip/dhcp-server/network/add', {
+        address: networkCidr, gateway: gatewayIp,
+        'dns-server': configuredDns, comment: tag(ctx.session.tag),
+      })
+    if (!networkWrite.ok) {
+      return {
+        status: 'failed',
+        error: `The DHCP network could not be configured: ${networkWrite.error}`,
+        retryable: true,
+      }
+    }
+  }
+
+  const dhcpServer = existingDhcpServer
+  const dhcpParams: Record<string, string> = {
+    name: `${OWNER}-${ctx.session.tag}-dhcp`,
+    interface: lanInterface,
+    'address-pool': dhcpPoolName,
+    'lease-time': '1d',
+    disabled: 'false',
+    comment: tag(ctx.session.tag),
+  }
+  if (!dhcpServer || isOwned(dhcpServer)) {
+    const dhcpWrite = dhcpServer
+      ? await attempt(client, target, '/ip/dhcp-server/set', {
+        ...addressing(dhcpServer), ...dhcpParams,
+      })
+      : await attempt(client, target, '/ip/dhcp-server/add', dhcpParams)
+    if (!dhcpWrite.ok) {
+      return {
+        status: 'failed',
+        error: `The DHCP server could not be enabled on ${lanInterface}: ${dhcpWrite.error}`,
+        retryable: true,
+      }
+    }
+  }
+
+  const portalDir = `ispflow-${ctx.session.tag}-hotspot`
+  const files = await attempt(client, target, '/file/print')
+  if (!files.ok) {
+    return {
+      status: 'failed',
+      error: `RouterOS files could not be inspected before installing the captive portal: ${files.error}`,
+      retryable: true,
+    }
+  }
+  if (!files.rows.some((row) => row.name === portalDir)) {
+    const mkdir = await attempt(client, target, '/file/add', {
+      name: portalDir, type: 'directory',
+    })
+    if (!mkdir.ok) {
+      return {
+        status: 'failed',
+        error: `The ISPFlow captive portal directory could not be created: ${mkdir.error}`,
+        retryable: true,
+      }
+    }
+  }
+  for (const [filename, contents] of Object.entries(HOTSPOT_ASSETS)) {
+    const path = `${portalDir}/${filename}`
+    const existing = files.rows.find((row) => row.name === path)
+    const fileWrite = existing
+      ? await attempt(client, target, '/file/set', {
+        ...addressing(existing), contents,
+      })
+      : await attempt(client, target, '/file/add', { name: path, type: 'file', contents })
+    if (!fileWrite.ok) {
+      return {
+        status: 'failed',
+        error: `The captive portal file ${filename} could not be installed: ${fileWrite.error}`,
+        retryable: true,
+      }
+    }
+  }
+
+  const profileName = `${OWNER}-${ctx.session.tag}`
+  const profiles = await attempt(client, target, '/ip/hotspot/profile/print')
+  if (!profiles.ok) {
+    return {
+      status: 'failed',
+      error: `The HotSpot server profile could not be inspected: ${profiles.error}`,
+      retryable: true,
+    }
+  }
+  const profile = profiles.rows.find((row) => row.name === profileName)
+  const profileParams: Record<string, string> = {
+    name: profileName,
+    'hotspot-address': gatewayIp,
+    'html-directory': portalDir,
+    'login-by': 'http-chap,cookie',
+    'use-radius': ctx.session.radiusEnabled ? 'yes' : 'no',
+    'radius-accounting': ctx.session.radiusEnabled ? 'yes' : 'no',
+    comment: tag(ctx.session.tag),
+  }
+  const profileWrite = profile
+    ? await attempt(client, target, '/ip/hotspot/profile/set', {
+      ...addressing(profile), ...profileParams,
+    })
+    : await attempt(client, target, '/ip/hotspot/profile/add', profileParams)
+  if (!profileWrite.ok) {
+    return {
+      status: 'failed',
+      error: `The HotSpot profile could not be configured: ${profileWrite.error}`,
+      retryable: true,
+    }
+  }
+
   const servers = probe.rows
   const created: string[] = []
   const updated: string[] = []
-
-  for (const iface of ifaces) {
-    const name = `${OWNER}-${ctx.session.tag}-${iface}`
-    const params: Record<string, string> = {
-      name,
-      interface: iface,
-      'address-pool': ctx.session.hotspotPool ?? '',
-      profile: `${OWNER}-${ctx.session.tag}`,
-      comment: tag(ctx.session.tag),
-      'idle-timeout': `${ctx.session.idleTimeoutMin}m`,
-      'keepalive-timeout': `${ctx.session.sessionTimeoutMin}m`,
-      disabled: 'false',
-    }
-    // An empty pool or a profile that does not exist yet is a RouterOS error, and
-    // the honest thing is to omit them rather than send an empty string.
-    if (!ctx.session.hotspotPool) delete params['address-pool']
-
-    const existing = findOwned(servers, name)
-      // Something the operator put on this interface already: update it rather
-      // than adding a second server that would fight the first for the port.
-      ?? servers.find((r) => r.interface === iface)
-
-    if (existing) {
-      const set = await attempt(client, target, '/ip/hotspot/set', {
-        ...addressing(existing),
-        ...params,
-      })
-      if (!set.ok) {
-        return {
-          status: 'failed',
-          error: `The HotSpot server on ${iface} could not be updated: ${set.error}`,
-          retryable: true,
-        }
-      }
-      updated.push(iface)
-      continue
-    }
-
-    const add = await attempt(client, target, '/ip/hotspot/add', params)
-    if (!add.ok) {
-      return {
-        status: 'failed',
-        error: `A HotSpot server could not be created on ${iface}: ${add.error}`,
-        retryable: /timeout|temporarily/i.test(add.error ?? ''),
-      }
-    }
-    created.push(iface)
+  const serverParams: Record<string, string> = {
+    name: `${OWNER}-${ctx.session.tag}-${lanInterface}`,
+    interface: lanInterface,
+    'address-pool': 'none',
+    profile: profileName,
+    comment: tag(ctx.session.tag),
+    'idle-timeout': `${ctx.session.idleTimeoutMin}m`,
+    'keepalive-timeout': '2m',
+    disabled: 'false',
   }
+  const existing = findOwned(servers, serverParams.name)
+    ?? servers.find((row) => row.interface === lanInterface)
+  const serverWrite = existing
+    ? await attempt(client, target, '/ip/hotspot/set', {
+      ...addressing(existing), ...serverParams,
+    })
+    : await attempt(client, target, '/ip/hotspot/add', serverParams)
+  if (!serverWrite.ok) {
+    return {
+      status: 'failed',
+      error: `The HotSpot server could not be enabled on ${lanInterface}: ${serverWrite.error}`,
+      retryable: /timeout|temporarily/i.test(serverWrite.error ?? ''),
+    }
+  }
+  if (existing) updated.push(lanInterface)
+  else created.push(lanInterface)
 
   return {
     status: 'success',
     detail: {
-      interfaces: ifaces,
+      selected_interfaces: selected,
+      interface: lanInterface,
+      gateway: `${gatewayIp}/${prefix}`,
+      network: networkCidr,
+      dhcp_server: dhcpParams.name,
+      dns_servers: dhcpNetwork?.['dns-server'] || configuredDns,
+      captive_portal: Object.keys(HOTSPOT_ASSETS),
+      hotspot_profile: profileName,
+      radius_enabled: ctx.session.radiusEnabled,
       created,
       updated,
-      // What was already on other interfaces and deliberately left alone.
-      untouched: servers.filter((r) => !ifaces.includes(r.interface ?? '')).length,
+      untouched: servers.filter((row) => row.interface !== lanInterface).length,
     },
   }
 }
@@ -1305,9 +1745,109 @@ export const pppoeStage: StageFn = async (client, target, ctx) => {
 export const firewallNatStage: StageFn = async (client, target, ctx) => {
   const wan = ctx.session.wanInterface
   if (!wan) {
+    if (ctx.session.hotspotInterfaces.length > 0) {
+      return {
+        status: 'failed',
+        error: 'HotSpot was selected but no WAN interface was selected. Choose a WAN '
+          + 'interface in the wizard so internet access can be configured.',
+        retryable: false,
+      }
+    }
     return {
       status: 'skipped',
       skipReason: 'No WAN interface was selected, so no NAT rule was needed.',
+    }
+  }
+
+  const managementInterfaces = [...new Set(ctx.session.managementInterfaces)]
+  if (managementInterfaces.length > 0) {
+    const bridges = await attempt(client, target, '/interface/bridge/print')
+    const bridgePorts = await attempt(client, target, '/interface/bridge/port/print')
+    const vlans = await attempt(client, target, '/interface/vlan/print')
+    const pppoeClients = await attempt(client, target, '/interface/pppoe-client/print')
+    if (!bridges.ok || !bridgePorts.ok || !vlans.ok || !pppoeClients.ok) {
+      return {
+        status: 'failed',
+        error: 'Management and WAN interface topology could not be checked safely: '
+          + [bridges.error, bridgePorts.error, vlans.error, pppoeClients.error]
+            .filter(Boolean).join(' '),
+        retryable: true,
+      }
+    }
+    const parentByInterface = new Map(bridgePorts.rows.map((row) =>
+      [row.interface ?? '', row.bridge ?? '']))
+    for (const row of vlans.rows) {
+      if (row.name && row.interface) parentByInterface.set(row.name, row.interface)
+    }
+    for (const row of pppoeClients.rows) {
+      if (row.name && row.interface) parentByInterface.set(row.name, row.interface)
+    }
+    const interfaceAncestors = (iface: string) => {
+      const ancestors = new Set<string>()
+      let current = iface
+      while (current && !ancestors.has(current)) {
+        ancestors.add(current)
+        current = parentByInterface.get(current) ?? ''
+      }
+      return ancestors
+    }
+    const wanAncestors = interfaceAncestors(wan)
+    const overlapsWan = managementInterfaces.some((iface) => {
+      const managementAncestors = interfaceAncestors(iface)
+      return [...wanAncestors].some((ancestor) => managementAncestors.has(ancestor))
+    })
+    if (overlapsWan) {
+      return {
+        status: 'failed',
+        error: 'A management interface overlaps the selected WAN or its bridge. '
+          + 'Provisioning will not expose router input services to the upstream network.',
+        retryable: false,
+      }
+    }
+  }
+
+  const dhcpClients = await attempt(client, target, '/ip/dhcp-client/print')
+  const addresses = await attempt(client, target, '/ip/address/print')
+  if (!dhcpClients.ok || !addresses.ok) {
+    return {
+      status: 'failed',
+      error: 'The selected WAN could not be checked for an existing DHCP client or '
+        + `static address: ${dhcpClients.error ?? addresses.error}`,
+      retryable: true,
+    }
+  }
+  const wanDhcp = dhcpClients.rows.find((row) => row.interface === wan)
+  if (!wanDhcp && addresses.rows.some((row) =>
+    row.interface === wan && !truthy(row.dynamic))) {
+    return {
+      status: 'failed',
+      error: `The selected WAN ${wan} has a static address but no DHCP client. `
+        + 'Provisioning will not layer DHCP over an existing static WAN; change the '
+        + 'WAN addressing deliberately, then retry.',
+      retryable: false,
+    }
+  }
+  const dhcpClientWrite = wanDhcp
+    ? await attempt(client, target, '/ip/dhcp-client/set', {
+      ...addressing(wanDhcp),
+      interface: wan,
+      'add-default-route': 'yes',
+      'use-peer-dns': 'yes',
+      disabled: 'false',
+      comment: tag(ctx.session.tag),
+    })
+    : await attempt(client, target, '/ip/dhcp-client/add', {
+      interface: wan,
+      'add-default-route': 'yes',
+      'use-peer-dns': 'yes',
+      disabled: 'false',
+      comment: tag(ctx.session.tag),
+    })
+  if (!dhcpClientWrite.ok) {
+    return {
+      status: 'failed',
+      error: `The DHCP client could not be enabled on WAN ${wan}: ${dhcpClientWrite.error}`,
+      retryable: true,
     }
   }
 
@@ -1376,29 +1916,89 @@ export const firewallNatStage: StageFn = async (client, target, ctx) => {
   // out by a router that blocks input by default. Additive: if a rule already
   // accepts the platform, this is skipped rather than duplicated.
   const filter = await attempt(client, target, '/ip/firewall/filter/print')
+  if (!filter.ok) {
+    return {
+      status: 'failed',
+      error: `Firewall rules could not be read before enabling subscriber traffic: ${filter.error}`,
+      retryable: true,
+    }
+  }
+  let hotspotLan = ctx.session.hotspotInterfaces[0] ?? ''
+  if (ctx.session.hotspotInterfaces.length > 0) {
+    const hs = await attempt(client, target, '/ip/hotspot/print')
+    const managed = hs.ok
+      ? hs.rows.find((row) => row.profile === `${OWNER}-${ctx.session.tag}`)
+      : null
+    if (!managed?.interface) {
+      return {
+        status: 'failed',
+        error: 'The selected HotSpot LAN has no configured ISPFlow server, so its '
+          + 'traffic cannot be safely opened to the WAN.',
+        retryable: false,
+      }
+    }
+    hotspotLan = managed.interface
+  }
+  let forwardRuleAdded = false
+  if (hotspotLan) {
+    const haveForward = filter.rows.some((row) =>
+      row.chain === 'forward'
+      && row.action === 'accept'
+      && row['in-interface'] === hotspotLan
+      && row['out-interface'] === wan)
+    if (!haveForward) {
+      const firstBlock = filter.rows.find((row) =>
+        row.chain === 'forward' && ['drop', 'reject'].includes(row.action ?? ''))
+      const params: Record<string, string> = {
+        name: `${OWNER}-${ctx.session.tag}-forward`,
+        chain: 'forward',
+        action: 'accept',
+        'in-interface': hotspotLan,
+        'out-interface': wan,
+        'connection-state': 'new,established,related',
+        comment: tag(ctx.session.tag),
+      }
+      if (firstBlock?.['.id']) params['place-before'] = firstBlock['.id']
+      const forward = await attempt(client, target, '/ip/firewall/filter/add', params)
+      if (!forward.ok) {
+        return {
+          status: 'failed',
+          error: `Subscriber traffic from ${hotspotLan} to ${wan} could not be allowed: ${forward.error}`,
+          retryable: true,
+        }
+      }
+      forwardRuleAdded = true
+    }
+  }
   const mgmtRule = `${OWNER}-${ctx.session.tag}-mgmt`
   let mgmtAdded = false
 
-  if (filter.ok) {
-    const haveMgmt = findOwned(filter.rows, mgmtRule)
-    if (!haveMgmt) {
-      // Only the management interfaces the ISP nominated. Adding an input accept
-      // for the whole internet would be a security hole, so this is deliberately
-      // narrow and is skipped entirely when no management port was chosen.
-      const mgmtIfaces = ctx.session.managementInterfaces
-      if (mgmtIfaces.length > 0) {
-        const add = await attempt(client, target, '/ip/firewall/filter/add', {
-          name: mgmtRule,
-          chain: 'input',
-          action: 'accept',
-          'in-interface': mgmtIfaces.join(','),
-          comment: tag(ctx.session.tag),
-        })
-        if (add.ok) mgmtAdded = true
-        // A failure here is NOT fatal. The router is already reachable - this
-        // stage is running through it - and refusing to continue here would
-        // strand a router that is otherwise perfectly fine.
+  const haveMgmt = findOwned(filter.rows, mgmtRule)
+  if (!haveMgmt) {
+    // Only the management interfaces the ISP nominated. Adding an input accept
+    // for the whole internet would be a security hole, so this is deliberately
+    // narrow and is skipped entirely when no management port was chosen.
+    const mgmtIfaces = managementInterfaces
+    if (mgmtIfaces.length > 0) {
+      const firstInputBlock = filter.rows.find((row) =>
+        row.chain === 'input' && ['drop', 'reject'].includes(row.action ?? ''))
+      const params: Record<string, string> = {
+        name: mgmtRule,
+        chain: 'input',
+        action: 'accept',
+        'in-interface': mgmtIfaces.join(','),
+        comment: tag(ctx.session.tag),
       }
+      if (firstInputBlock?.['.id']) params['place-before'] = firstInputBlock['.id']
+      const add = await attempt(client, target, '/ip/firewall/filter/add', params)
+      if (!add.ok) {
+        return {
+          status: 'failed',
+          error: `Management access could not be allowed on ${mgmtIfaces.join(', ')}: ${add.error}`,
+          retryable: /timeout|temporarily/i.test(add.error ?? ''),
+        }
+      }
+      mgmtAdded = true
     }
   }
 
@@ -1408,6 +2008,8 @@ export const firewallNatStage: StageFn = async (client, target, ctx) => {
       wan,
       nat_created: created,
       nat_updated: updated,
+      wan_dhcp_client: wanDhcp ? 'updated' : 'created',
+      hotspot_forward_rule_added: forwardRuleAdded,
       mgmt_rule_added: mgmtAdded,
       // Evidence that nothing was removed, for the operator to check later.
       nat_rules_preserved: nat.rows.length,
@@ -1495,6 +2097,8 @@ export const packageSyncStage: StageFn = async (client, target, ctx) => {
       name,
       'rate-limit': limit,
       'shared-users': String(Math.max(1, plan.shared_users || 1)),
+      'session-timeout': `${ctx.session.sessionTimeoutMin}m`,
+      'idle-timeout': `${ctx.session.idleTimeoutMin}m`,
       comment: tag(ctx.session.tag),
     }
     const existing = findOwned(hotspotProfiles.rows, name)
@@ -1855,12 +2459,105 @@ export const verificationStage: StageFn = async (client, target, ctx) => {
     if (!hs.ok) {
       problems.push(`HotSpot was selected but this router has none: ${hs.error}`)
     } else {
-      const missing = ctx.session.hotspotInterfaces
-        .filter((i) => !hs.rows.some((r) => r.interface === i))
-      if (missing.length > 0) {
-        problems.push(`No HotSpot server is running on ${missing.join(', ')}.`)
+      const server = hs.rows.find((row) =>
+        row.profile === `${OWNER}-${ctx.session.tag}` && !truthy(row.disabled))
+      if (!server?.interface) {
+        problems.push(`No enabled ISPFlow HotSpot server exists for selected interfaces `
+          + `${ctx.session.hotspotInterfaces.join(', ')}.`)
       } else {
-        evidence.hotspot = hs.rows.length
+        const bridgePorts = await attempt(client, target, '/interface/bridge/port/print')
+        const uncovered = ctx.session.hotspotInterfaces.filter((iface) =>
+          iface !== server.interface
+          && !(bridgePorts.ok && bridgePorts.rows.some((port) =>
+            port.interface === iface && port.bridge === server.interface)))
+        if (uncovered.length > 0) {
+          problems.push(`The HotSpot server does not cover selected interfaces: ${uncovered.join(', ')}.`)
+        }
+
+        const profile = await attempt(client, target, '/ip/hotspot/profile/print')
+        const portalProfile = profile.ok
+          ? profile.rows.find((row) => row.name === `${OWNER}-${ctx.session.tag}`)
+          : null
+        const portalDir = `ispflow-${ctx.session.tag}-hotspot`
+        if (!portalProfile || portalProfile['html-directory'] !== portalDir) {
+          problems.push('The local captive-portal profile is missing or points to the wrong directory.')
+        } else if (ctx.session.radiusEnabled && !truthy(portalProfile['use-radius'])) {
+          problems.push('The HotSpot profile is not configured to authenticate through RADIUS.')
+        }
+
+        const files = await attempt(client, target, '/file/print')
+        const missingAssets = Object.keys(HOTSPOT_ASSETS).filter((name) =>
+          !files.ok || !files.rows.some((file) => file.name === `${portalDir}/${name}`))
+        if (missingAssets.length > 0) {
+          problems.push(`Captive-portal files are missing: ${missingAssets.join(', ')}.`)
+        }
+
+        const addresses = await attempt(client, target, '/ip/address/print')
+        const address = addresses.ok
+          ? addresses.rows.find((row) => row.interface === server.interface
+            && !truthy(row.dynamic) && ipv4Network(row.address ?? ''))
+          : null
+        const dhcp = await attempt(client, target, '/ip/dhcp-server/print')
+        const dhcpServer = dhcp.ok
+          ? dhcp.rows.find((row) => row.interface === server.interface && !truthy(row.disabled))
+          : null
+        if (!address || !dhcpServer) {
+          problems.push('The HotSpot LAN is missing its static gateway address or enabled DHCP server.')
+        } else {
+          const network = ipv4Network(address.address)
+          const gateway = address.address.split('/')[0]
+          const networks = await attempt(client, target, '/ip/dhcp-server/network/print')
+          const dhcpNetwork = network && networks.ok
+            ? networks.rows.find((row) =>
+              row.address === `${ipv4Text(network.start)}/${address.address.split('/')[1]}`
+              && row.gateway === gateway && !!row['dns-server'])
+            : null
+          if (!dhcpNetwork) {
+            problems.push('The HotSpot DHCP network does not advertise the LAN gateway and DNS.')
+          }
+        }
+
+        if (uncovered.length === 0) evidence.hotspot = {
+          interface: server.interface,
+          server_count: hs.rows.length,
+          captive_portal_files: Object.keys(HOTSPOT_ASSETS).length,
+        }
+      }
+    }
+  }
+
+  if (ctx.session.wanInterface) {
+    const dhcpClients = await attempt(client, target, '/ip/dhcp-client/print')
+    const clientRow = dhcpClients.ok
+      ? dhcpClients.rows.find((row) => row.interface === ctx.session.wanInterface
+        && !truthy(row.disabled))
+      : null
+    if (!clientRow || clientRow.status !== 'bound') {
+      problems.push(`The selected WAN ${ctx.session.wanInterface} has no active DHCP lease. `
+        + 'Check the WAN cable and upstream DHCP service.')
+    } else {
+      evidence.wan_dhcp = ctx.session.wanInterface
+    }
+    const nat = await attempt(client, target, '/ip/firewall/nat/print')
+    const masquerade = nat.ok && nat.rows.some((row) =>
+      row.chain === 'srcnat'
+      && row['out-interface'] === ctx.session.wanInterface
+      && row.action === 'masquerade')
+    if (!masquerade) {
+      problems.push(`No source-NAT masquerade is configured for WAN ${ctx.session.wanInterface}.`)
+    }
+    if (ctx.session.hotspotInterfaces.length > 0) {
+      const hs = await attempt(client, target, '/ip/hotspot/print')
+      const server = hs.ok
+        ? hs.rows.find((row) => row.profile === `${OWNER}-${ctx.session.tag}`)
+        : null
+      const filter = await attempt(client, target, '/ip/firewall/filter/print')
+      if (!server?.interface || !filter.ok || !filter.rows.some((row) =>
+        row.chain === 'forward'
+        && row.action === 'accept'
+        && row['in-interface'] === server.interface
+        && row['out-interface'] === ctx.session.wanInterface)) {
+        problems.push('The firewall does not allow the configured HotSpot LAN to reach the WAN.')
       }
     }
   }

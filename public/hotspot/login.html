@@ -3,48 +3,55 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ultrafaiba Hotspot Login</title>
+    <title>Hotspot Login</title>
     <link rel="stylesheet" href="style.css" />
+    <script src="md5.js"></script>
     <script>
       function submitLogin() {
-        const form = document.forms.login;
-        form.password.value = form.username.value;
-        return true;
+        var form = document.forms.login;
+        var challenge = "$(chap-challenge)";
+        var id = "$(chap-id)";
+        if (!challenge || !id) return false;
+        document.forms.sendin.username.value = form.username.value;
+        document.forms.sendin.password.value = hexMD5(id + form.password.value + challenge);
+        document.forms.sendin.submit();
+        return false;
       }
     </script>
   </head>
   <body>
     <main class="shell">
       <section class="panel hero">
-        <p class="eyebrow">Ultrafaiba Internet Services</p>
-        <h1>Connect instantly to your hotspot</h1>
-        <p class="lead">
-          Use your voucher code or phone number to get online without changing your current MikroTik configuration.
-        </p>
+        <p class="eyebrow">ISPFlow Hotspot</p>
+        <h1>Connect to the internet</h1>
+        <p class="lead">Sign in with the username and password provided by your internet provider.</p>
 
-        <div class="card accent">
-          <span class="label">M-Pesa Payment</span>
-          <strong class="big">0724167975</strong>
-          <span class="muted">Send payment to this number if you need to buy or renew access.</span>
-        </div>
+        <form name="sendin" action="$(link-login-only)" method="post">
+          <input type="hidden" name="username" />
+          <input type="hidden" name="password" />
+          <input type="hidden" name="dst" value="$(link-orig)" />
+          <input type="hidden" name="popup" value="true" />
+        </form>
 
         <form name="login" class="form" action="$(link-login-only)" method="post" onsubmit="return submitLogin()">
           <input type="hidden" name="dst" value="$(link-orig)" />
           <input type="hidden" name="popup" value="true" />
 
           <label>
-            Voucher code or phone number
-            <input name="username" type="text" placeholder="Enter code or number" autocomplete="username" required />
+            Username or voucher code
+            <input name="username" type="text" placeholder="Enter your username" autocomplete="username" required />
           </label>
 
-          <input name="password" type="hidden" value="" />
+          <label>
+            Password
+            <input name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required />
+          </label>
 
-          <button type="submit">Connect Now</button>
+          <button type="submit">Connect</button>
         </form>
 
         <div class="note">
-          <span>Already paid? Enter your voucher code and connect immediately.</span>
-          <span>Need help? support@ultrafaiba.net</span>
+          <span>Need access? Contact your internet provider.</span>
         </div>
       </section>
     </main>

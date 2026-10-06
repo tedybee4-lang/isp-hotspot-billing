@@ -16,7 +16,7 @@ import type { JobStore, RouterJob } from './runner.ts'
 import type { RouterTarget } from './router-client.ts'
 import type { HandlerContext, ProvisioningWork } from './handlers.ts'
 import type { StageStatus, DiscoveredPool } from './stages.ts'
-import { resolvePppPools, resolveHotspotPool } from './stages.ts'
+import { resolvePppPools } from './stages.ts'
 
 /**
  * Which network service a customer's plan delivers.
@@ -451,11 +451,8 @@ export class Db implements JobStore {
     })).filter((p) => p.name !== '')
 
     const discoveredPpp = resolvePppPools(pools)
-    const discoveredHs = resolveHotspotPool(pools, { exclude: discoveredPpp.source })
-
     const pppLocal = answers['ppp_local'] || discoveredPpp.local
     const pppRemote = answers['ppp_remote'] || discoveredPpp.remote
-    const hotspotPool = answers['hotspot_pool'] || discoveredHs.pool
 
     return {
       session: {
@@ -484,7 +481,6 @@ export class Db implements JobStore {
         idleTimeoutMin: Number(answers['idle_timeout_min'] ?? 5),
         pppLocal: pppLocal ?? null,
         pppRemote: pppRemote ?? null,
-        hotspotPool: hotspotPool ?? null,
       },
       stageStatuses,
       stageOrder: order,

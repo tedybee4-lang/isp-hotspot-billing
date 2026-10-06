@@ -8,11 +8,12 @@
  * against a physical MikroTik.
  */
 import { describe, expect, it, beforeEach } from 'vitest'
+import { runInNewContext } from 'node:vm'
 import {
   OWNER, LEGACY_OWNER, isOwned, safeName, addressing,
   parseSpeedMbps, rateLimit, runStage,
   redactParams, isSecretParam, operationOf,
-  resolvePppPools, resolveHotspotPool, rangeSize, parseRange, parseRanges,
+  resolvePppPools, rangeSize, parseRange, parseRanges,
   classifyWireGuard, versionSupportsWireGuard, formatRate,
   STAGE_IMPLEMENTATIONS, WORKER_STAGE_NAMES,
   backupStage, connectivityStage, secureTunnelStage, radiusStage,
@@ -78,7 +79,6 @@ const session = (over: Partial<StageContext['session']> = {}): StageContext['ses
   idleTimeoutMin: 5,
   pppLocal: null,
   pppRemote: null,
-  hotspotPool: null,
   ...over,
 })
 
@@ -95,6 +95,32 @@ const ctx = (over: Partial<StageContext> = {}): StageContext => ({
 
 let r: FakeRouter
 beforeEach(() => { r = new FakeRouter() })
+
+function hotspotPrerequisites(): void {
+  r.rows['/interface/print'] = [
+    { name: 'ether1' }, { name: 'ether2' }, { name: 'ether3' }, { name: 'bridge' },
+  ]
+  r.rows['/interface/bridge/print'] = []
+  r.rows['/interface/bridge/port/print'] = []
+  r.rows['/ip/address/print'] = []
+  r.rows['/ip/route/print'] = []
+  r.rows['/ip/dhcp-server/print'] = []
+  r.rows['/ip/dhcp-server/network/print'] = []
+  r.rows['/ip/pool/print'] = []
+  r.rows['/ip/dns/print'] = [{ servers: '1.1.1.1,8.8.8.8' }]
+  r.rows['/file/print'] = []
+  r.rows['/ip/hotspot/profile/print'] = []
+}
+
+function firewallPrerequisites(): void {
+  r.rows['/ip/dhcp-client/print'] = []
+  r.rows['/ip/address/print'] = []
+  r.rows['/ip/hotspot/print'] = [{
+    name: `${OWNER}-ab12cd34-ether2`,
+    interface: 'ether2',
+    profile: `${OWNER}-ab12cd34`,
+  }]
+}
 
 // ── 1-3. Router generations ───────────────────────────────────────────────
 
@@ -132,6 +158,7 @@ describe('the engine works on every router generation', () => {
 
 describe('it configures only what was selected', () => {
   it('4. HotSpot only writes no PPPoE objects', async () => {
+    hotspotPrerequisites()
     r.rows['/ip/hotspot/print'] = []
     await hotspotStage(r.client, target, ctx({ session: session({ role: 'hotspot' }) }))
     expect(r.commandsMatching(/pppoe|secret/)).toHaveLength(0)
@@ -150,6 +177,7 @@ describe('it configures only what was selected', () => {
   })
 
   it('6. HotSpot and PPPoE write both, each to its own interface', async () => {
+    hotspotPrerequisites()
     r.rows['/ip/hotspot/print'] = []
     r.rows['/interface/pppoe-server/print'] = []
     const c = ctx({
@@ -183,6 +211,7 @@ describe('it configures only what was selected', () => {
 
 describe('it never disturbs what the router already has', () => {
   it('7. existing firewall rules are preserved', async () => {
+    firewallPrerequisites()
     r.rows['/ip/firewall/nat/print'] = [
       { '.id': '*1', name: 'operator-rule', action: 'accept', comment: 'uplink' },
       { '.id': '*2', name: 'other', chain: 'input' },
@@ -199,22 +228,34 @@ describe('it never disturbs what the router already has', () => {
   })
 
   it('8. existing VLANs are untouched', async () => {
+    firewallPrerequisites()
     r.rows['/ip/firewall/nat/print'] = []
     r.rows['/ip/firewall/filter/print'] = []
     await firewallNatStage(r.client, target, ctx())
-    // The stage never reads or writes VLANs at all.
-    expect(r.commandsMatching(/vlan/)).toHaveLength(0)
+    // VLAN topology may be read to avoid exposing router input through a WAN
+    // parent, but the stage never changes VLAN configuration.
+    expect(r.commandsMatching(/vlan/).every((call) =>
+      call.command === '/interface/vlan/print')).toBe(true)
+    expect(r.writes().filter((call) => /vlan/.test(call.command))).toHaveLength(0)
   })
 
   it('9. existing bridges are not rebuilt', async () => {
-    r.rows['/interface/print'] = [{ name: 'bridge', type: 'bridge' }]
+    hotspotPrerequisites()
+    r.rows['/interface/print'] = [{ name: 'bridge' }, { name: 'ether2' }]
+    r.rows['/interface/bridge/print'] = [{ name: 'bridge' }]
+    r.rows['/interface/bridge/port/print'] = [{ interface: 'ether2', bridge: 'bridge' }]
     r.rows['/ip/hotspot/print'] = []
-    await discoveryStage(r.client, target, ctx())
-    await hotspotStage(r.client, target, ctx())
-    expect(r.commandsMatching(/bridge/)).toHaveLength(0)
+    await discoveryStage(r.client, target, ctx({
+      session: session({ managementInterfaces: [] }),
+    }))
+    await hotspotStage(r.client, target, ctx({
+      session: session({ managementInterfaces: [] }),
+    }))
+    expect(r.commandsMatching(/\/interface\/bridge\/(add|set|remove)$/)).toHaveLength(0)
   })
 
   it('10. an existing WAN is kept; only masquerade is ensured', async () => {
+    firewallPrerequisites()
     // A real RouterOS srcnat row: bound to the WAN and already masquerading.
     r.rows['/ip/firewall/nat/print'] = [{
       '.id': '*9', name: 'nat-wan', chain: 'srcnat',
@@ -371,13 +412,21 @@ describe('resume and idempotency', () => {
   })
 
   it('18. running twice does not create a second copy', async () => {
+    firewallPrerequisites()
     r.rows['/ip/firewall/nat/print'] = []
     r.rows['/ip/firewall/filter/print'] = []
     await firewallNatStage(r.client, target, ctx())
 
     // The router now reports what we created, as it would on a re-run.
     r.rows['/ip/firewall/nat/print'] = [{ '.id': '*1', name: `${OWNER}-ab12cd34-out` }]
-    r.rows['/ip/firewall/filter/print'] = [{ '.id': '*2', name: `${OWNER}-ab12cd34-mgmt` }]
+    r.rows['/ip/firewall/filter/print'] = [
+      { '.id': '*2', name: `${OWNER}-ab12cd34-mgmt` },
+      {
+        '.id': '*3', name: `${OWNER}-ab12cd34-forward`, chain: 'forward',
+        action: 'accept', 'in-interface': 'ether2', 'out-interface': 'ether1',
+      },
+    ]
+    r.rows['/ip/dhcp-client/print'] = [{ '.id': '*4', interface: 'ether1' }]
     r.calls.length = 0
 
     await firewallNatStage(r.client, target, ctx())
@@ -385,6 +434,7 @@ describe('resume and idempotency', () => {
   })
 
   it('does not create a second HotSpot server on an interface that has one', async () => {
+    hotspotPrerequisites()
     r.rows['/ip/hotspot/print'] = [{ '.id': '*1', name: 'existing', interface: 'ether2' }]
     const out = await hotspotStage(r.client, target, ctx())
     expect(out.detail?.updated).toEqual(['ether2'])
@@ -392,6 +442,7 @@ describe('resume and idempotency', () => {
   })
 
   it('leaves a HotSpot server on an unselected interface alone', async () => {
+    hotspotPrerequisites()
     r.rows['/ip/hotspot/print'] = [
       { '.id': '*1', name: 'other-branch', interface: 'ether5' },
     ]
@@ -399,6 +450,72 @@ describe('resume and idempotency', () => {
     // It may be serving another branch or a reseller. Not ours to touch.
     expect(out.detail?.untouched).toBe(1)
     expect(r.commandsMatching(/\/remove/)).toHaveLength(0)
+  })
+
+  it('prepares DHCP, DNS, a local portal and a RADIUS-aware HotSpot profile', async () => {
+    hotspotPrerequisites()
+    r.rows['/ip/hotspot/print'] = []
+    const out = await hotspotStage(r.client, target, ctx({
+      session: session({ radiusEnabled: true, dns: ['9.9.9.9'] }),
+    }))
+
+    expect(out.status).toBe('success')
+    expect(r.writes().some((call) => call.command === '/ip/address/add')).toBe(true)
+    expect(r.writes().some((call) => call.command === '/ip/dhcp-server/add')).toBe(true)
+    expect(r.writes().some((call) => call.command === '/ip/dhcp-server/network/add'
+      && call.params['dns-server'] === '9.9.9.9')).toBe(true)
+    const pool = r.writes().find((call) => call.command === '/ip/pool/add')
+    expect(pool?.params.ranges).toMatch(/^10\.250\.\d+\.2-10\.250\.\d+\.254$/)
+    const profile = r.writes().find((call) => call.command === '/ip/hotspot/profile/add')
+    expect(profile?.params['login-by']).toBe('http-chap,cookie')
+    expect(profile?.params['use-radius']).toBe('yes')
+    expect(profile?.params['html-directory']).toBe('ispflow-ab12cd34-hotspot')
+    const portal = r.writes().filter((call) =>
+      call.command === '/file/add' && call.params.contents)
+    expect(portal.map((call) => call.params.name)).toContain(
+      'ispflow-ab12cd34-hotspot/login.html',
+    )
+    expect(portal.some((call) => call.params.contents.includes('Ultrafaiba'))).toBe(false)
+    const md5 = portal.find((call) => call.params.name.endsWith('/md5.js'))
+    expect(md5).toBeDefined()
+    if (!md5) throw new Error('HotSpot CHAP MD5 asset was not installed.')
+    const browserContext: { hexMD5?: (value: string) => string } = {}
+    runInNewContext(md5.params.contents, browserContext)
+    expect(browserContext.hexMD5?.('')).toBe('d41d8cd98f00b204e9800998ecf8427e')
+    expect(browserContext.hexMD5?.('abc')).toBe('900150983cd24fb0d6963f7d28e17f72')
+  })
+
+  it('does not attach multiple unbridged customer ports to an invented network', async () => {
+    hotspotPrerequisites()
+    const out = await hotspotStage(r.client, target, ctx({
+      session: session({ hotspotInterfaces: ['ether2', 'ether3'] }),
+    }))
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/existing bridge/)
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('does not choose a HotSpot subnet that overlaps an existing route', async () => {
+    hotspotPrerequisites()
+    r.rows['/ip/route/print'] = [{ 'dst-address': '10.0.0.0/8' }]
+    const out = await hotspotStage(r.client, target, ctx())
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/unused 10\.250/)
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('excludes the router gateway from a new DHCP pool', async () => {
+    hotspotPrerequisites()
+    r.rows['/ip/address/print'] = [{
+      interface: 'ether2', address: '192.168.10.10/24',
+    }]
+    r.rows['/ip/route/print'] = [{ 'dst-address': '192.168.10.0/24' }]
+    const out = await hotspotStage(r.client, target, ctx())
+    expect(out.status).toBe('success')
+    const pool = r.writes().find((call) => call.command === '/ip/pool/add')
+    const ranges = pool?.params.ranges ?? ''
+    expect(ranges).not.toMatch(/192\.168\.10\.10(?:-|$)/)
+    expect(ranges).toContain('192.168.10.11-192.168.10.254')
   })
 })
 
@@ -420,6 +537,8 @@ describe('packages come from the database', () => {
     }))
     const add = r.writes().find((c) => c.command === '/ip/hotspot/user/profile/add')
     expect(add?.params['rate-limit']).toBe('3M')
+    expect(add?.params['session-timeout']).toBe('30m')
+    expect(add?.params['idle-timeout']).toBe('5m')
   })
 
   it('21. a hidden-but-active package is still provisioned', async () => {
@@ -510,6 +629,7 @@ describe('customer sync mirrors, it never decides', () => {
 
 describe('tenant isolation', () => {
   it('24. a stage result never carries the tenant id onto the device', async () => {
+    firewallPrerequisites()
     r.rows['/ip/firewall/nat/print'] = []
     r.rows['/ip/firewall/filter/print'] = []
     const out = await firewallNatStage(r.client, target, ctx())
@@ -541,6 +661,7 @@ describe('a legacy NETISP router', () => {
   })
 
   it('reuses a legacy-tagged NAT rule instead of adding a second one', async () => {
+    firewallPrerequisites()
     r.rows['/ip/firewall/nat/print'] = [{
       '.id': '*5', name: 'netisp-nat', chain: 'srcnat',
       'out-interface': 'ether1', action: 'masquerade',
@@ -551,6 +672,65 @@ describe('a legacy NETISP router', () => {
     // An existing masquerade is adopted in place, not shadowed by a new rule.
     expect(r.writes().filter((c) => c.command === '/ip/firewall/nat/add')).toHaveLength(0)
     expect(out.detail?.nat_updated).toBe(true)
+  })
+
+  it('refuses to add a DHCP client over a static WAN address', async () => {
+    firewallPrerequisites()
+    r.rows['/ip/address/print'] = [{ interface: 'ether1', address: '198.51.100.2/24' }]
+    const out = await firewallNatStage(r.client, target, ctx())
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/static address/)
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('places LAN egress before blocking rules without accepting invalid traffic', async () => {
+    firewallPrerequisites()
+    r.rows['/ip/firewall/filter/print'] = [
+      { '.id': '*3', chain: 'forward', action: 'drop', comment: 'invalid' },
+    ]
+    const out = await firewallNatStage(r.client, target, ctx())
+    expect(out.status).toBe('success')
+    const forward = r.writes().find((call) => call.command === '/ip/firewall/filter/add')
+    expect(forward?.params['place-before']).toBe('*3')
+    expect(forward?.params['connection-state']).toBe('new,established,related')
+  })
+
+  it('places selected management access before input blocking rules', async () => {
+    firewallPrerequisites()
+    r.rows['/ip/firewall/filter/print'] = [
+      { '.id': '*4', chain: 'input', action: 'drop' },
+    ]
+    const out = await firewallNatStage(r.client, target, ctx())
+    expect(out.status).toBe('success')
+    const management = r.writes().find((call) =>
+      call.command === '/ip/firewall/filter/add'
+      && call.params.name === `${OWNER}-ab12cd34-mgmt`)
+    expect(management?.params['place-before']).toBe('*4')
+  })
+
+  it('refuses to expose router input through the WAN bridge', async () => {
+    firewallPrerequisites()
+    r.rows['/interface/bridge/print'] = [{ name: 'bridge-wan' }]
+    r.rows['/interface/bridge/port/print'] = [{
+      interface: 'ether1', bridge: 'bridge-wan',
+    }]
+    const out = await firewallNatStage(r.client, target, ctx({
+      session: session({ managementInterfaces: ['bridge-wan'] }),
+    }))
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/overlaps the selected WAN/)
+    expect(r.writes()).toHaveLength(0)
+  })
+
+  it('reports a failed management firewall rule instead of claiming success', async () => {
+    firewallPrerequisites()
+    r.rows['/ip/firewall/filter/print'] = []
+    r.fail['/ip/firewall/filter/add'] = 'permission denied'
+    const out = await firewallNatStage(r.client, target, ctx({
+      session: session({ hotspotInterfaces: [] }),
+    }))
+    expect(out.status).toBe('failed')
+    expect(out.error).toMatch(/Management access could not be allowed/)
   })
 })
 
@@ -595,9 +775,43 @@ describe('the stage registry', () => {
 
 describe('verification reads rather than trusts', () => {
   const ready = () => {
-    r.rows['/file/print'] = [{ name: `ispflow-backup-ab12cd34-binary.backup`, size: '900' }]
+    r.rows['/file/print'] = [
+      { name: `ispflow-backup-ab12cd34-binary.backup`, size: '900' },
+      { name: 'ispflow-ab12cd34-hotspot' },
+      { name: 'ispflow-ab12cd34-hotspot/login.html' },
+      { name: 'ispflow-ab12cd34-hotspot/alogin.html' },
+      { name: 'ispflow-ab12cd34-hotspot/error.html' },
+      { name: 'ispflow-ab12cd34-hotspot/logout.html' },
+      { name: 'ispflow-ab12cd34-hotspot/status.html' },
+      { name: 'ispflow-ab12cd34-hotspot/style.css' },
+      { name: 'ispflow-ab12cd34-hotspot/md5.js' },
+    ]
     r.rows['/ip/service/print'] = [{ name: 'api', port: '8728', disabled: 'false' }]
-    r.rows['/ip/hotspot/print'] = [{ interface: 'ether2' }]
+    r.rows['/ip/hotspot/print'] = [{
+      interface: 'ether2', profile: `${OWNER}-ab12cd34`, disabled: 'false',
+    }]
+    r.rows['/ip/hotspot/profile/print'] = [{
+      name: `${OWNER}-ab12cd34`,
+      'html-directory': 'ispflow-ab12cd34-hotspot',
+      'use-radius': 'false',
+    }]
+    r.rows['/ip/address/print'] = [{ interface: 'ether2', address: '10.250.1.1/24' }]
+    r.rows['/ip/dhcp-server/print'] = [{
+      interface: 'ether2', 'address-pool': `${OWNER}-ab12cd34-hs-clients`,
+      disabled: 'false',
+    }]
+    r.rows['/ip/dhcp-server/network/print'] = [{
+      address: '10.250.1.0/24', gateway: '10.250.1.1', 'dns-server': '1.1.1.1',
+    }]
+    r.rows['/ip/dhcp-client/print'] = [{
+      interface: 'ether1', disabled: 'false', status: 'bound',
+    }]
+    r.rows['/ip/firewall/nat/print'] = [{
+      chain: 'srcnat', 'out-interface': 'ether1', action: 'masquerade',
+    }]
+    r.rows['/ip/firewall/filter/print'] = [{
+      chain: 'forward', action: 'accept', 'in-interface': 'ether2', 'out-interface': 'ether1',
+    }]
   }
 
   it('fails when the backup is gone', async () => {
@@ -663,6 +877,7 @@ describe('object names cannot change what a script means', () => {
   })
 
   it('tags everything it creates with the current ownership tag', async () => {
+    firewallPrerequisites()
     r.rows['/ip/firewall/nat/print'] = []
     r.rows['/ip/firewall/filter/print'] = []
     await firewallNatStage(r.client, target, ctx())
@@ -853,22 +1068,6 @@ describe('pools are resolved from the router, not asked for', () => {
     // A guessed range that overlaps the LAN takes the router down.
   })
 
-  it('keeps the HotSpot pool away from the PPPoE one', () => {
-    const ppp = resolvePppPools(pools)
-    const hs = resolveHotspotPool(pools, { exclude: ppp.source })
-    expect(hs.pool).not.toBe(ppp.source)
-  })
-
-  it('never picks a HotSpot pool chained to another', () => {
-    // A chained pool inherits its parent's ranges; using it directly gives a
-    // HotSpot server addresses that overlap whatever the parent serves.
-    const hs = resolveHotspotPool([
-      { name: 'chained', ranges: '10.0.0.2-10.0.0.10', nextPool: 'parent' },
-      { name: 'standalone', ranges: '10.1.0.2-10.1.0.50' },
-    ])
-    expect(hs.pool).toBe('standalone')
-  })
-
   it('PPPoE succeeds from a resolved pool instead of asking for one', async () => {
     r.rows['/interface/pppoe-server/print'] = []
     const resolved = resolvePppPools(pools)
@@ -1029,8 +1228,41 @@ describe('WireGuard support is classified, never guessed', () => {
 describe('a second full run changes nothing', () => {
   /** The objects a router reports after the first run applied everything. */
   function configured() {
+    hotspotPrerequisites()
+    r.rows['/interface/print'] = [{ name: 'ether1' }, { name: 'ether2' }, { name: 'bridge' }]
     r.rows['/ip/hotspot/print'] = [
-      { '.id': '*1', name: `${OWNER}-ab12cd34-ether2`, interface: 'ether2' },
+      {
+        '.id': '*1', name: `${OWNER}-ab12cd34-ether2`, interface: 'ether2',
+        profile: `${OWNER}-ab12cd34`,
+      },
+    ]
+    r.rows['/ip/hotspot/profile/print'] = [{
+      '.id': '*10', name: `${OWNER}-ab12cd34`, 'html-directory': 'ispflow-ab12cd34-hotspot',
+    }]
+    r.rows['/ip/address/print'] = [{ '.id': '*11', interface: 'ether2', address: '192.168.88.1/24' }]
+    r.rows['/ip/route/print'] = [{ 'dst-address': '192.168.88.0/24' }]
+    r.rows['/ip/pool/print'] = [{
+      '.id': '*12', name: `${OWNER}-ab12cd34-hs-clients`,
+      ranges: '192.168.88.10-192.168.88.254',
+    }]
+    r.rows['/ip/dhcp-server/print'] = [{
+      '.id': '*13', name: `${OWNER}-ab12cd34-dhcp`, interface: 'ether2',
+      'address-pool': `${OWNER}-ab12cd34-hs-clients`,
+    }]
+    r.rows['/ip/dhcp-server/network/print'] = [{
+      '.id': '*14', address: '192.168.88.0/24', gateway: '192.168.88.1',
+      'dns-server': '1.1.1.1',
+    }]
+    r.rows['/ip/dns/print'] = [{ servers: '1.1.1.1,8.8.8.8' }]
+    r.rows['/file/print'] = [
+      { name: 'ispflow-ab12cd34-hotspot' },
+      { name: 'ispflow-ab12cd34-hotspot/login.html', '.id': '*15' },
+      { name: 'ispflow-ab12cd34-hotspot/alogin.html', '.id': '*16' },
+      { name: 'ispflow-ab12cd34-hotspot/error.html', '.id': '*17' },
+      { name: 'ispflow-ab12cd34-hotspot/logout.html', '.id': '*18' },
+      { name: 'ispflow-ab12cd34-hotspot/status.html', '.id': '*19' },
+      { name: 'ispflow-ab12cd34-hotspot/style.css', '.id': '*20' },
+      { name: 'ispflow-ab12cd34-hotspot/md5.js', '.id': '*21' },
     ]
     r.rows['/ip/hotspot/user/profile/print'] = [
       { '.id': '*2', name: 'Home_5M', 'rate-limit': '5M/2M' },
@@ -1044,7 +1276,12 @@ describe('a second full run changes nothing', () => {
     ]
     r.rows['/ip/firewall/filter/print'] = [
       { '.id': '*5', name: `${OWNER}-ab12cd34-mgmt` },
+      {
+        '.id': '*19', name: `${OWNER}-ab12cd34-forward`, chain: 'forward',
+        action: 'accept', 'in-interface': 'ether2', 'out-interface': 'ether1',
+      },
     ]
+    r.rows['/ip/dhcp-client/print'] = [{ '.id': '*20', interface: 'ether1' }]
     r.rows['/radius/print'] = [
       { '.id': '*6', name: `${OWNER}-ab12cd34`, address: '10.9.9.9:1812' },
     ]

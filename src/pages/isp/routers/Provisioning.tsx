@@ -399,10 +399,6 @@ function WizardModal({
   const [hs, setHs] = useState<string[]>(session.hotspot_interfaces ?? [])
   const [pp, setPp] = useState<string[]>(session.pppoe_interfaces ?? [])
   const [mgmt, setMgmt] = useState<string[]>([])
-  // Address pools the router ALREADY has. Prefilled from the survey so the
-  // operator picks rather than retypes; blank means "use what the router has".
-  const [pools, setPools] = useState<api.DiscoveredPoolOption[]>([])
-  const [hotspotPool, setHotspotPool] = useState('')
   const [pppLocal, setPppLocal] = useState('')
   const [pppRemote, setPppRemote] = useState('')
   const [radiusServer, setRadiusServer] = useState('')
@@ -423,16 +419,10 @@ function WizardModal({
   // models it as a package kind, so it needs no separate copy path.
   const [copyKinds, setCopyKinds] = useState<string[]>(['hotspot', 'pppoe'])
 
-  // The pools and eligible copy sources are READS over what the platform already
-  // knows. Fetched when the wizard opens, so the operator never has to invent a
-  // range the router has already reported.
+  // Eligible copy sources are read from what the platform already knows.
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      try {
-        const p = await api.fetchPoolOptions(session.id)
-        if (!cancelled) setPools(p.discovered)
-      } catch { /* the fields below simply stay empty and the stage explains */ }
       try {
         const s = await api.fetchCopySources(session.id)
         if (!cancelled) setSources(s)
@@ -503,6 +493,14 @@ function WizardModal({
   const wanConflict = wan === '' ? [] : [...hs, ...pp].filter((p) => p === wan)
 
   async function submit() {
+    if (role !== 'pppoe' && !wan) {
+      setError('Select the WAN interface so subscriber internet access can be configured.')
+      return
+    }
+    if (role !== 'pppoe' && hs.length === 0) {
+      setError('Select at least one customer-facing HotSpot interface.')
+      return
+    }
     setBusy(true); setError(null); setRemedy(null)
     try {
       // This does not configure the router from the browser. The server runs the
@@ -518,7 +516,6 @@ function WizardModal({
         // Empty means "use what the router already has". The worker resolves the
         // real ranges, so an operator who leaves these blank is not left with a
         // broken PPPoE stage.
-        hotspotPool: hotspotPool || undefined,
         pppLocal: pppLocal || undefined,
         pppRemote: pppRemote || undefined,
         radiusServer: radiusServer || undefined,
@@ -607,13 +604,17 @@ function WizardModal({
               </span>
               <select className={cn(inputClass, 'mt-1')} value={wan}
                 onChange={(e) => setWan(e.target.value)}>
-                <option value="">Leave as it is</option>
+                <option value="">Select a WAN interface</option>
                 {candidates.map((i) => (
                   <option key={i.name} value={i.name}>
                       {i.name} ({i.type}){i.isBridge ? ' - bridge' : ''}
                     </option>
                 ))}
               </select>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                HotSpot setup adds a DHCP client on this interface. A pre-existing
+                static WAN is left unchanged and requires an explicit addressing change.
+              </p>
             </div>
 
             {role !== 'pppoe' && (
@@ -672,34 +673,6 @@ function WizardModal({
                 customer port. That would sell your own uplink to subscribers, so
                 it has been taken off the customer side.
               </Alert>
-            )}
-
-            {/* ── HotSpot pool: only when HotSpot is on ── */}
-            {role !== 'pppoe' && (
-              <div>
-                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                  HotSpot address pool
-                </span>
-                <select className={cn(inputClass, 'mt-1')} value={hotspotPool}
-                  onChange={(e) => setHotspotPool(e.target.value)}>
-                  <option value="">
-                    {pools.length > 0
-                      ? 'Use the largest pool found on the router'
-                      : 'No pool found - the router reported none'}
-                  </option>
-                  {pools.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name} ({p.ranges})
-                    </option>
-                  ))}
-                </select>
-                {pools.length === 0 && (
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    HotSpot will run without a pool until one is added on the
-                    router under IP &gt; Pools.
-                  </p>
-                )}
-              </div>
             )}
 
             {/* ── PPPoE ranges: only when PPPoE is on ── */}
@@ -834,15 +807,19 @@ function WizardModal({
         <Alert kind="info">
           <span className="flex items-start gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-px" />
-            The script only creates objects tagged NETISP. Your firewall, WAN,
-            VLANs and existing users are never touched.
+            The worker configures the selected WAN DHCP client, HotSpot LAN gateway,
+            DHCP, DNS, source NAT, a targeted LAN-to-WAN firewall rule and a local
+            CHAP captive portal. Existing bridge membership and unrelated firewall
+            rules are preserved. Multiple unbridged HotSpot ports must first be on
+            one bridge; ambiguous or conflicting networks stop with an error.
           </span>
         </Alert>
 
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="secondary" onClick={onClose}>Cancel</Button>
           <Button onClick={submit}
-            disabled={busy || candidates.length === 0 || wanConflict.length > 0}
+            disabled={busy || candidates.length === 0 || wanConflict.length > 0
+              || (role !== 'pppoe' && (!wan || hs.length === 0))}
             icon={<ChevronRight className="w-3.5 h-3.5" />}>
             {busy ? 'Queueing...' : 'Apply configuration'}
           </Button>

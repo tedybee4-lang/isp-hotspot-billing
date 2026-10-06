@@ -39,6 +39,11 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      - name: Build provisioning worker
+        run: |
+          npm ci --prefix worker
+          npm run build --prefix worker
+
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:

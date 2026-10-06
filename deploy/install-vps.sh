@@ -121,6 +121,9 @@ install_worker() {
 
   log "Installing build dependencies (this takes a minute)"
   cp -r "$WORKER_SRC"/package*.json "$stage"/
+  cp "$WORKER_SRC"/build.mjs "$stage"/
+  mkdir -p "$stage"/public
+  cp -r "$REPO_ROOT"/public/hotspot "$stage"/public/
   # Dev dependencies ARE installed here, deliberately. The type-check below needs
   # @types/node, and a prod-only install makes it fail with dozens of
   # "Cannot find name 'process'" / "Cannot find module 'node:os'" errors that
@@ -149,11 +152,10 @@ install_worker() {
   ( cd "$stage" && npx --yes -p typescript@5.9.3 tsc \
       --module esnext --moduleResolution bundler --target es2022 \
       --strict --skipLibCheck --noEmit --allowImportingTsExtensions \
-      --lib es2023,dom worker/src/index.ts )
+      --lib es2023,dom worker/src/assets.d.ts worker/src/index.ts )
 
-  # The repo's tsconfig is noEmit, so the worker is transpiled with esbuild.
-  # esbuild is installed explicitly because it is only a dev dependency today
-  # and the runtime install omits dev dependencies.
+  # The worker bundle embeds the portal files as raw text. Keep the scoped
+  # esbuild plugin in build.mjs; a global .js text loader would break dependencies.
   #
   # Output is CommonJS on a `.cjs` extension. Two traps, both of which produce a
   # bundle that builds cleanly and then dies at startup:
@@ -166,8 +168,7 @@ install_worker() {
   #      succeeds and the process dies with "Unexpected identifier 'fromnode'".
   #      Nothing in worker/src uses import.meta or require, so the shim is gone.
   log "Building"
-  ( cd "$stage" && npx esbuild worker/src/index.ts --bundle --platform=node \
-      --format=cjs --target=node20 --outfile=dist/index.cjs )
+  ( cd "$stage" && node build.mjs )
 
   # Drop the build-only tree before it reaches the server. The worker runs as an
   # unprivileged service account and has no reason to carry a compiler or type
