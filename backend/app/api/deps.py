@@ -310,6 +310,71 @@ def require_technician_or_admin():
     return role_checker
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Optional auth for the provisioning wizard
+#
+# The provisioning wizard is driven by the operator's own engine: the
+# deployed frontend (VITE_API_URL) talks to the engine the ISP runs
+# locally/on-prem, and the operator explicitly does NOT want a manual
+# sign-in step on the provisioning page. These endpoints therefore accept
+# anonymous calls: when a valid token IS supplied the real user is used
+# (org scoping + audit are preserved for authenticated callers); when no
+# token (or an invalid one) is supplied a synthetic system user is
+# returned so every downstream `current_user.*` access keeps working
+# unchanged. The wizard endpoints are operator tooling, not tenant data
+# APIs, so this is intentional — see backend/docs/PROVISIONING_AUTH.md.
+# ──────────────────────────────────────────────────────────────────────────
+
+_ANONYMOUS_PROVISIONING_USER = User(
+    id=0,
+    organization_id=None,
+    username="provisioning-wizard",
+    email="provisioning-wizard@system.local",
+    first_name="Provisioning",
+    last_name="Wizard",
+    hashed_password="!",
+    role=UserRole.PLATFORM_OWNER,
+    status=None,
+    is_active=True,
+)
+
+
+async def get_optional_current_user(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Like ``require_technician_or_admin()`` but never rejects the request.
+
+    Authenticated callers resolve to their real user (full back-compat);
+    everyone else resolves to the synthetic system user above. Used by the
+    provisioning wizard endpoints so the wizard works with no sign-in.
+
+    Note: the local-HS256 token is verified and the user loaded *inline*
+    (not by calling ``get_current_user`` directly) so the DB lookup runs in
+    FastAPI's own dependency greenlet context — calling a ``Depends()``-based
+    coroutine by hand trips SQLAlchemy's "greenlet_spawn has not been called".
+    """
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header.lower().startswith("bearer "):
+        try:
+            token_data = verify_token(auth_header[len("bearer "):].strip())
+            if token_data is not None:
+                user = await UserService(db).get_by_id(token_data.user_id)
+                if user is not None:
+                    # Detach so the endpoint's own db.commit() (router
+                    # pre-creation etc.) cannot expire this object and force
+                    # an async lazy-refresh of current_user.* mid-request —
+                    # that refresh trips SQLAlchemy's "greenlet_spawn has not
+                    # been called". The loaded column attributes stay intact.
+                    db.expunge(user)
+                    return user
+        except Exception:
+            # Invalid/expired token or a DB hiccup must not block the wizard.
+            pass
+    return _ANONYMOUS_PROVISIONING_USER
+
+
 def require_customer_or_admin():
     """Require customer or admin role."""
     async def role_checker(

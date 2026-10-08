@@ -216,6 +216,11 @@ class Settings(BaseSettings):
         "http://192.168.100.4:3001",
         "http://172.31.255.221:3000",
         "http://172.31.255.221:3001",
+        # Deployed frontend (Vercel) — the provisioning wizard runs on the
+        # public site and talks to the operator's engine, so its origins
+        # must be allowed here. Override via CORS_ORIGINS when needed.
+        "https://isp-hotspot-billing-phi.vercel.app",
+        "https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app",
     ]
     cors_allow_credentials: bool = True
 

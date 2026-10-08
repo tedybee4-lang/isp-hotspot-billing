@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, require_technician_or_admin
+from app.api.deps import get_db, get_optional_current_user
 from app.core.config import settings
 from app.integrations.mikrotik import get_mikrotik_client
 from app.models.router import Router
@@ -96,7 +96,7 @@ class DeviceScanResponse(BaseModel):
 async def scan_device(
     request: DeviceScanRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Scan a MikroTik device for interfaces, ports, and services.
 

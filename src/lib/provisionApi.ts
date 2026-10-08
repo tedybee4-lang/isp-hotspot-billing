@@ -6,10 +6,11 @@
  * it owns the bootstrap one-liner, device scan, provisioning sessions, the
  * workflow and the live WebSocket log stream.
  *
- * Auth is the engine's own JWT (POST /api/v1/auth/login, form-encoded — see
- * backend/docs/AUTH_MAPPING.md). A token is cached in localStorage; when it is
- * missing, `VITE_API_EMAIL` / `VITE_API_PASSWORD` are used to sign in silently,
- * otherwise the wizard shows a sign-in card.
+ * Auth: the engine's provisioning endpoints accept ANONYMOUS calls (the
+ * operator runs the wizard with no sign-in step). If `VITE_API_EMAIL` /
+ * `VITE_API_PASSWORD` are configured, a JWT is obtained silently and sent;
+ * otherwise requests go out unauthenticated and the engine resolves them to
+ * its synthetic provisioning user. See backend/docs/PROVISIONING_AUTH.md.
  */
 import { config } from './config'
 
@@ -73,21 +74,40 @@ export async function signIn(email: string, password: string): Promise<void> {
 }
 
 /**
- * Make sure we hold a JWT. Uses the cached token first, then the optional
- * env-configured credentials. Throws a `needsSignIn` error when neither works
- * so the wizard can render its sign-in card.
+ * Make sure we hold a JWT — but never gate the wizard on one.
+ *
+ * The engine's provisioning endpoints accept anonymous calls, so a missing
+ * token is fine. When `VITE_API_EMAIL` / `VITE_API_PASSWORD` are configured
+ * we still sign in silently (best effort: the token is then used for org
+ * scoping and audit); if that fails we simply proceed without a token.
  */
 async function ensureAuth(): Promise<void> {
   if (token) return
   if (config.apiEmail && config.apiPassword) {
-    await signIn(config.apiEmail, config.apiPassword)
-    return
+    try {
+      await signIn(config.apiEmail, config.apiPassword)
+    } catch {
+      // Silent sign-in failed (engine unreachable or creds wrong) — the
+      // engine accepts anonymous provisioning calls, so continue without.
+    }
   }
+}
+
+/**
+ * Wrap a fetch failure (DNS/connection refused/CORS — browsers report all of
+ * these as `TypeError: Failed to fetch`) into an actionable message: on the
+ * public deployment the most common cause is the engine not running / not
+ * reachable at `config.apiUrl`.
+ */
+function toNetworkError(e: unknown, path: string): ProvisionError {
   const err = new ProvisionError(
-    'Sign in to the provisioning engine to continue.',
+    `Cannot reach the provisioning engine at ${config.apiUrl} (${path}). ` +
+    'The engine must be running and reachable from this browser — start it ' +
+    'with `docker compose --profile backend up` (or `uvicorn` on this machine), ' +
+    'and make sure VITE_API_URL points at it.',
   ) as ProvisionError
-  err.needsSignIn = true
-  throw err
+  err.detail = { reason: 'engine-unreachable', cause: e instanceof Error ? e.message : String(e) }
+  return err
 }
 
 function extractDetail(body: unknown): string {
@@ -108,23 +128,30 @@ function extractDetail(body: unknown): string {
   return 'The provisioning engine rejected the request.'
 }
 
-/**Authenticated fetch against the engine. Retries once after re-auth on 401. */
+/**Authenticated-when-possible fetch against the engine. Retries once after re-auth on 401. */
 async function api<T>(
   path: string,
   init: RequestInit = {},
   allowReauth = true,
 ): Promise<T> {
   await ensureAuth()
-  const res = await fetch(`${config.apiUrl}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token ?? ''}`,
-      ...(init.body && !(init.body instanceof URLSearchParams)
-        ? { 'Content-Type': 'application/json' }
-        : {}),
-      ...(init.headers ?? {}),
-    },
-  })
+  let res: Response
+  try {
+    res = await fetch(`${config.apiUrl}${path}`, {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${token ?? ''}`,
+        ...(init.body && !(init.body instanceof URLSearchParams)
+          ? { 'Content-Type': 'application/json' }
+          : {}),
+        ...(init.headers ?? {}),
+      },
+    })
+  } catch (e) {
+    // Network-level failure (engine down, wrong port, CORS) — surface an
+    // actionable message instead of the browser's "Failed to fetch".
+    throw toNetworkError(e, path)
+  }
 
   if (res.status === 401 && allowReauth) {
     // Expired JWT: drop it and retry once with a fresh sign-in.

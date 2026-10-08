@@ -15,16 +15,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Plug, Copy, CheckCircle2, RefreshCw, ChevronRight, Terminal, ShieldCheck,
+  Plug, Copy, CheckCircle2, RefreshCw, ChevronRight, Terminal,
   Radio, ListChecks, XCircle, Loader2,
 } from 'lucide-react'
 import {
   Card, CardHeader, Button, Alert, Spinner, Badge, EmptyState, inputClass,
 } from '../../../components/ui'
-import { config } from '../../../lib/config'
 import {
-  ProvisionError,
-  signIn, hasAuthToken, clearAuthToken,
   upsertRouter, createSession, getBootstrapCommand, scanDevice, startWorkflow,
   getSessionStatus, listSessions, cancelActiveSessions, openStream,
   waitForScanReport,
@@ -63,60 +60,6 @@ function lineLevel(level: string): string {
     case 'warning': return 'text-amber-300'
     default: return 'text-slate-300'
   }
-}
-
-/* ── Engine sign-in card ─────────────────────────────────────────────────── */
-
-function SignInCard({
-  onSignedIn,
-}: {
-  onSignedIn: () => void
-}) {
-  const [email, setEmail] = useState(config.apiEmail)
-  const [password, setPassword] = useState(config.apiPassword)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  async function submit() {
-    setBusy(true); setError(null)
-    try {
-      await signIn(email.trim(), password)
-      setPassword('')
-      onSignedIn()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Sign-in failed.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Card>
-      <CardHeader title="Sign in to the provisioning engine" icon={<ShieldCheck className="w-4 h-4" />} />
-      <div className="p-5 space-y-3 max-w-md">
-        <p className="text-xs text-slate-600 dark:text-slate-300">
-          The provision engine at <span className="font-mono">{config.apiUrl}</span> has
-          its own accounts (for example the seeded platform admin). Sign in once;
-          the token is cached in this browser.
-        </p>
-        <label className="block">
-          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">Email or username</span>
-          <input className={cn(inputClass, 'mt-1')} value={email}
-            onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
-        </label>
-        <label className="block">
-          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">Password</span>
-          <input className={cn(inputClass, 'mt-1')} type="password" value={password}
-            onChange={(e) => setPassword(e.target.value)} autoComplete="current-password"
-            onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
-        </label>
-        {error && <Alert kind="error">{error}</Alert>}
-        <Button size="sm" onClick={() => void submit()} disabled={busy || !email || !password}>
-          {busy ? 'Signing in...' : 'Sign in'}
-        </Button>
-      </div>
-    </Card>
-  )
 }
 
 /* ── Session history ─────────────────────────────────────────────────────── */
@@ -185,7 +128,6 @@ function LogPane({ logs }: { logs: LogLine[] }) {
 /* ── Main wizard page ────────────────────────────────────────────────────── */
 
 export function ProvisioningPage() {
-  const [authed, setAuthed] = useState(hasAuthToken())
   const [sessions, setSessions] = useState<ProvisionSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -236,28 +178,19 @@ export function ProvisioningPage() {
   }, [])
 
   const refreshSessions = useCallback(async () => {
-    if (!hasAuthToken()) return
     try {
       setSessions(await listSessions())
     } catch (e) {
-      if (e instanceof ProvisionError && e.needsSignIn) {
-        setAuthed(false)
-      } else {
-        setError(e instanceof Error ? e.message : 'Could not load sessions.')
-      }
+      setError(e instanceof Error ? e.message : 'Could not load sessions.')
     }
   }, [])
 
   useEffect(() => {
-    if (!authed) {
-      setLoading(false)
-      return
-    }
     setLoading(true)
     void refreshSessions().finally(() => setLoading(false))
     return () => stopStream()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authed])
+  }, [])
 
   /* ── stream handling ── */
 
@@ -351,11 +284,7 @@ export function ProvisioningPage() {
       connectStream(s.session_id)
       setStep(2)
     } catch (e) {
-      if (e instanceof ProvisionError && e.needsSignIn) {
-        setAuthed(false)
-      } else {
-        setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
-      }
+      setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
     } finally {
       setBusy(false)
     }
@@ -395,12 +324,8 @@ export function ProvisioningPage() {
       setWanIface(s.wan_interface || wanIface)
       pushLog('success', `Scan complete: ${s.interfaces.length} interface(s), RouterOS ${s.system_info.version || '?'}.`)
     } catch (e) {
-      if (e instanceof ProvisionError && e.needsSignIn) {
-        setAuthed(false)
-      } else {
-        setError(e instanceof Error ? e.message : 'Device scan failed.')
-        pushLog('warning', 'Device scan failed — fill the configuration in manually and continue.')
-      }
+      setError(e instanceof Error ? e.message : 'Device scan failed.')
+      pushLog('warning', 'Device scan failed — fill the configuration in manually and continue.')
     } finally {
       setBusy(false)
     }
@@ -437,13 +362,9 @@ export function ProvisioningPage() {
       pollStatus(w.session_id)
       setStep(3)
     } catch (e) {
-      if (e instanceof ProvisionError && e.needsSignIn) {
-        setAuthed(false)
-      } else {
-        const msg = e instanceof Error ? e.message : 'Could not start provisioning.'
-        setError(msg)
-        pushLog('error', msg)
-      }
+      const msg = e instanceof Error ? e.message : 'Could not start provisioning.'
+      setError(msg)
+      pushLog('error', msg)
     } finally {
       setBusy(false)
     }
@@ -476,25 +397,6 @@ export function ProvisioningPage() {
     </label>
   )
 
-  if (!authed) {
-    return (
-      <div className="space-y-5">
-        <div className="flex items-start gap-3">
-          <Plug className="w-5 h-5 text-violet-600 dark:text-violet-400 mt-0.5" />
-          <div>
-            <h1 className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
-              Add a MikroTik
-            </h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              One command. The router tells us what it is.
-            </p>
-          </div>
-        </div>
-        <SignInCard onSignedIn={() => setAuthed(true)} />
-      </div>
-    )
-  }
-
   if (loading) return <Spinner label="Loading provisioning sessions..." />
 
   return (
@@ -512,9 +414,6 @@ export function ProvisioningPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          <Button size="sm" variant="secondary" onClick={() => { clearAuthToken(); setAuthed(false) }}>
-            Sign out
-          </Button>
           <Button size="sm" onClick={() => {
             stopStream()
             setStep(1); setBootstrap(null); setScan(null); setSessionId(null)

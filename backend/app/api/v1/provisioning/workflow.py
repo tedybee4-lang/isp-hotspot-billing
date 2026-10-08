@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.user import User
-from app.api.deps import require_technician_or_admin, get_db
+from app.api.deps import get_optional_current_user, get_db
 from app.modules.provisioning import ProvisioningService
 from app.models.provisioning import ServiceType, ProvisioningStatus, ProvisioningSession
 from app.core.config import settings
@@ -46,7 +46,7 @@ async def start_provisioning_workflow(
     request: ProvisioningRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Start the provisioning workflow for a MikroTik device.
 
@@ -99,7 +99,7 @@ async def start_provisioning_workflow(
 async def create_provisioning_session_only(
     request: ProvisioningRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Create a provisioning session in PENDING state without starting it.
 
@@ -130,7 +130,7 @@ async def create_provisioning_session_only(
 async def get_provisioning_status(
     session_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Get the current status of a provisioning session."""
     try:
@@ -153,7 +153,7 @@ async def get_provisioning_status(
 async def cancel_provisioning(
     session_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Cancel a running provisioning session."""
     try:
@@ -176,7 +176,7 @@ async def cancel_provisioning(
 async def cancel_active_sessions_for_router(
     router_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Cancel all active/pending provisioning sessions for a router.
 
@@ -236,7 +236,7 @@ async def cancel_active_sessions_for_router(
 async def get_provisioning_logs(
     session_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Get the logs for a provisioning session (steps and commands)."""
     try:
@@ -287,7 +287,7 @@ async def retry_provisioning(
     session_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Retry a failed provisioning session."""
     try:
@@ -318,7 +318,7 @@ async def list_provisioning_sessions(
     status: Optional[str] = None,
     router_id: Optional[int] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """List all provisioning sessions with optional filters.
 
@@ -374,7 +374,7 @@ async def list_provisioning_sessions(
 async def delete_provisioning_session(
     session_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Delete a provisioning session (only if completed or failed)."""
     try:
@@ -417,7 +417,7 @@ class ScriptVerificationResponse(BaseModel):
 async def verify_bootstrap_script(
     router_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Verify that the bootstrap script (codevertex.rsc) exists on the router
@@ -478,7 +478,7 @@ async def verify_bootstrap_script(
 async def check_device_status(
     router_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Check if a MikroTik device is online using stored API credentials.

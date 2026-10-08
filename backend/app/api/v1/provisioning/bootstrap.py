@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request, Path
 from fastapi.responses import PlainTextResponse
 from app.models.user import User
 from app.models.provisioning import ProvisioningSession
-from app.api.deps import require_technician_or_admin, get_db
+from app.api.deps import get_optional_current_user, get_db
 from app.core.security import create_access_token
 from app.core.secrets import get_secrets_manager
 from app.services.router_provisioning import can_use_direct_api
@@ -156,7 +156,7 @@ async def get_bootstrap_command(
     session_id: Optional[str] = Query(None, description="Optional provisioning session_id to include in bootstrap callback"),
     router_id: Optional[int] = Query(None, description="Router ID - if provided, checks whether bootstrap was already done"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Generate a one-liner RouterOS command for initial device provisioning with proper access token.
 
@@ -1210,7 +1210,7 @@ async def bootstrap_wg_register(
 async def check_direct_api_access(
     router_id: int = Path(..., description="Router ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Check if router has stored credentials for direct API reprovisioning.
 
@@ -1278,7 +1278,7 @@ async def start_ping_monitoring(
     max_attempts: int = Query(300, description="Maximum check attempts", ge=1, le=1000),
     timeout_ms: int = Query(1000, description="Connection timeout in milliseconds", ge=100, le=5000),
     identity: Optional[str] = Query(None, description="Router identity (for NAT-safe cross-session check-in correlation)"),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Start two-stage device monitoring for a provisioning session.
@@ -1340,7 +1340,7 @@ async def start_ping_monitoring(
 @router.post("/ping/stop/{session_id}")
 async def stop_ping_monitoring(
     session_id: str,
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Stop ping monitoring for a provisioning session.
@@ -1386,7 +1386,7 @@ async def stop_ping_monitoring(
 @router.get("/ping/status/{session_id}")
 async def get_ping_status(
     session_id: str,
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Get the latest ping monitoring status for a session.

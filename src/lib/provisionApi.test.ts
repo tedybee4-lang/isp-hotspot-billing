@@ -90,9 +90,29 @@ describe('authenticated calls', () => {
     expect(sessions[0].session_id).toBe('s1')
   })
 
-  it('throws a needsSignIn error when no token and no env creds exist', async () => {
-    stubFetch(() => jsonResponse({ sessions: [] }))
-    await expect(listSessions()).rejects.toMatchObject({ needsSignIn: true })
+  it('sends anonymous calls when no token and no env creds exist', async () => {
+    // The engine accepts anonymous provisioning calls, so a missing token
+    // must NOT gate the wizard — the request goes out unauthenticated.
+    let auth = ''
+    stubFetch((url, init) => {
+      expect(String(url)).toContain('/api/v1/provisioning/sessions?limit=20')
+      auth = String((init?.headers as Record<string, string>).Authorization)
+      return jsonResponse({ sessions: [] })
+    })
+    const sessions = await listSessions()
+    expect(sessions).toEqual([])
+    // Sent with an empty bearer (engine resolves it to its system user).
+    expect(auth).toBe('Bearer ')
+  })
+
+  it('turns a network failure into an engine-unreachable ProvisionError', async () => {
+    // "Failed to fetch" (engine down / wrong port / CORS) must surface an
+    // actionable message naming the engine URL, not the browser's TypeError.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    await expect(listSessions()).rejects.toMatchObject({
+      detail: { reason: 'engine-unreachable' },
+    })
+    await expect(listSessions()).rejects.toThrowError(/Cannot reach the provisioning engine/)
   })
 })
 

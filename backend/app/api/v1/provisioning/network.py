@@ -6,7 +6,7 @@ import logging
 from fastapi import APIRouter, Depends, Query, HTTPException
 from ipaddress import IPv4Network
 from app.models.user import User
-from app.api.deps import require_technician_or_admin
+from app.api.deps import get_optional_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -16,7 +16,7 @@ router = APIRouter()
 async def calculate_network(
     subnet_address: str = Query("172.31.0.0"),
     cidr: int = Query(16, ge=8, le=30),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Calculate gateway and DHCP pool suggestion for UI auto-calculation block."""
     try:
@@ -56,7 +56,7 @@ async def validate_network_config(
     subnet_address: str = Query(...),
     cidr: int = Query(...),
     gateway: str = Query(...),
-    current_user: User = Depends(require_technician_or_admin()),
+    current_user: User = Depends(get_optional_current_user),
 ):
     """Validate network configuration parameters."""
     try:
