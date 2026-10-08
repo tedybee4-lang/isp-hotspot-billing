@@ -56,10 +56,22 @@ export function embedInSource(stored: string): string {
  * perfect one that does not.
  */
 export function heartbeatSource(o: { reportUrl: string; heartbeatToken?: string | null }): string {
-  const url = o.reportUrl.replace(/\/report$/, '/ping') + '?token=' + (o.heartbeatToken ?? '')
+  const base = o.reportUrl.replace(/\/report$/, '')
+  const token = o.heartbeatToken ?? ''
+  const url = base + '/ping?token=' + token
   // Number UNQUOTED so free_memory arrives as a JSON number for the bigint
   // column; identity/version/uptime are quoted strings.
   const body = String.raw`("{\"identity\":\"" . [/system identity get name] . \"\",\"version\":\"" . [/system resource get version] . \"\",\"uptime\":\"" . [/system resource get uptime] . \"\",\"free_memory\":" . [/system resource get free-memory] . "}")`
-  return `/tool fetch mode=https url="${url}" http-method=post check-certificate=yes ` +
+  const ping = `/tool fetch mode=https url="${url}" http-method=post check-certificate=yes ` +
     `http-header-field="Content-Type:application/json" output=none http-data=${body}`
+  if (!o.heartbeatToken) return ping
+
+  // The response to the heartbeat stays liveness-only. A separate authenticated
+  // GET returns a bounded RouterOS script, so proxies and stale clients cannot
+  // make the ping body itself executable.
+  const poll = `/tool fetch mode=https url="${base}/commands?token=${token}" ` +
+    'check-certificate=yes output=file dst-path=ispflow-command.rsc; ' +
+    '/import file-name=ispflow-command.rsc; ' +
+    '/file remove ispflow-command.rsc'
+  return `${ping}; :do { ${poll}; } on-error={ :put "ISPFlow: command poll failed; will retry."; }`
 }

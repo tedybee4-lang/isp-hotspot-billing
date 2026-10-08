@@ -276,8 +276,10 @@ export function validateRouterOsScript(
   // Absence is the failure mode that actually shipped, so presence is asserted
   // rather than assumed.
   const hasFetch = /\/tool fetch\b/.test(script)
-  if (!script.includes('# ISPFlow-BOOTSTRAP-GENERATOR-528C90')
-    || !script.includes('# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR')) {
+  const isCanonicalBootstrap = script.includes('# ISPFlow-BOOTSTRAP-GENERATOR-528C90')
+    && script.includes('# ISPFlow-ROUTEROS7-SERIALIZE-GENERATOR')
+  const isRouterCommand = script.includes('# ISPFlow-ROUTER-COMMAND-GENERATOR-20C64B')
+  if (!isCanonicalBootstrap && !isRouterCommand) {
     issues.push({
       line: 1, rule: 'missing-marker',
       message: 'generator markers absent - this is not the current generator',

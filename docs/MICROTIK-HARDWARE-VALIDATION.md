@@ -61,6 +61,17 @@ following must be confirmed on the device:
 | 0.6 | Discovery reports | `Starting ISPFlow router discovery...` then per-survey posts | |
 | 0.7 | A survey on an absent menu | e.g. `ISPFlow: wireless not reported: ...`, and the script **continues** | |
 | 0.8 | Panel → Network Status | board, RouterOS version and architecture populated | |
+| 0.9 | Router-initiated command channel on a newly claimed router | heartbeat polls `/commands` with certificate verification; only the authenticated router receives its own generated script | |
+| 0.10 | Safe hAP-like WAN/LAN discovery | HotSpot portal assets install only with one bound DHCP WAN and one existing bridged LAN/DHCP/DNS topology; ambiguity makes no network changes | |
+| 0.11 | No local users and no HotSpot RADIUS backend | portal reports authentication unavailable; do **not** claim customer service is ready | |
+
+The pull channel is additive to the bootstrap; it is not a server-side push.
+Routers whose already-installed heartbeat script only POSTs to `/ping` cannot
+receive this update through that one-way request. They need one run of the
+updated bootstrap (or an independently reachable management connection) before
+they can poll. A successful portal install is also not proof that a subscriber
+can authenticate: the platform records whether existing local HotSpot users or
+a HotSpot-enabled RADIUS server were detected.
 
 Watch specifically for the failure the mock cannot catch: whether
 `:onerror` inside a `{}` block is honoured on your firmware, and whether

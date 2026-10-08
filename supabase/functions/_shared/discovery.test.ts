@@ -121,9 +121,11 @@ describe('discovery covers what decides whether provisioning is safe', () => {
     for (const menu of [
       '/interface find', '/interface bridge find', '/interface vlan find',
       '/ip address find', '/ip dhcp-server find', '/ip pool find',
+      '/ip dhcp-client find', '/ip dhcp-server network find',
       '/ip hotspot find', '/ip hotspot user find', '/ppp profile find',
       '/ip firewall filter find', '/ip firewall nat find', '/ip route find',
-      '/ip dns find', '/ip service find', '/certificate find',
+      '/ip dns find', '/interface list find', '/interface list member find',
+      '/ip service find', '/certificate find',
       '/system scheduler find', '/system script find', '/system package find',
     ]) {
       expect(script, `${menu} must be surveyed`).toContain(menu)

@@ -22,6 +22,21 @@ export const config = {
   supabaseAnonKey: rawKey,
   appName: import.meta.env.VITE_APP_NAME ?? 'ISPFlow',
   appUrl: import.meta.env.VITE_APP_URL ?? 'http://localhost:5173',
+
+  /**
+   * FastAPI provisioning backend (the provision engine).
+   *
+   * The provisioning screen talks to this service directly (bootstrap command,
+   * device scan, workflow, live WebSocket logs). It is independent of the
+   * Supabase project above: set `VITE_API_URL` to reach it.
+   */
+  apiUrl: (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/\/+$/, ''),
+  /**
+   * Optional credentials used to sign in to the provisioning backend silently
+   * (so the wizard works without a manual prompt). Both must be set together.
+   */
+  apiEmail: (import.meta.env.VITE_API_EMAIL ?? '').trim(),
+  apiPassword: (import.meta.env.VITE_API_PASSWORD ?? '').trim(),
   /** Comma-separated list of emails auto-promoted to super admin (live mode). */
   superAdminEmails: (import.meta.env.VITE_SUPER_ADMIN_EMAILS ?? '')
     .split(',')

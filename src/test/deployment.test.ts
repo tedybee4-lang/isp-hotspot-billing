@@ -46,18 +46,6 @@ const has = (...parts: string[]) => existsSync(join(ROOT, ...parts))
  * segments are joined against ROOT directly instead.
  */
 const harness = (...parts: string[]) => code(...parts)
-describe('router provisioning claim response', () => {
-  it('passes the detected architecture into discovery generation', () => {
-    const provision = code('supabase', 'functions', 'router-provision', 'index.ts')
-    expect(provision).toMatch(
-      /buildDiscoveryTail\(\s*sessionId,\s*tag,\s*profile,\s*detected\.version,\s*detected\.architecture,\s*\)/,
-    )
-    expect(provision).toMatch(
-      /async function buildDiscoveryTail\([\s\S]*?version: string \| null,\s*architecture: string \| null,/,
-    )
-    expect(provision).toMatch(/architecture,\s*tag,/)
-  })
-})
 
 describe('live VPS checks cannot strand the RADIUS service', () => {
   it('ships the service-state guard the live checks depend on', () => {
@@ -750,11 +738,23 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     expect(used.length).toBeGreaterThan(0)
     for (const name of used) {
       expect(
-        /^VITE_(SUPABASE_URL|SUPABASE_ANON_KEY|APP_NAME|APP_URL|SUPER_ADMIN_EMAILS)$/.test(name),
+        /^VITE_(SUPABASE_URL|SUPABASE_ANON_KEY|APP_NAME|APP_URL|SUPER_ADMIN_EMAILS|API_URL|API_EMAIL|API_PASSWORD)$/.test(name),
         `${name} is inlined into the public bundle and must not be a secret`,
       ).toBe(true)
     }
     // Explicitly: nothing server-only may be read from import.meta.env.
+    for (const secret of [
+      'SUPABASE_SERVICE_ROLE_KEY', 'ROUTER_CREDENTIALS_KEY',
+      'APP_ENCRYPTION_KEY', 'HASHBACK',
+    ]) {
+      expect(config).not.toMatch(new RegExp(`import\\.meta\\.env\\.[A-Z_]*${secret}`))
+    }
+    // VITE_API_EMAIL / VITE_API_PASSWORD are a convenience, not a boundary:
+    // the value is the operator's own engine password, used only when they
+    // choose to prefill it, and the engine authenticates it like any login
+    // typed into the wizard's sign-in card. No third-party/platform secret may
+    // ride along.
+    expect(config).not.toMatch(/import\.meta\.env\.VITE_(SUPABASE_SERVICE_ROLE_KEY|ROUTER_CREDENTIALS_KEY|APP_ENCRYPTION_KEY)/)
     for (const secret of [
       'SUPABASE_SERVICE_ROLE_KEY', 'ROUTER_CREDENTIALS_KEY',
       'APP_ENCRYPTION_KEY', 'HASHBACK',

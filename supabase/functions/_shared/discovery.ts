@@ -42,12 +42,10 @@
 
 /** One subsystem the router reports on. */
 //
-// The thirteen subsystems the platform is required to report are named here in
-// the form the report endpoint stores them under: identity, resource (the
-// system-resource survey), interfaces, bridge, bridge_ports, ip_addresses,
-// routes, hotspot, pppoe, ip_pools, dhcp, firewall, services and ispflow.
-// Everything else in the list is an additional read-only survey that has
-// always been part of the report and costs one more POST.
+// Survey keys are named here exactly as the report endpoint stores them.
+// Router-initiated provisioning relies on the DHCP client/network, route,
+// bridge, address, pool, firewall, NAT and DNS snapshots being explicit:
+// missing evidence is not treated as permission to guess a live topology.
 //
 // Two renames matter and are deliberate:
 //
@@ -65,14 +63,15 @@
 export const SURVEYS = [
   'identity', 'resource', 'board', 'packages', 'interfaces', 'bridge',
   'bridge_ports', 'vlans', 'ip_addresses', 'dhcp', 'ip_pools', 'hotspot',
-  'pppoe',
+  'hotspot-users', 'dhcp-clients', 'dhcp-networks', 'pppoe',
   // The PPPoE and RADIUS subsystems are each split across the menus RouterOS
   // actually uses, rather than one menu being filed under another service's
   // name. `/ppp secret` holds the customers, `/interface/pppoe-server/server`
   // the dial-in service, `/ppp profile` the profiles, `/radius` the RADIUS
   // client and `/ppp aaa` whether secrets use RADIUS at all.
   'pppoe-servers', 'pppoe-profiles', 'radius', 'radius-aaa',
-  'firewall', 'nat', 'routes', 'dns', 'wireguard', 'services',
+  'firewall', 'nat', 'routes', 'dns', 'interface-lists',
+  'interface-list-members', 'wireguard', 'services',
   'certificates', 'wireless', 'capsman', 'ispflow', 'scheduler', 'backup',
 ] as const
 
@@ -531,14 +530,27 @@ export function buildSurveySection(
 
   L.push(...rows('/ip address', [
     ['address', 'address'], ['network', 'network'],
-    ['interface', 'interface'], ['disabled', 'disabled'], ['comment', 'comment'],
-  ], o, 'ip_addresses'))
+      ['interface', 'interface'], ['dynamic', 'dynamic'],
+      ['disabled', 'disabled'], ['comment', 'comment'],
+    ], o, 'ip_addresses'))
 
 // --- services already on the box ------------------------------------------
   L.push(...rows('/ip dhcp-server', [
     ['name', 'name'], ['interface', 'interface'],
     ['address_pool', 'address-pool'], ['disabled', 'disabled'],
   ], o, 'dhcp'))
+
+    L.push(...rows('/ip dhcp-client', [
+      ['interface', 'interface'], ['status', 'status'],
+      ['add_default_route', 'add-default-route'], ['address', 'address'],
+      ['gateway', 'gateway'], ['disabled', 'disabled'],
+    ], o, 'dhcp-clients'))
+
+    L.push(...rows('/ip dhcp-server network', [
+      ['address', 'address'], ['gateway', 'gateway'],
+      ['dns-server', 'dns-server'], ['disabled', 'disabled'],
+      ['comment', 'comment'],
+    ], o, 'dhcp-networks'))
 
   L.push(...rows('/ip pool', [
     ['name', 'name'], ['ranges', 'ranges'], ['next_pool', 'next-pool'],
@@ -555,8 +567,8 @@ export function buildSurveySection(
   // two different billing paths, counted as one.
   L.push(...rows('/ip hotspot user', [
     ['name', 'name'], ['profile', 'profile'], ['server', 'server'],
-    ['comment', 'comment'],
-  ], o, 'hotspot'))
+    ['comment', 'comment'], ['disabled', 'disabled'],
+  ], o, 'hotspot-users'))
 
   // PPPoE customers are PPP secrets. `/interface/pppoe-server/server` is where
   // the dial-in service itself is configured, and both are read-only prints.
@@ -593,7 +605,8 @@ export function buildSurveySection(
   // NOT requested: the shared secret is written by the worker from encrypted
   // storage and must never travel back out over a survey POST.
   L.push(...rows('/radius', [
-    ['address', 'address'], ['port', 'port'], ['timeout', 'timeout'],
+    ['address', 'address'], ['service', 'service'],
+    ['port', 'port'], ['timeout', 'timeout'],
     ['src_address', 'src-address'], ['comment', 'comment'],
   ], o, 'radius'))
 
@@ -604,18 +617,34 @@ export function buildSurveySection(
 
   L.push(...rows('/ip firewall filter', [
     ['chain', 'chain'], ['action', 'action'], ['comment', 'comment'],
+    ['in-interface', 'in-interface'], ['out-interface', 'out-interface'],
+    ['connection-state', 'connection-state'],
+    ['src-address', 'src-address'], ['dst-address', 'dst-address'],
     ['disabled', 'disabled'],
   ], o, 'firewall'))
 
   L.push(...rows('/ip firewall nat', [
     ['chain', 'chain'], ['action', 'action'], ['comment', 'comment'],
+    ['out-interface', 'out-interface'], ['out-interface-list', 'out-interface-list'],
+    ['src-address', 'src-address'], ['dst-address', 'dst-address'],
+    ['src-address-list', 'src-address-list'], ['dst-address-list', 'dst-address-list'],
     ['disabled', 'disabled'], ['to_addresses', 'to-addresses'],
   ], o, 'nat'))
 
   L.push(...rows('/ip route', [
     ['dst_address', 'dst-address'], ['gateway', 'gateway'],
-    ['distance', 'distance'], ['comment', 'comment'],
+    ['distance', 'distance'], ['active', 'active'],
+    ['disabled', 'disabled'], ['comment', 'comment'],
   ], o, 'routes'))
+
+  L.push(...rows('/interface list', [
+    ['name', 'name'], ['comment', 'comment'],
+  ], o, 'interface-lists'))
+
+  L.push(...rows('/interface list member', [
+    ['list', 'list'], ['interface', 'interface'],
+    ['disabled', 'disabled'],
+  ], o, 'interface-list-members'))
 
   L.push(...rows('/ip dns', [
     ['name', 'name'], ['servers', 'servers'], ['dynamic_servers', 'dynamic-servers'],

@@ -237,10 +237,12 @@
     :if ([:typeof $v1] != "array") do={ :set ($r->"network") $v1 }
     :local v2 ($i->"interface")
     :if ([:typeof $v2] != "array") do={ :set ($r->"interface") $v2 }
-    :local v3 ($i->"disabled")
-    :if ([:typeof $v3] != "array") do={ :set ($r->"disabled") $v3 }
-    :local v4 ($i->"comment")
-    :if ([:typeof $v4] != "array") do={ :set ($r->"comment") $v4 }
+    :local v3 ($i->"dynamic")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"dynamic") $v3 }
+    :local v4 ($i->"disabled")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"disabled") $v4 }
+    :local v5 ($i->"comment")
+    :if ([:typeof $v5] != "array") do={ :set ($r->"comment") $v5 }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -272,6 +274,58 @@
   /tool fetch mode=https url=($baseUrl . "?survey=dhcp&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
 } on-error={
   :put "ISPFlow: dhcp skipped/failed"
+};
+
+# --- dhcp-clients ---
+:do {
+  :local rows ""
+  :foreach i in=[/ip dhcp-client find] do={
+    :local r [:toarray ""]
+    :local v0 ($i->"interface")
+    :if ([:typeof $v0] != "array") do={ :set ($r->"interface") $v0 }
+    :local v1 ($i->"status")
+    :if ([:typeof $v1] != "array") do={ :set ($r->"status") $v1 }
+    :local v2 ($i->"add-default-route")
+    :if ([:typeof $v2] != "array") do={ :set ($r->"add_default_route") $v2 }
+    :local v3 ($i->"address")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"address") $v3 }
+    :local v4 ($i->"gateway")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"gateway") $v4 }
+    :local v5 ($i->"disabled")
+    :if ([:typeof $v5] != "array") do={ :set ($r->"disabled") $v5 }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
+  }
+  :local jsonPayload ("[" . $rows . "]")
+  /tool fetch mode=https url=($baseUrl . "?survey=dhcp-clients&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
+} on-error={
+  :put "ISPFlow: dhcp-clients skipped/failed"
+};
+
+# --- dhcp-networks ---
+:do {
+  :local rows ""
+  :foreach i in=[/ip dhcp-server network find] do={
+    :local r [:toarray ""]
+    :local v0 ($i->"address")
+    :if ([:typeof $v0] != "array") do={ :set ($r->"address") $v0 }
+    :local v1 ($i->"gateway")
+    :if ([:typeof $v1] != "array") do={ :set ($r->"gateway") $v1 }
+    :local v2 ($i->"dns-server")
+    :if ([:typeof $v2] != "array") do={ :set ($r->"dns-server") $v2 }
+    :local v3 ($i->"disabled")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"disabled") $v3 }
+    :local v4 ($i->"comment")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"comment") $v4 }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
+  }
+  :local jsonPayload ("[" . $rows . "]")
+  /tool fetch mode=https url=($baseUrl . "?survey=dhcp-networks&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
+} on-error={
+  :put "ISPFlow: dhcp-networks skipped/failed"
 };
 
 # --- ip_pools ---
@@ -322,7 +376,7 @@
   :put "ISPFlow: hotspot skipped/failed"
 };
 
-# --- hotspot ---
+# --- hotspot-users ---
 :do {
   :local rows ""
   :foreach i in=[/ip hotspot user find] do={
@@ -335,14 +389,16 @@
     :if ([:typeof $v2] != "array") do={ :set ($r->"server") $v2 }
     :local v3 ($i->"comment")
     :if ([:typeof $v3] != "array") do={ :set ($r->"comment") $v3 }
+    :local v4 ($i->"disabled")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"disabled") $v4 }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
   }
   :local jsonPayload ("[" . $rows . "]")
-  /tool fetch mode=https url=($baseUrl . "?survey=hotspot&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
+  /tool fetch mode=https url=($baseUrl . "?survey=hotspot-users&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
 } on-error={
-  :put "ISPFlow: hotspot skipped/failed"
+  :put "ISPFlow: hotspot-users skipped/failed"
 };
 
 # --- pppoe ---
@@ -437,14 +493,16 @@
     :local r [:toarray ""]
     :local v0 ($i->"address")
     :if ([:typeof $v0] != "array") do={ :set ($r->"address") $v0 }
-    :local v1 ($i->"port")
-    :if ([:typeof $v1] != "array") do={ :set ($r->"port") $v1 }
-    :local v2 ($i->"timeout")
-    :if ([:typeof $v2] != "array") do={ :set ($r->"timeout") $v2 }
-    :local v3 ($i->"src-address")
-    :if ([:typeof $v3] != "array") do={ :set ($r->"src_address") $v3 }
-    :local v4 ($i->"comment")
-    :if ([:typeof $v4] != "array") do={ :set ($r->"comment") $v4 }
+    :local v1 ($i->"service")
+    :if ([:typeof $v1] != "array") do={ :set ($r->"service") $v1 }
+    :local v2 ($i->"port")
+    :if ([:typeof $v2] != "array") do={ :set ($r->"port") $v2 }
+    :local v3 ($i->"timeout")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"timeout") $v3 }
+    :local v4 ($i->"src-address")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"src_address") $v4 }
+    :local v5 ($i->"comment")
+    :if ([:typeof $v5] != "array") do={ :set ($r->"comment") $v5 }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -485,8 +543,18 @@
     :if ([:typeof $v1] != "array") do={ :set ($r->"action") $v1 }
     :local v2 ($i->"comment")
     :if ([:typeof $v2] != "array") do={ :set ($r->"comment") $v2 }
-    :local v3 ($i->"disabled")
-    :if ([:typeof $v3] != "array") do={ :set ($r->"disabled") $v3 }
+    :local v3 ($i->"in-interface")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"in-interface") $v3 }
+    :local v4 ($i->"out-interface")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"out-interface") $v4 }
+    :local v5 ($i->"connection-state")
+    :if ([:typeof $v5] != "array") do={ :set ($r->"connection-state") $v5 }
+    :local v6 ($i->"src-address")
+    :if ([:typeof $v6] != "array") do={ :set ($r->"src-address") $v6 }
+    :local v7 ($i->"dst-address")
+    :if ([:typeof $v7] != "array") do={ :set ($r->"dst-address") $v7 }
+    :local v8 ($i->"disabled")
+    :if ([:typeof $v8] != "array") do={ :set ($r->"disabled") $v8 }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -508,10 +576,22 @@
     :if ([:typeof $v1] != "array") do={ :set ($r->"action") $v1 }
     :local v2 ($i->"comment")
     :if ([:typeof $v2] != "array") do={ :set ($r->"comment") $v2 }
-    :local v3 ($i->"disabled")
-    :if ([:typeof $v3] != "array") do={ :set ($r->"disabled") $v3 }
-    :local v4 ($i->"to-addresses")
-    :if ([:typeof $v4] != "array") do={ :set ($r->"to_addresses") $v4 }
+    :local v3 ($i->"out-interface")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"out-interface") $v3 }
+    :local v4 ($i->"out-interface-list")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"out-interface-list") $v4 }
+    :local v5 ($i->"src-address")
+    :if ([:typeof $v5] != "array") do={ :set ($r->"src-address") $v5 }
+    :local v6 ($i->"dst-address")
+    :if ([:typeof $v6] != "array") do={ :set ($r->"dst-address") $v6 }
+    :local v7 ($i->"src-address-list")
+    :if ([:typeof $v7] != "array") do={ :set ($r->"src-address-list") $v7 }
+    :local v8 ($i->"dst-address-list")
+    :if ([:typeof $v8] != "array") do={ :set ($r->"dst-address-list") $v8 }
+    :local v9 ($i->"disabled")
+    :if ([:typeof $v9] != "array") do={ :set ($r->"disabled") $v9 }
+    :local v10 ($i->"to-addresses")
+    :if ([:typeof $v10] != "array") do={ :set ($r->"to_addresses") $v10 }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -533,8 +613,12 @@
     :if ([:typeof $v1] != "array") do={ :set ($r->"gateway") $v1 }
     :local v2 ($i->"distance")
     :if ([:typeof $v2] != "array") do={ :set ($r->"distance") $v2 }
-    :local v3 ($i->"comment")
-    :if ([:typeof $v3] != "array") do={ :set ($r->"comment") $v3 }
+    :local v3 ($i->"active")
+    :if ([:typeof $v3] != "array") do={ :set ($r->"active") $v3 }
+    :local v4 ($i->"disabled")
+    :if ([:typeof $v4] != "array") do={ :set ($r->"disabled") $v4 }
+    :local v5 ($i->"comment")
+    :if ([:typeof $v5] != "array") do={ :set ($r->"comment") $v5 }
     :local j [:serialize to=json value=$r]
     :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
     :set rows ($rows . $j)
@@ -543,6 +627,46 @@
   /tool fetch mode=https url=($baseUrl . "?survey=routes&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
 } on-error={
   :put "ISPFlow: routes skipped/failed"
+};
+
+# --- interface-lists ---
+:do {
+  :local rows ""
+  :foreach i in=[/interface list find] do={
+    :local r [:toarray ""]
+    :local v0 ($i->"name")
+    :if ([:typeof $v0] != "array") do={ :set ($r->"name") $v0 }
+    :local v1 ($i->"comment")
+    :if ([:typeof $v1] != "array") do={ :set ($r->"comment") $v1 }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
+  }
+  :local jsonPayload ("[" . $rows . "]")
+  /tool fetch mode=https url=($baseUrl . "?survey=interface-lists&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
+} on-error={
+  :put "ISPFlow: interface-lists skipped/failed"
+};
+
+# --- interface-list-members ---
+:do {
+  :local rows ""
+  :foreach i in=[/interface list member find] do={
+    :local r [:toarray ""]
+    :local v0 ($i->"list")
+    :if ([:typeof $v0] != "array") do={ :set ($r->"list") $v0 }
+    :local v1 ($i->"interface")
+    :if ([:typeof $v1] != "array") do={ :set ($r->"interface") $v1 }
+    :local v2 ($i->"disabled")
+    :if ([:typeof $v2] != "array") do={ :set ($r->"disabled") $v2 }
+    :local j [:serialize to=json value=$r]
+    :if ([:len $rows] > 0) do={ :set rows ($rows . ",") }
+    :set rows ($rows . $j)
+  }
+  :local jsonPayload ("[" . $rows . "]")
+  /tool fetch mode=https url=($baseUrl . "?survey=interface-list-members&token=" . $token . "&tag=" . $tag) http-method=post check-certificate=yes http-header-field="Content-Type:application/json" output=none http-data=$jsonPayload;
+} on-error={
+  :put "ISPFlow: interface-list-members skipped/failed"
 };
 
 # --- dns ---

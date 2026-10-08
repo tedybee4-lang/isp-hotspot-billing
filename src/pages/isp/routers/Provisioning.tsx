@@ -1,118 +1,503 @@
 /**
- * MikroTik auto-provisioning wizard.
+ * MikroTik provisioning wizard — driven by the FastAPI provision engine.
  *
- * The ISP never types a router IP, username, password, RADIUS secret or API
- * key. We mint a short-lived single-use token, hand back one command, and the
- * router calls back with what it is. Nothing is marked online until a real
- * heartbeat arrives from the poll loop.
+ * The engine (backend/) owns everything router-side. This page walks the
+ * operator through its 3-step wizard:
+ *
+ *   1. Bootstrap — enters the router identity/IP, creates the router row +
+ *      a create-only session, and shows the one-liner to paste into the
+ *      router terminal (Winbox: New Terminal).
+ *   2. Device scan — reads the router's interfaces, services and network
+ *      config (reported by the bootstrap script itself, so it works behind
+ *      NAT), then continues into configuration.
+ *   3. Apply & watch — sends the service configuration and streams the
+ *      engine's live log (WebSocket) until provisioning completes.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Plug, Copy, CheckCircle2, RefreshCw, ChevronRight, Terminal, ShieldCheck, Ban,
-  ListChecks,
+  Plug, Copy, CheckCircle2, RefreshCw, ChevronRight, Terminal, ShieldCheck,
+  Radio, ListChecks, XCircle, Loader2,
 } from 'lucide-react'
-import * as api from '../../../lib/data'
-import type { ProvisioningSession, RouterCapabilities } from '../../../lib/data'
 import {
-  Card, CardHeader, Button, Alert, Spinner, Badge, EmptyState, inputClass, Modal,
+  Card, CardHeader, Button, Alert, Spinner, Badge, EmptyState, inputClass,
 } from '../../../components/ui'
+import { config } from '../../../lib/config'
+import {
+  ProvisionError,
+  signIn, hasAuthToken, clearAuthToken,
+  upsertRouter, createSession, getBootstrapCommand, scanDevice, startWorkflow,
+  getSessionStatus, listSessions, cancelActiveSessions, openStream,
+  waitForScanReport,
+  type BackendRouter, type ProvisionSession, type BootstrapCommand,
+  type DeviceScan, type StreamMessage, type ProvisioningServiceType,
+} from '../../../lib/provisionApi'
 import { cn } from '../../../utils/cn'
 
-const STATE_LABEL: Record<string, string> = {
-  created: 'Created',
-  command_generated: 'Command ready',
-  command_started: 'Command sent',
-  router_detected: 'Router detected',
-  capabilities_detected: 'Capabilities detected',
-  waiting_for_selection: 'Awaiting your choice',
-  configuring: 'Configuring',
-  testing: 'Testing connection',
-  online: 'Online',
-  failed: 'Failed',
-  expired: 'Expired',
-  revoked: 'Revoked',
+interface LogLine {
+  time: string
+  level: string
+  message: string
 }
 
-const STATE_TONE: Record<string, string> = {
-  online: 'emerald', failed: 'rose', expired: 'slate', revoked: 'slate',
-  router_detected: 'sky', capabilities_detected: 'sky',
-  configuring: 'amber', testing: 'amber', waiting_for_selection: 'amber',
+const now = () => new Date().toLocaleTimeString()
+
+const STATUS_TONE: Record<string, string> = {
+  completed: 'emerald',
+  in_progress: 'amber',
+  pending: 'sky',
+  failed: 'rose',
+  cancelled: 'slate',
+  timeout: 'rose',
 }
 
-/** The ordered path a session walks through. */
-const FLOW = [
-  'command_generated', 'router_detected', 'capabilities_detected',
-  'configuring', 'testing', 'online',
-]
+const SERVICE_LABEL: Record<ProvisioningServiceType, string> = {
+  hotspot: 'Hotspot',
+  pppoe_server: 'PPPoE server',
+  both: 'Hotspot + PPPoE',
+}
+
+function lineLevel(level: string): string {
+  switch (level) {
+    case 'success': return 'text-emerald-300'
+    case 'error': return 'text-rose-300'
+    case 'warning': return 'text-amber-300'
+    default: return 'text-slate-300'
+  }
+}
+
+/* ── Engine sign-in card ─────────────────────────────────────────────────── */
+
+function SignInCard({
+  onSignedIn,
+}: {
+  onSignedIn: () => void
+}) {
+  const [email, setEmail] = useState(config.apiEmail)
+  const [password, setPassword] = useState(config.apiPassword)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    setBusy(true); setError(null)
+    try {
+      await signIn(email.trim(), password)
+      setPassword('')
+      onSignedIn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Sign-in failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader title="Sign in to the provisioning engine" icon={<ShieldCheck className="w-4 h-4" />} />
+      <div className="p-5 space-y-3 max-w-md">
+        <p className="text-xs text-slate-600 dark:text-slate-300">
+          The provision engine at <span className="font-mono">{config.apiUrl}</span> has
+          its own accounts (for example the seeded platform admin). Sign in once;
+          the token is cached in this browser.
+        </p>
+        <label className="block">
+          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">Email or username</span>
+          <input className={cn(inputClass, 'mt-1')} value={email}
+            onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
+        </label>
+        <label className="block">
+          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">Password</span>
+          <input className={cn(inputClass, 'mt-1')} type="password" value={password}
+            onChange={(e) => setPassword(e.target.value)} autoComplete="current-password"
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
+        </label>
+        {error && <Alert kind="error">{error}</Alert>}
+        <Button size="sm" onClick={() => void submit()} disabled={busy || !email || !password}>
+          {busy ? 'Signing in...' : 'Sign in'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+/* ── Session history ─────────────────────────────────────────────────────── */
+
+function SessionsList({
+  sessions, busy, onRefresh,
+}: {
+  sessions: ProvisionSession[]
+  busy: boolean
+  onRefresh: () => void
+}) {
+  return (
+    <Card>
+      <div className="flex items-center justify-between px-5 pt-4">
+        <h2 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+          <ListChecks className="w-4 h-4" /> Provisioning sessions
+        </h2>
+        <Button size="sm" variant="secondary" onClick={onRefresh} disabled={busy}
+          icon={<RefreshCw className={cn('w-3.5 h-3.5', busy && 'animate-spin')} />}>
+          Refresh
+        </Button>
+      </div>
+      <div className="p-5 pt-3">
+        {sessions.length === 0 ? (
+          <EmptyState icon={<Radio className="w-10 h-10" />} title="No sessions yet"
+            hint="Generate a bootstrap command below to start your first run." />
+        ) : (
+          <div className="space-y-2">
+            {sessions.map((s) => (
+              <div key={s.session_id}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-mono text-slate-500 truncate">{s.session_id}</p>
+                  <p className="text-[11px] text-slate-500">
+                    router #{s.router_id}
+                    {s.service_type ? ` · ${s.service_type}` : ''}
+                    {s.created_at ? ` · ${new Date(s.created_at).toLocaleString()}` : ''}
+                  </p>
+                </div>
+                <Badge value={STATUS_TONE[s.status] ?? 'slate'} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+/* ── Live log pane ───────────────────────────────────────────────────────── */
+
+function LogPane({ logs }: { logs: LogLine[] }) {
+  return (
+    <div className="rounded-xl bg-slate-900 p-4 h-64 overflow-y-auto font-mono text-[11px] leading-relaxed">
+      {logs.length === 0 ? (
+        <p className="text-slate-500">Waiting for engine events… run the bootstrap command on the router, then watch this pane.</p>
+      ) : logs.map((l, i) => (
+        <p key={i} className={lineLevel(l.level)}>
+          <span className="text-slate-500">{l.time}</span> {l.message}
+        </p>
+      ))}
+    </div>
+  )
+}
+
+/* ── Main wizard page ────────────────────────────────────────────────────── */
 
 export function ProvisioningPage() {
-  const [sessions, setSessions] = useState<ProvisioningSession[]>([])
+  const [authed, setAuthed] = useState(hasAuthToken())
+  const [sessions, setSessions] = useState<ProvisionSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [command, setCommand] = useState<
-    { command: string; expiresAt: string } | null
-  >(null)
-  const [wizard, setWizard] = useState<
-    { session: ProvisioningSession; caps: RouterCapabilities } | null
-  >(null)
-  /** Which session's stage list is open, if any. */
-  const [stagesFor, setStagesFor] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      setSessions(await api.fetchProvisioningSessions())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load sessions.')
-    } finally {
-      setLoading(false)
+  // Step 1 - router details
+  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [identity, setIdentity] = useState('MikroTik')
+  const [routerIp, setRouterIp] = useState('192.168.88.1')
+  const [apiPort, setApiPort] = useState('8728')
+  const [wanIface, setWanIface] = useState('ether1')
+  const [serviceType, setServiceType] = useState<ProvisioningServiceType>('hotspot')
+
+  // Created records
+  const [router, setRouter] = useState<BackendRouter | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [bootstrap, setBootstrap] = useState<BootstrapCommand | null>(null)
+
+  // Step 2 - scanned device
+  const [scan, setScan] = useState<DeviceScan | null>(null)
+  const [cfg, setCfg] = useState({
+    subnet_address: '172.31.0.0',
+    cidr: '16',
+    gateway: '',
+    ip_pool_start: '',
+    ip_pool_end: '',
+    dns_servers: '8.8.8.8,8.8.4.4',
+    bridge_ports: 'ether2',
+  })
+
+  // Step 3 - live run
+  const [logs, setLogs] = useState<LogLine[]>([])
+  const [runStatus, setRunStatus] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const wsRef = useRef<WebSocket | null>(null)
+  const pollRef = useRef<number | null>(null)
+
+  const pushLog = useCallback((level: string, message: string) => {
+    setLogs((prev) => [...prev.slice(-299), { time: now(), level, message }])
+  }, [])
+
+  const stopStream = useCallback(() => {
+    wsRef.current?.close()
+    wsRef.current = null
+    if (pollRef.current !== null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
-
-  async function begin() {
-    setBusy('begin'); setError(null)
+  const refreshSessions = useCallback(async () => {
+    if (!hasAuthToken()) return
     try {
-      const r = await api.startProvisioning('New router', 'hotspot')
-      setCommand({ command: r.command, expiresAt: r.expiresAt })
-      await load()
+      setSessions(await listSessions())
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not start provisioning.')
+      if (e instanceof ProvisionError && e.needsSignIn) {
+        setAuthed(false)
+      } else {
+        setError(e instanceof Error ? e.message : 'Could not load sessions.')
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authed) {
+      setLoading(false)
+      return
+    }
+    setLoading(true)
+    void refreshSessions().finally(() => setLoading(false))
+    return () => stopStream()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed])
+
+  /* ── stream handling ── */
+
+  const handleStream = useCallback((msg: StreamMessage) => {
+    const d = msg.data ?? {}
+    if (msg.type === 'log' || msg.type === 'router_log') {
+      pushLog(
+        String(d.level ?? 'info'),
+        String(d.message ?? JSON.stringify(d)),
+      )
+    } else if (msg.type === 'status') {
+      const pct = d.progress_percentage ?? d.progress
+      pushLog('info', pct != null
+        ? `Progress ${Number(pct).toFixed(0)}% — ${String(d.current_operation ?? d.current_step ?? '')}`
+        : `Status: ${JSON.stringify(d)}`)
+    } else if (msg.type === 'scan_complete') {
+      pushLog('success', 'Device scan data received from the router (bootstrap report).')
+    } else if (msg.type === 'provisioning_complete') {
+      setRunStatus('completed')
+      pushLog('success', String(d.message ?? 'Provisioning completed.'))
+      void refreshSessions()
+    }
+  }, [pushLog, refreshSessions])
+
+  const connectStream = useCallback((sid: string) => {
+    stopStream()
+    pushLog('info', 'Live log connected.')
+    wsRef.current = openStream(sid, handleStream)
+  }, [handleStream, pushLog, stopStream])
+
+  /** Poll GET /sessions/{id}/status as a backup to the WebSocket. */
+  const pollStatus = useCallback((sid: string) => {
+    if (pollRef.current !== null) window.clearInterval(pollRef.current)
+    const tick = async () => {
+      try {
+        const st = await getSessionStatus(sid)
+        setRunStatus(st.status)
+        if (st.status === 'completed') {
+          pushLog('success', 'Provisioning completed successfully.')
+          if (pollRef.current !== null) {
+            window.clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          void refreshSessions()
+        } else if (st.status === 'failed') {
+          pushLog('error', st.error_message ?? 'Provisioning failed.')
+          if (pollRef.current !== null) {
+            window.clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          void refreshSessions()
+        }
+      } catch (e) {
+        pushLog('warning', e instanceof Error ? e.message : 'Status poll failed.')
+      }
+    }
+    void tick()
+    pollRef.current = window.setInterval(() => void tick(), 3000)
+  }, [pushLog, refreshSessions])
+
+  /* ── Step 1: router + session + bootstrap command ── */
+
+  async function generate() {
+    setBusy(true); setError(null)
+    try {
+      const r = await upsertRouter({
+        name: identity.trim() || 'MikroTik',
+        ip_address: routerIp.trim() || '192.168.88.1',
+        api_port: Number(apiPort) || 8728,
+      })
+      setRouter(r)
+
+      const s = await createSession(r.id, serviceType, {
+        identity: r.name,
+        subnet_address: cfg.subnet_address,
+        cidr: Number(cfg.cidr) || 16,
+      })
+      setSessionId(s.session_id)
+
+      const b = await getBootstrapCommand({
+        identity: r.name,
+        api_port: r.port,
+        interface: wanIface.trim() || 'ether1',
+        ip_address: r.ip_address,
+        session_id: s.session_id,
+        router_id: r.id,
+      })
+      setBootstrap(b)
+      setLogs([])
+      setRunStatus(null)
+      connectStream(s.session_id)
+      setStep(2)
+    } catch (e) {
+      if (e instanceof ProvisionError && e.needsSignIn) {
+        setAuthed(false)
+      } else {
+        setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
+      }
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
-  async function detect(sessionId: string) {
-    setBusy(sessionId); setError(null)
+  /* ── Step 2: device scan ── */
+
+  async function runScan(force = false) {
+    if (!router) return
+    setBusy(true); setError(null)
     try {
-      const r = await api.provisionAction(sessionId, 'detect')
-      const session = sessions.find((s) => s.id === sessionId)
-      if (session) setWizard({ session, caps: r.capabilities as RouterCapabilities })
-      await load()
+      const s = force
+        // Deliberate direct dial — the operator asked to bypass the cache.
+        ? await scanDevice(router.id, true)
+        // Default: wait for the bootstrap script's phone-home report
+        // (DB-only probe poll + optimistic cache read). Never dials the
+        // router, so it cannot stall behind NAT; shows progress meanwhile.
+        : await waitForScanReport(router.id, {
+            onProgress: (secs) => pushLog(
+              'info',
+              `Waiting for the router's scan report (${secs}s) — paste the bootstrap command on the router if you have not yet.`,
+            ),
+          })
+      setScan(s)
+      const n = s.network_config
+      setCfg((prev) => ({
+        ...prev,
+        subnet_address: n.network_address && n.cidr
+          ? n.network_address
+          : prev.subnet_address,
+        cidr: String(n.cidr || prev.cidr),
+        gateway: n.gateway || prev.gateway,
+        ip_pool_start: n.dhcp_start || prev.ip_pool_start,
+        ip_pool_end: n.dhcp_end || prev.ip_pool_end,
+        bridge_ports: s.interfaces.filter((i) => i !== s.wan_interface).join(', ') || prev.bridge_ports,
+      }))
+      setWanIface(s.wan_interface || wanIface)
+      pushLog('success', `Scan complete: ${s.interfaces.length} interface(s), RouterOS ${s.system_info.version || '?'}.`)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not read the router.')
+      if (e instanceof ProvisionError && e.needsSignIn) {
+        setAuthed(false)
+      } else {
+        setError(e instanceof Error ? e.message : 'Device scan failed.')
+        pushLog('warning', 'Device scan failed — fill the configuration in manually and continue.')
+      }
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
-  async function revoke(sessionId: string) {
-    setBusy(sessionId); setError(null)
-    try {
-      await api.revokeProvisioning(sessionId)
-      await load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not revoke.')
-    } finally {
-      setBusy(null)
+  /* ── Step 3: apply configuration ── */
+
+  /** Configuration dict the engine's command generator understands. */
+  function buildConfiguration(): Record<string, unknown> {
+    const ports = cfg.bridge_ports.split(',').map((p) => p.trim()).filter(Boolean)
+    return {
+      identity: router?.name,
+      subnet_address: cfg.subnet_address,
+      cidr: Number(cfg.cidr) || 16,
+      gateway: cfg.gateway || undefined,
+      ip_pool_start: cfg.ip_pool_start || undefined,
+      ip_pool_end: cfg.ip_pool_end || undefined,
+      dns_servers: cfg.dns_servers.split(',').map((d) => d.trim()).filter(Boolean),
+      bridge_ports: ports,
+      wan_interface: wanIface,
     }
+  }
+
+  async function apply() {
+    if (!router) return
+    setBusy(true); setError(null)
+    try {
+      // The create-only session from step 1 is still PENDING; the engine
+      // refuses a new workflow while it is active, so clear it first.
+      await cancelActiveSessions(router.id)
+      const w = await startWorkflow(router.id, serviceType, buildConfiguration())
+      pushLog('info', w.message)
+      connectStream(w.session_id)
+      pollStatus(w.session_id)
+      setStep(3)
+    } catch (e) {
+      if (e instanceof ProvisionError && e.needsSignIn) {
+        setAuthed(false)
+      } else {
+        const msg = e instanceof Error ? e.message : 'Could not start provisioning.'
+        setError(msg)
+        pushLog('error', msg)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /* ── render ── */
+
+  const stepper = (
+    <div className="flex items-center gap-2 text-[11px] font-bold">
+      {(['Bootstrap', 'Device scan', 'Apply & watch'] as const).map((label, i) => (
+        <span key={label} className="flex items-center gap-2">
+          {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-slate-300" />}
+          <span className={cn(
+            'rounded-full px-3 py-1',
+            step === i + 1
+              ? 'bg-violet-600 text-white'
+              : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
+          )}>
+            {i + 1}. {label}
+          </span>
+        </span>
+      ))}
+    </div>
+  )
+
+  const field = (label: string, node: React.ReactNode) => (
+    <label className="block">
+      <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">{label}</span>
+      {node}
+    </label>
+  )
+
+  if (!authed) {
+    return (
+      <div className="space-y-5">
+        <div className="flex items-start gap-3">
+          <Plug className="w-5 h-5 text-violet-600 dark:text-violet-400 mt-0.5" />
+          <div>
+            <h1 className="text-xl font-black tracking-tight text-slate-900 dark:text-white">
+              Add a MikroTik
+            </h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              One command. The router tells us what it is.
+            </p>
+          </div>
+        </div>
+        <SignInCard onSignedIn={() => setAuthed(true)} />
+      </div>
+    )
   }
 
   if (loading) return <Spinner label="Loading provisioning sessions..." />
-return (
+
+  return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex items-start gap-3">
@@ -126,705 +511,214 @@ return (
             </p>
           </div>
         </div>
-        <Button size="sm" onClick={begin} disabled={busy === 'begin'} icon={<Plug className="w-3.5 h-3.5" />}>
-          {busy === 'begin' ? 'Starting...' : '+ ADD MIKROTIK'}
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="secondary" onClick={() => { clearAuthToken(); setAuthed(false) }}>
+            Sign out
+          </Button>
+          <Button size="sm" onClick={() => {
+            stopStream()
+            setStep(1); setBootstrap(null); setScan(null); setSessionId(null)
+            setRouter(null); setLogs([]); setRunStatus(null); setError(null)
+          }} icon={<Plug className="w-3.5 h-3.5" />}>
+            + ADD MIKROTIK
+          </Button>
+        </div>
       </div>
 
       {error && <Alert kind="error">{error}</Alert>}
 
-      {command && (
-        <Card>
-          <CardHeader title="Run this on the router" icon={<Terminal className="w-4 h-4" />} />
-          <div className="p-5 space-y-3">
-            <p className="text-xs text-slate-600 dark:text-slate-300">
-              Open the router terminal (Winbox: <span className="font-mono">New Terminal</span>)
-              and paste these lines. Expires at
-              <span className="font-mono ml-1">
-                {new Date(command.expiresAt).toLocaleTimeString()}
-              </span>.
-            </p>
-            <pre className="rounded-xl bg-slate-900 p-4 text-[11px] font-mono text-emerald-300 overflow-x-auto">
-              {command.command}
-            </pre>
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" icon={<Copy className="w-3.5 h-3.5" />}
-                onClick={() => void navigator.clipboard.writeText(command.command)}>
-                Copy command
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => setCommand(null)}>Done</Button>
+      <Card>
+        <CardHeader title="Provisioning wizard" icon={<Terminal className="w-4 h-4" />} />
+        <div className="p-5 space-y-4">
+          {stepper}
+
+          {step === 1 && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {field('Router identity', (
+                <input className={cn(inputClass, 'mt-1')} value={identity}
+                  onChange={(e) => setIdentity(e.target.value)} placeholder="MikroTik" />
+              ))}
+              {field('Router IP', (
+                <input className={cn(inputClass, 'mt-1')} value={routerIp}
+                  onChange={(e) => setRouterIp(e.target.value)} placeholder="192.168.88.1" />
+              ))}
+              {field('API port', (
+                <input className={cn(inputClass, 'mt-1')} value={apiPort}
+                  onChange={(e) => setApiPort(e.target.value)} placeholder="8728" />
+              ))}
+              {field('WAN interface', (
+                <input className={cn(inputClass, 'mt-1')} value={wanIface}
+                  onChange={(e) => setWanIface(e.target.value)} placeholder="ether1" />
+              ))}
+              <div className="sm:col-span-2">
+                {field('Service', (
+                  <select className={cn(inputClass, 'mt-1')} value={serviceType}
+                    onChange={(e) => setServiceType(e.target.value as ProvisioningServiceType)}>
+                    {(Object.keys(SERVICE_LABEL) as ProvisioningServiceType[]).map((k) => (
+                      <option key={k} value={k}>{SERVICE_LABEL[k]}</option>
+                    ))}
+                  </select>
+                ))}
+              </div>
+              <div className="sm:col-span-2">
+                <Alert kind="info">
+                  The engine will create the router record and a provisioning session,
+                  then hand you the bootstrap one-liner. The session id is embedded in
+                  the router's callback URL, so this page follows the run live.
+                </Alert>
+              </div>
+              <div className="sm:col-span-2 flex justify-end">
+                <Button onClick={() => void generate()} disabled={busy}
+                  icon={<ChevronRight className="w-3.5 h-3.5" />}>
+                  {busy ? 'Generating...' : 'Generate bootstrap command'}
+                </Button>
+              </div>
             </div>
-            <Alert kind="info">
-              The token is single-use and stored hashed, scoped to this ISP only.
+          )}
+
+          {step >= 2 && bootstrap && (
+            <div className="space-y-3">
+              <p className="text-xs text-slate-600 dark:text-slate-300">
+                Open the router terminal (Winbox: <span className="font-mono">New Terminal</span>)
+                and paste these lines.
+                {sessionId && (
+                  <> Session <span className="font-mono">{sessionId.slice(0, 8)}…</span>.</>
+                )}
+              </p>
+              <pre className="rounded-xl bg-slate-900 p-4 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap">
+                {bootstrap.command}
+              </pre>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" icon={<Copy className="w-3.5 h-3.5" />}
+                  onClick={() => void navigator.clipboard.writeText(bootstrap.command)}>
+                  Copy command
+                </Button>
+                <Button size="sm" variant="secondary"
+                  onClick={() => void runScan(false)} disabled={busy}>
+                  Scan device
+                </Button>
+                <Button size="sm" variant="secondary"
+                  onClick={() => void runScan(true)} disabled={busy}>
+                  Force re-scan
+                </Button>
+              </div>
+              {bootstrap.bootstrap_already_done && (
+                <Alert kind="info">
+                  This router already completed bootstrap and has stored API credentials —
+                  you can scan and apply straight away.
+                </Alert>
+              )}
+              {bootstrap.ping_check && !bootstrap.ping_check.reachable && (
+                <Alert kind="error">
+                  Device not responding to ping/check at {routerIp}. Check the network connection,
+                  then run the bootstrap command on the router anyway — its callback reaches the
+                  engine even from behind NAT.
+                </Alert>
+              )}
+              {bootstrap.notes.length > 0 && (
+                <ul className="text-[11px] text-slate-500 space-y-1">
+                  {bootstrap.notes.map((n, i) => <li key={i}>• {n}</li>)}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {step >= 2 && scan && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-2">
+              <p className="text-[11px] font-black text-slate-700 dark:text-slate-200">
+                Scanned: {scan.system_info.identity || scan.system_info.board_name || 'device'}
+                {scan.system_info.version ? ` · RouterOS ${scan.system_info.version}` : ''}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {scan.interfaces.map((i) => (
+                  <span key={i} className={cn(
+                    'rounded-full px-2 py-0.5 font-mono text-[10px]',
+                    i === scan.wan_interface
+                      ? 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
+                  )}>
+                    {i}{i === scan.wan_interface ? ' (WAN)' : ''}
+                  </span>
+                ))}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3 pt-1">
+                {field('Subnet', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.subnet_address}
+                    onChange={(e) => setCfg({ ...cfg, subnet_address: e.target.value })} />
+                ))}
+                {field('CIDR', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.cidr}
+                    onChange={(e) => setCfg({ ...cfg, cidr: e.target.value })} />
+                ))}
+                {field('Gateway', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.gateway}
+                    onChange={(e) => setCfg({ ...cfg, gateway: e.target.value })} />
+                ))}
+                {field('Pool start', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.ip_pool_start}
+                    onChange={(e) => setCfg({ ...cfg, ip_pool_start: e.target.value })} />
+                ))}
+                {field('Pool end', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.ip_pool_end}
+                    onChange={(e) => setCfg({ ...cfg, ip_pool_end: e.target.value })} />
+                ))}
+                {field('DNS servers (comma separated)', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.dns_servers}
+                    onChange={(e) => setCfg({ ...cfg, dns_servers: e.target.value })} />
+                ))}
+                {field('Bridge ports (comma separated)', (
+                  <input className={cn(inputClass, 'mt-1')} value={cfg.bridge_ports}
+                    onChange={(e) => setCfg({ ...cfg, bridge_ports: e.target.value })} />
+                ))}
+                {field('WAN interface', (
+                  <input className={cn(inputClass, 'mt-1')} value={wanIface}
+                    onChange={(e) => setWanIface(e.target.value)} />
+                ))}
+                <div className="sm:col-span-1" />
+              </div>
+              {step === 2 && (
+                <div className="flex justify-end">
+                  <Button onClick={() => void apply()} disabled={busy}
+                    icon={<ChevronRight className="w-3.5 h-3.5" />}>
+                    {busy ? 'Starting...' : 'Apply configuration'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {step === 3 && runStatus === 'completed' && (
+            <Alert kind="success">
+              <span className="flex items-start gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-px" />
+                Provisioning completed. The router is configured and the polling agent
+                is installed — subscriptions will reach it even behind NAT.
+              </span>
             </Alert>
-          </div>
-        </Card>
-      )}
+          )}
+          {step === 3 && runStatus === 'failed' && (
+            <Alert kind="error">
+              <span className="flex items-start gap-1.5">
+                <XCircle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                Provisioning failed. Read the log below, fix the cause on the router,
+                then apply again.
+              </span>
+            </Alert>
+          )}
+          {step === 3 && runStatus !== 'completed' && (
+            <p className="text-[11px] text-slate-500 flex items-center gap-1.5">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {runStatus === 'failed' ? 'Provisioning failed.' : 'Provisioning running…'}
+            </p>
+          )}
 
-      {sessions.length === 0 ? (
-        <Card className="p-8">
-          <EmptyState icon={<Plug className="w-10 h-10" />} title="No provisioning yet"
-            hint="Press Add MikroTik to generate your first command." />
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {sessions.map((s) => {
-            const step = FLOW.indexOf(s.state)
-            return (
-              <Card key={s.id} className="p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-black text-slate-900 dark:text-white">{s.label}</p>
-                      <Badge value={STATE_TONE[s.state] ?? 'slate'} />
-                      <span className="text-[10px] font-mono text-slate-400">
-                        {STATE_LABEL[s.state] ?? s.state}
-                      </span>
-                    </div>
-                    <p className="text-[10px] text-slate-400 font-mono mt-1">
-                      {new Date(s.created_at).toLocaleString()}
-                      {s.detected_at &&
-                        ` - detected ${new Date(s.detected_at).toLocaleTimeString()}`}
-                    </p>
-                  </div>
-                  <div className="flex gap-1">
-                    <button onClick={() => setStagesFor(s.id)}
-                      title="Show provisioning stages"
-                      className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <ListChecks className="w-3.5 h-3.5" />
-                    </button>
-                    <button onClick={() => void detect(s.id)} disabled={busy === s.id}
-                      title="Detect hardware"
-                      className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800">
-                      <RefreshCw className={cn('w-3.5 h-3.5', busy === s.id && 'animate-spin')} />
-                    </button>
-                    {!['online', 'revoked'].includes(s.state) && (
-                      <button onClick={() => void revoke(s.id)} disabled={busy === s.id}
-                        title="Revoke this link"
-                        className="p-1.5 rounded-lg text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-500/10 hover:text-rose-600">
-                        <Ban className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-4 flex items-center gap-1">
-                  {FLOW.map((f, i) => (
-                    <div key={f} className={cn(
-                      'h-1.5 flex-1 rounded-full',
-                      step >= 0 && i <= step
-                        ? s.state === 'online' ? 'bg-emerald-500' : 'bg-violet-500'
-                        : 'bg-slate-200 dark:bg-slate-800',
-                    )} />
-                  ))}
-                </div>
-
-                {s.state === 'online' && (
-                  <p className="mt-3 flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Online and reporting.
-                  </p>
-                )}
-                {s.state !== 'online' && s.state !== 'revoked' && (
-                  <p className="mt-3 text-[11px] text-slate-400">
-                    Press refresh to re-check detection.
-                  </p>
-                )}
-              </Card>
-            )
-          })}
+          {step >= 2 && <LogPane logs={logs} />}
         </div>
-      )}
+      </Card>
 
-      {wizard && (
-        <WizardModal session={wizard.session} caps={wizard.caps}
-          onClose={() => setWizard(null)}
-          onDone={async () => { setWizard(null); await load() }} />
-      )}
-
-      {stagesFor && (
-        <StageProgress session={stagesFor} onClose={() => setStagesFor(null)} />
-      )}
+      <SessionsList sessions={sessions} busy={loading} onRefresh={() => void refreshSessions()} />
     </div>
   )
 }
 
-/** How each stage status is drawn, and what the operator is told. */
-const STAGE_ICON: Record<string, string> = {
-  success: 'text-emerald-500',
-  failed: 'text-rose-500',
-  running: 'text-amber-500',
-  pending: 'text-slate-300 dark:text-slate-600',
-  skipped: 'text-slate-400',
-  unsupported: 'text-slate-400',
-}
 
-const STAGE_MARK: Record<string, string> = {
-  success: 'OK', failed: 'X', running: '...', pending: '-',
-  skipped: 'skip', unsupported: 'n/a',
-}
-
-/**
- * The real stage list, polled while a run is in flight.
- *
- * Shows the status the DATABASE recorded, not an optimistic animation. A stage
- * that failed says why it failed and names the stage, because "provisioning
- * failed" with no other detail is the single most useless message this page can
- * display.
- */
-function StageProgress({
-  session, onClose,
-}: {
-  session: string
-  onClose: () => void
-}) {
-  const [report, setReport] = useState<api.ProvisioningStageReport | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    const tick = async () => {
-      try {
-        const r = await api.fetchProvisioningStages(session)
-        if (!cancelled) setReport(r)
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : 'Could not read stages.')
-      }
-    }
-    void tick()
-    // Poll while the run is unfinished. Once everything has settled there is
-    // nothing left to watch, so the timer stops rather than hammering the API.
-    const timer = setInterval(() => {
-      const live = report?.stages.some(
-        (st) => st.status === 'pending' || st.status === 'running')
-      if (live || !report) void tick()
-    }, 4000)
-    return () => { cancelled = true; clearInterval(timer) }
-  }, [session, report])
-
-  const failed = report?.stages.find((st) => st.status === 'failed')
-
-  return (
-    <Card className="p-5">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div>
-          <h2 className="text-sm font-black text-slate-900 dark:text-white">
-            Provisioning stages
-          </h2>
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            Each step is applied by the network worker and recorded as it happens.
-          </p>
-        </div>
-        <Button size="sm" variant="secondary" onClick={onClose}>Close</Button>
-      </div>
-
-      {error && <Alert kind="error">{error}</Alert>}
-      {failed && (
-        <Alert kind="error">
-          <span className="font-bold">{failed.label} failed.</span> {failed.error}
-        </Alert>
-      )}
-      {report?.online.blocked && (
-        <Alert kind="warning">
-          Not online yet: {report.online.reason}
-          {report.online.stage ? ` (stage: ${report.online.stage})` : ''}
-        </Alert>
-      )}
-      {report && !report.online.blocked && (
-        <Alert kind="success">Every required stage passed. This router may go online.</Alert>
-      )}
-
-      <div className="mt-3 space-y-1">
-        {(report?.stages ?? []).map((st) => (
-          <div key={st.stage} className="flex items-start gap-3 py-1.5 border-b
-            border-slate-100 dark:border-slate-800 last:border-0">
-            <span className={cn('w-10 shrink-0 text-center text-[10px] font-mono font-bold',
-              STAGE_ICON[st.status])}>
-              {STAGE_MARK[st.status]}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
-                {st.label}
-                {!st.required && (
-                  <span className="ml-1.5 font-normal text-slate-400">(optional)</span>
-                )}
-              </p>
-              {st.error && (
-                <p className="text-[10px] text-rose-600 dark:text-rose-400">{st.error}</p>
-              )}
-              {st.skipped_reason && (
-                <p className="text-[10px] text-slate-400">{st.skipped_reason}</p>
-              )}
-              {st.duration_ms != null && st.status === 'success' && (
-                <p className="text-[10px] text-slate-400 font-mono">{st.duration_ms} ms</p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {(report?.backups.length ?? 0) > 0 && (
-        <div className="mt-4">
-          <p className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-            Backups on this router
-          </p>
-          <p className="text-[10px] text-slate-400">
-            Stored on the router itself, never uploaded.
-          </p>
-          <ul className="mt-1 space-y-0.5">
-            {report!.backups.map((b) => (
-              <li key={b.id} className="text-[10px] font-mono text-slate-500">
-                {b.filename} - {b.kind} - {new Date(b.created_at).toLocaleString()}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </Card>
-  )
-}
-function WizardModal({
-  session, caps, onClose, onDone,
-}: {
-  session: ProvisioningSession
-  caps: RouterCapabilities
-  onClose: () => void
-  onDone: () => void | Promise<void>
-}) {
-  // Real discovered ports only. Bridges are included because a bridge IS a
-  // legitimate HotSpot or management target on a real router; excluding them
-  // would force an operator to pick a physical port the bridge hides behind.
-  const candidates = caps.interfaces.filter((i) => !i.disabled)
-  const [role, setRole] = useState(session.role)
-  const [wan, setWan] = useState<string>(session.wan_interface ?? '')
-  const [hs, setHs] = useState<string[]>(session.hotspot_interfaces ?? [])
-  const [pp, setPp] = useState<string[]>(session.pppoe_interfaces ?? [])
-  const [mgmt, setMgmt] = useState<string[]>([])
-  const [pppLocal, setPppLocal] = useState('')
-  const [pppRemote, setPppRemote] = useState('')
-  const [radiusServer, setRadiusServer] = useState('')
-  const [radiusEnabled, setRadiusEnabled] = useState(false)
-  // Write-only. Cleared the moment it is sent, and never fetched back.
-  const [radiusSecret, setRadiusSecret] = useState('')
-  const [secretSet, setSecretSet] = useState(false)
-  const [secretNote, setSecretNote] = useState<string | null>(null)
-  const [tunnel, setTunnel] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [remedy, setRemedy] = useState<string | null>(null)
-  const [queued, setQueued] = useState(false)
-  const [sources, setSources] = useState<api.CopySourceRouter[]>([])
-  const [copyFrom, setCopyFrom] = useState('')
-  const [copyNote, setCopyNote] = useState<string | null>(null)
-  // Which package kinds to copy. Static is included because the schema now
-  // models it as a package kind, so it needs no separate copy path.
-  const [copyKinds, setCopyKinds] = useState<string[]>(['hotspot', 'pppoe'])
-
-  // Eligible copy sources are read from what the platform already knows.
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        const s = await api.fetchCopySources(session.id)
-        if (!cancelled) setSources(s)
-      } catch { /* Copy Plans stays unavailable rather than half-working */ }
-      try {
-        const sec = await api.fetchRadiusSecretStatus(session.id)
-        if (!cancelled) setSecretSet(sec.configured)
-      } catch { /* the field simply stays "no secret stored yet" */ }
-    })()
-    return () => { cancelled = true }
-  }, [session.id])
-
-  /**
-   * Copy packages from another router of the same ISP.
-   *
-   * The browser decides nothing: it sends the source id and the backend applies
-   * its own tenant check and its own copy logic. A refusal here comes back with
-   * the server's reason rather than a local guess.
-   */
-  async function copyPackages() {
-    if (!copyFrom) return
-    setBusy(true); setCopyNote(null); setError(null)
-    try {
-      const r = await api.copyPlansFromRouter(session.id, copyFrom, copyKinds)
-      setCopyNote(r.message ?? `${r.plans} package(s) copied.`)
-    } catch (e) {
-      const err = e as { message?: string }
-      setCopyNote(err.message ?? 'Could not copy the packages.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  /**
-   * Store this router's RADIUS shared secret.
-   *
-   * The value is never fetched back: the panel can only learn THAT one exists.
-   * It is cleared from component state the moment it has been sent, so it does
-   * not sit in a React tree or a devtools inspector afterwards.
-   */
-  async function saveSecret() {
-    setBusy(true); setSecretNote(null)
-    try {
-      const r = await api.saveRadiusSecret(session.id, radiusSecret)
-      setSecretSet(true)
-      setSecretNote(r.message)
-      // Out of the tree immediately.
-      setRadiusSecret('')
-    } catch (e) {
-      const err = e as { message?: string }
-      setSecretNote(err.message ?? 'Could not store the secret.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const toggle = (list: string[], set: (v: string[]) => void, n: string) =>
-    set(list.includes(n) ? list.filter((x) => x !== n) : [...list, n])
-
-  /**
-   * A port that is already the WAN must not also become a customer port.
-   *
-   * A HotSpot server and the upstream link on one interface is not a
-   * configuration, it is a way to sell the ISP's own uplink to its subscribers.
-   * Refusing here means the operator sees the conflict while looking at the
-   * choice, rather than as an unexplained error after pressing Apply.
-   */
-  const wanConflict = wan === '' ? [] : [...hs, ...pp].filter((p) => p === wan)
-
-  async function submit() {
-    if (role !== 'pppoe' && !wan) {
-      setError('Select the WAN interface so subscriber internet access can be configured.')
-      return
-    }
-    if (role !== 'pppoe' && hs.length === 0) {
-      setError('Select at least one customer-facing HotSpot interface.')
-      return
-    }
-    setBusy(true); setError(null); setRemedy(null)
-    try {
-      // This does not configure the router from the browser. The server runs the
-      // management safety check against the router's discovered state and then
-      // queues ONE job for the network worker.
-      await api.configureRouter({
-        sessionId: session.id,
-        role,
-        wanInterface: wan || null,
-        hotspotInterfaces: role === 'pppoe' ? [] : hs,
-        pppoeInterfaces: role === 'hotspot' ? [] : pp,
-        managementInterfaces: mgmt,
-        // Empty means "use what the router already has". The worker resolves the
-        // real ranges, so an operator who leaves these blank is not left with a
-        // broken PPPoE stage.
-        pppLocal: pppLocal || undefined,
-        pppRemote: pppRemote || undefined,
-        radiusServer: radiusServer || undefined,
-        radiusEnabled,
-        tunnel: tunnel || undefined,
-      })
-      setQueued(true)
-      await onDone()
-    } catch (e) {
-      // The refusal reason comes from the SERVER, which checked the router's
-      // discovered state. The browser never decides this.
-      const err = e as { message?: string; detail?: Record<string, unknown> }
-      setError(err.message ?? 'Could not apply the configuration.')
-      const r = err.detail?.remedy
-      if (typeof r === 'string') setRemedy(r)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const chip = (on: boolean) => cn(
-    'px-2 py-1 rounded-lg text-[11px] font-mono border',
-    on
-      ? 'border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300'
-      : 'border-slate-200 dark:border-slate-700 text-slate-500',
-  )
-
-  if (queued) {
-    return (
-      <Modal open onClose={onClose} title={`Configure ${session.label}`}>
-        <div className="space-y-3">
-          <Alert kind="success">
-            Queued for the network worker. It applies each stage in order and
-            records the real result of every one.
-          </Alert>
-          <Button variant="secondary" onClick={onClose}>Close</Button>
-        </div>
-      </Modal>
-    )
-  }
-
-  return (
-    <Modal open onClose={onClose} title={`Configure ${session.label}`}>
-      <div className="space-y-4">
-        <div className="rounded-xl bg-slate-50 dark:bg-slate-800 p-3 grid grid-cols-2 gap-2 text-[10px]">
-          <span className="font-mono">Model: {caps.model ?? 'unknown'}</span>
-          <span className="font-mono">RouterOS: {caps.version ?? 'unknown'}</span>
-          <span className="font-mono">Arch: {caps.architecture ?? 'unknown'}</span>
-          <span className="font-mono">RAM: {caps.ramMb ? `${caps.ramMb} MB` : 'unknown'}</span>
-          <span className="font-mono">Serial: {caps.serial ?? 'unknown'}</span>
-          <span className="font-mono">Interfaces: {caps.interfaces.length}</span>
-        </div>
-
-        {error && <Alert kind="error">{error}</Alert>}
-        {remedy && <Alert kind="warning">{remedy}</Alert>}
-
-        <div>
-          <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-            What will this router run?
-          </span>
-          <div className="mt-1 grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
-            {(['hotspot', 'pppoe', 'both'] as const).map((r) => (
-              <button key={r} onClick={() => setRole(r)}
-                className={cn(
-                  'px-2 py-1.5 rounded-lg text-[11px] font-bold capitalize transition',
-                  role === r
-                    ? 'bg-white dark:bg-slate-700 text-violet-600 shadow-sm'
-                    : 'text-slate-500',
-                )}>
-                {r === 'both' ? 'HotSpot + PPPoE' : r}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {candidates.length === 0 ? (
-          <Alert kind="warning">
-            This router reported no usable interfaces. Check that the REST API
-            account can read /interface.
-          </Alert>
-        ) : (
-          <>
-            <div>
-              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                WAN interface
-              </span>
-              <select className={cn(inputClass, 'mt-1')} value={wan}
-                onChange={(e) => setWan(e.target.value)}>
-                <option value="">Select a WAN interface</option>
-                {candidates.map((i) => (
-                  <option key={i.name} value={i.name}>
-                      {i.name} ({i.type}){i.isBridge ? ' - bridge' : ''}
-                    </option>
-                ))}
-              </select>
-              <p className="text-[10px] text-slate-400 mt-0.5">
-                HotSpot setup adds a DHCP client on this interface. A pre-existing
-                static WAN is left unchanged and requires an explicit addressing change.
-              </p>
-            </div>
-
-            {role !== 'pppoe' && (
-              <div>
-                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                  HotSpot interfaces
-                </span>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {candidates.filter((i) => i.name !== wan).map((i) => (
-                    <button key={i.name} onClick={() => toggle(hs, setHs, i.name)}
-                      className={chip(hs.includes(i.name))}>
-                      {i.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {role !== 'hotspot' && (
-              <div>
-                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                  PPPoE interfaces
-                </span>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {candidates.filter((i) => i.name !== wan).map((i) => (
-                    <button key={i.name} onClick={() => toggle(pp, setPp, i.name)}
-                      className={chip(pp.includes(i.name))}>
-                      {i.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div>
-              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                Management interface
-              </span>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                Keep at least one port you can reach the router on. If your
-                selection would leave none, the configuration is refused.
-              </p>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {candidates.map((i) => (
-                  <button key={i.name} onClick={() => toggle(mgmt, setMgmt, i.name)}
-                    className={chip(mgmt.includes(i.name))}>
-                    {i.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {wanConflict.length > 0 && (
-              <Alert kind="warning">
-                {wanConflict.join(', ')} is selected as the WAN and also as a
-                customer port. That would sell your own uplink to subscribers, so
-                it has been taken off the customer side.
-              </Alert>
-            )}
-
-            {/* ── PPPoE ranges: only when PPPoE is on ── */}
-            {role !== 'hotspot' && (
-              <div>
-                <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                  PPPoE address ranges
-                </span>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Leave blank to use a range found on the router.
-                </p>
-                <input className={cn(inputClass, 'mt-1 font-mono')} value={pppLocal}
-                  placeholder="10.0.0.2-10.0.127"
-                  onChange={(e) => setPppLocal(e.target.value)} />
-                <input className={cn(inputClass, 'mt-1 font-mono')} value={pppRemote}
-                  placeholder="10.0.128.2-10.0.255"
-                  onChange={(e) => setPppRemote(e.target.value)} />
-              </div>
-            )}
-
-            {/* ── RADIUS ── */}
-            <div>
-              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                RADIUS
-              </span>
-              <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
-                <input type="checkbox" checked={radiusEnabled}
-                  onChange={(e) => setRadiusEnabled(e.target.checked)} />
-                Authenticate subscribers through RADIUS
-              </label>
-              {radiusEnabled && (
-                <>
-                  <input className={cn(inputClass, 'mt-1 font-mono')} value={radiusServer}
-                    placeholder="radius.yourisp.co.ke"
-                    onChange={(e) => setRadiusServer(e.target.value)} />
-                  <input className={cn(inputClass, 'mt-1 font-mono')} type="password"
-                    value={radiusSecret} placeholder="Shared secret (write-only)"
-                    onChange={(e) => setRadiusSecret(e.target.value)} />
-                  <div className="mt-1 flex items-center gap-2">
-                    <Button size="sm" variant="secondary" type="button"
-                      disabled={radiusSecret.length < 8 || busy}
-                      onClick={() => void saveSecret()}>
-                      Save secret
-                    </Button>
-                    <span className="text-[10px] text-slate-400">
-                      {secretNote ?? (secretSet
-                        ? 'A secret is stored for this router.'
-                        : 'No secret stored yet.')}
-                    </span>
-                  </div>
-                </>
-              )}
-              <p className="text-[10px] text-slate-400 mt-0.5">
-                FreeRADIUS stays where it is. If this is on and the router cannot
-                reach the server, the run stops at the RADIUS stage rather than
-                reporting the router healthy.
-              </p>
-            </div>
-
-            {/* ── Secure tunnel ── */}
-            <div>
-              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                Management tunnel
-              </span>
-              <select className={cn(inputClass, 'mt-1')} value={tunnel}
-                onChange={(e) => setTunnel(e.target.value)}>
-                <option value="">Manage over the LAN (no tunnel)</option>
-                <option value="wireguard">WireGuard (RouterOS 7.1+)</option>
-              </select>
-              {tunnel === 'wireguard' && (
-                <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-0.5">
-                  If this firmware has no WireGuard the run FAILS rather than being
-                  marked unsupported. Without the tunnel the router cannot be
-                  reached, so it must not be reported as healthy.
-                </p>
-              )}
-            </div>
-
-            {/* ── Copy plans from another of this ISP's routers ── */}
-            <div>
-              <span className="text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                Copy packages from another router
-              </span>
-              {sources.length === 0 ? (
-                <p className="text-[10px] text-slate-400 mt-0.5">
-                  No other routers on your account to copy from.
-                </p>
-              ) : (
-                <>
-                  <div className="flex gap-1 mt-1">
-                  <select className={cn(inputClass, 'flex-1')} value={copyFrom}
-                    onChange={(e) => setCopyFrom(e.target.value)}>
-                    <option value="">Choose a router...</option>
-                    {sources.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}{s.board_name ? ` - ${s.board_name}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <Button size="sm" variant="secondary" type="button"
-                    disabled={!copyFrom || busy}
-                    onClick={() => void copyPackages()}>
-                    Copy
-                  </Button>
-                </div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {(['hotspot', 'pppoe', 'static'] as const).map((k) => (
-                    <button key={k} type="button"
-                      onClick={() => setCopyKinds(
-                        copyKinds.includes(k)
-                          ? copyKinds.filter((x) => x !== k)
-                          : [...copyKinds, k],
-                      )}
-                      className={chip(copyKinds.includes(k))}>
-                      {k}
-                    </button>
-                  ))}
-                  </div>
-                </>
-              )}
-              {copyNote && (
-                <p className="text-[10px] text-slate-500 mt-1">{copyNote}</p>
-              )}
-              <p className="text-[10px] text-slate-400 mt-0.5">
-                Copies your package definitions only. Prices, payments and past
-                invoices are never copied or changed.
-              </p>
-            </div>
-          </>
-        )}
-
-        <Alert kind="info">
-          <span className="flex items-start gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-px" />
-            The worker configures the selected WAN DHCP client, HotSpot LAN gateway,
-            DHCP, DNS, source NAT, a targeted LAN-to-WAN firewall rule and a local
-            CHAP captive portal. Existing bridge membership and unrelated firewall
-            rules are preserved. Multiple unbridged HotSpot ports must first be on
-            one bridge; ambiguous or conflicting networks stop with an error.
-          </span>
-        </Alert>
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="secondary" onClick={onClose}>Cancel</Button>
-          <Button onClick={submit}
-            disabled={busy || candidates.length === 0 || wanConflict.length > 0
-              || (role !== 'pppoe' && (!wan || hs.length === 0))}
-            icon={<ChevronRight className="w-3.5 h-3.5" />}>
-            {busy ? 'Queueing...' : 'Apply configuration'}
-          </Button>
-        </div>
-      </div>
-    </Modal>
-  )
-}

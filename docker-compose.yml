@@ -55,5 +55,79 @@ services:
   #     timeout: 5s
   #     retries: 5
 
+  # ---------------------------------------------------------------------------
+  # Provisioning engine (FastAPI backend in ./backend) + its data services.
+  # Run with the backend profile:
+  #   docker compose --profile backend up -d --build
+  # The engine's entrypoint runs Alembic migrations, then uvicorn.
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    profiles: ["backend"]
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required for the backend profile}
+      POSTGRES_DB: ${POSTGRES_DB:-ispbilling}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles: ["backend"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: docker/Dockerfile
+    image: ispflow-provision-engine:latest
+    restart: unless-stopped
+    profiles: ["backend"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ispbilling}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      SECRET_KEY: ${SECRET_KEY:?required for the backend profile}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      GLOBAL_ADMIN_EMAIL: ${GLOBAL_ADMIN_EMAIL:-}
+      GLOBAL_ADMIN_PASSWORD: ${GLOBAL_ADMIN_PASSWORD:-}
+      FRONTEND_URL: ${VITE_APP_URL:-http://localhost}
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:8000}
+      CORS_ORIGINS: '["${VITE_APP_URL:-http://localhost}"]'
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
 volumes:
   # supabase-db:
+
+  pgdata:
+  redisdata:

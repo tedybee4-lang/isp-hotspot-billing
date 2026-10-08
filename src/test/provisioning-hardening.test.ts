@@ -16,8 +16,17 @@ const read = (...p: string[]) => readFileSync(resolve(ROOT, ...p), 'utf8')
 const HARDENING = 'supabase/migrations/20260101700000_provisioning_hardening.sql'
 const STAGES = 'worker/src/stages.ts'
 const DB = 'worker/src/db.ts'
-const PROVISION_FN = 'supabase/functions/router-provision/index.ts'
-const DATA = 'src/lib/data.ts'
+const PROVISION_API = 'src/lib/provisionApi.ts'
+
+describe('router credential handling after the engine swap', () => {
+  it('keeps an engine-sign-in surface for the provisioning UI', () => {
+    const api = read(PROVISION_API)
+    // The wizard authenticates against the FastAPI engine, not Supabase.
+    expect(api).toMatch(/\/api\/v1\/auth\/login/)
+    // Secrets are never persisted beyond the in-memory/localStorage token.
+    expect(api).not.toMatch(/secret_ciphertext/)
+  })
+})
 
 describe('the RADIUS secret can never reach a browser', () => {
   it('is stored encrypted, never in plaintext', () => {
@@ -68,24 +77,12 @@ describe('the RADIUS secret can never reach a browser', () => {
     expect(db).not.toMatch(/radiusSecret:\s*cipher/)
   })
 
-  it('never travels through the browser API surface', () => {
-    const data = read(DATA)
-    // The write endpoint exists...
-    expect(data).toMatch(/saveRadiusSecret/)
-    // ...and there is deliberately no getter that returns the value.
-    expect(data).not.toMatch(/export async function (get|fetch|read)RadiusSecret\b/)
-    // The status endpoint exposes a boolean, not the secret.
-    expect(data).toMatch(/configured:\s*boolean/)
-  })
-
-  it('never echoes the secret back in the write response', () => {
-    const fn = read(PROVISION_FN)
-    // The API accepts a JSON body only to write ciphertext at the service role
-    // layer. It does not return the plaintext secret, nor does it emit a JSON
-    // payload that could carry it back to the browser.
-    expect(fn).toMatch(/action === 'radius_secret'/)
-    expect(fn).toContain('stored: true')
-    expect(fn).not.toMatch(/return json\(\{\s*ok:\s*true,\s*stored:\s*true,[\s\S]*?secret\s*:/i)
+  it('never travels through the new browser API surface', () => {
+    const api = read(PROVISION_API)
+    // The write endpoint is gone with the old engine: there must be no
+    // browser-reachable writer, and deliberately no getter either.
+    expect(api).not.toMatch(/saveRadiusSecret/)
+    expect(api).not.toMatch(/export async function (get|fetch|read)RadiusSecret\b/)
   })
 
   it('is redacted even if a stage result ever contained it', () => {
