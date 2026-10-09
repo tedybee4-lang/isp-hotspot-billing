@@ -60,7 +60,10 @@ WireGuard tunnel exists — see the audit doc §3). It is never the primary path
 | 3 | **Polling agent** | `POST /router-agent/poll-text`, `POST /router-agent/report` | Ongoing command channel. A `/system/scheduler` on the router polls every ~30 s and runs queued commands (`create_user`, `disable_user`, `enable_user`, `disconnect`, `fetch_import`, …). This is what turns a *paid subscription* into actual router access. |
 
 Authentication differs per channel:
-- Bootstrap / provision-script use a short-lived **provisioning JWT** (1-hour) in the URL.
+- Bootstrap and script callbacks use distinct **ten-minute, one-operation bootstrap JWTs**
+  bound to a router, session, and VPS user. They are single-use and are not API
+  access tokens. RouterOS query-token URLs may still be visible in router fetch
+  history and server access logs; use HTTPS and suppress query strings in logs.
 - The agent uses a per-router **`X-Router-Token`** (random 64-hex, hashed at rest), generated during bootstrap.
 
 ---

@@ -218,8 +218,16 @@ install_freeradius() {
   install -m 0644 "$SCRIPT_DIR/freeradius/queries.conf" \
     "$dir/mods-available/netisp/queries.conf"
 
-  install -m 0644 "$SCRIPT_DIR/freeradius/clients.conf" "$dir/clients.conf"
-  install -m 0640 "$SCRIPT_DIR/freeradius/sql.conf"    "$dir/sql.conf"
+  if [[ -f "$dir/clients.conf" ]] && grep -Fq 'ISPFlow - FreeRADIUS clients.' "$dir/clients.conf"; then
+    log "Keeping the existing FreeRADIUS clients (router definitions)"
+  else
+    install -m 0644 "$SCRIPT_DIR/freeradius/clients.conf" "$dir/clients.conf"
+  fi
+  if [[ -f "$dir/sql.conf" ]] && grep -Fq 'ISPFlow - FreeRADIUS sql module configuration.' "$dir/sql.conf"; then
+    log "Keeping the existing FreeRADIUS SQL credentials"
+  else
+    install -m 0640 "$SCRIPT_DIR/freeradius/sql.conf" "$dir/sql.conf"
+  fi
 
   # The dictionary goes in the confdir itself, NOT /usr/share/freeradius.
   # `$INCLUDE dictionary.netisp` in $dir/dictionary resolves relative to $dir, so

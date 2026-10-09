@@ -4,14 +4,19 @@ Handles the main provisioning workflow and session management.
 """
 import logging
 from typing import Dict, Any, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.models.user import User
-from app.api.deps import get_optional_current_user, get_db
+from app.models.user import User, UserRole
+from app.api.deps import (
+    authorize_provisioning_router,
+    authorize_provisioning_session,
+    get_optional_current_user,
+    get_db,
+)
 from app.modules.provisioning import ProvisioningService
 from app.models.provisioning import ServiceType, ProvisioningStatus, ProvisioningSession
 from app.core.config import settings
@@ -56,6 +61,7 @@ async def start_provisioning_workflow(
     commands), use `POST /sessions` (create-only) implemented below.
     """
     try:
+        await authorize_provisioning_router(db, current_user, request.router_id)
         provisioning_service = ProvisioningService(db)
 
         # Convert service_type string to enum
@@ -87,6 +93,8 @@ async def start_provisioning_workflow(
             message="Provisioning workflow started successfully"
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start provisioning workflow: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to start provisioning: {str(e)}")
@@ -109,6 +117,7 @@ async def create_provisioning_session_only(
     to start the actual provisioning process.
     """
     try:
+        await authorize_provisioning_router(db, current_user, request.router_id)
         provisioning_service = ProvisioningService(db)
         service_type = ServiceType(request.service_type)
 
@@ -121,6 +130,8 @@ async def create_provisioning_session_only(
 
         return {"session_id": session.session_id, "status": "pending"}
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create provisioning session: {e}")
         raise HTTPException(status_code=500, detail="Failed to create provisioning session")
@@ -134,6 +145,7 @@ async def get_provisioning_status(
 ):
     """Get the current status of a provisioning session."""
     try:
+        await authorize_provisioning_session(db, current_user, session_id)
         provisioning_service = ProvisioningService(db)
         status = await provisioning_service.get_session_status(session_id)
 
@@ -157,6 +169,7 @@ async def cancel_provisioning(
 ):
     """Cancel a running provisioning session."""
     try:
+        await authorize_provisioning_session(db, current_user, session_id)
         provisioning_service = ProvisioningService(db)
         success = await provisioning_service.cancel_provisioning(session_id)
 
@@ -187,6 +200,7 @@ async def cancel_active_sessions_for_router(
     from datetime import datetime
 
     try:
+        await authorize_provisioning_router(db, current_user, router_id)
         # Find all active sessions for this router
         result = await db.execute(
             select(ProvisioningSession).where(
@@ -227,6 +241,8 @@ async def cancel_active_sessions_for_router(
             "cancelled_session_ids": cancelled_session_ids
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to cancel active sessions for router {router_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to cancel active sessions: {str(e)}")
@@ -240,6 +256,7 @@ async def get_provisioning_logs(
 ):
     """Get the logs for a provisioning session (steps and commands)."""
     try:
+        await authorize_provisioning_session(db, current_user, session_id)
         provisioning_service = ProvisioningService(db)
 
         # Get both step logs and command logs
@@ -291,6 +308,7 @@ async def retry_provisioning(
 ):
     """Retry a failed provisioning session."""
     try:
+        await authorize_provisioning_session(db, current_user, session_id)
         provisioning_service = ProvisioningService(db)
 
         # Use the existing retry_provisioning method which handles reset internally
@@ -327,26 +345,39 @@ async def list_provisioning_sessions(
     page/size here for backward compatibility.
     """
     try:
-        # Convert offset-based `skip` into page number (1-indexed)
-        page = 1
-        try:
-            if limit and limit > 0:
-                page = (int(skip) // int(limit)) + 1
-        except Exception:
-            page = 1
+        from sqlalchemy import func
+        from app.models.router import Router
 
-        from app.api.deps import PaginationParams
-        pagination = PaginationParams(page=page, size=limit)
-
-        provisioning_service = ProvisioningService(db)
-        result = await provisioning_service.get_sessions(
-            pagination=pagination,
-            router_id=router_id,
-            status=ProvisioningStatus[status.upper()] if status else None
+        skip = max(0, skip)
+        limit = min(max(1, limit), 100)
+        query = (
+            select(ProvisioningSession)
+            .join(Router, Router.id == ProvisioningSession.router_id)
         )
+        if current_user.role != UserRole.PLATFORM_OWNER:
+            if current_user.organization_id is None:
+                return {"sessions": [], "skip": skip, "limit": limit, "total": 0}
+            query = query.where(Router.organization_id == current_user.organization_id)
+        if router_id is not None:
+            await authorize_provisioning_router(db, current_user, router_id)
+            query = query.where(ProvisioningSession.router_id == router_id)
+        if status:
+            try:
+                requested_status = ProvisioningStatus[status.upper()]
+            except KeyError as exc:
+                raise HTTPException(status_code=400, detail="Invalid provisioning status") from exc
+            query = query.where(ProvisioningSession.status == requested_status)
 
-        sessions = result.get("items", [])
-        total = result.get("total", len(sessions))
+        count_result = await db.execute(
+            select(func.count()).select_from(query.subquery())
+        )
+        total = count_result.scalar_one()
+        result = await db.execute(
+            query.order_by(ProvisioningSession.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        sessions = result.scalars().all()
 
         return {
             "sessions": [
@@ -365,6 +396,8 @@ async def list_provisioning_sessions(
             "total": total
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to list provisioning sessions: {e}")
         raise HTTPException(status_code=500, detail="Failed to list provisioning sessions")
@@ -378,6 +411,7 @@ async def delete_provisioning_session(
 ):
     """Delete a provisioning session (only if completed or failed)."""
     try:
+        await authorize_provisioning_session(db, current_user, session_id)
         provisioning_service = ProvisioningService(db)
         success = await provisioning_service.delete_session(session_id)
 
@@ -437,6 +471,7 @@ async def verify_bootstrap_script(
     from sqlalchemy import select
 
     try:
+        await authorize_provisioning_router(db, current_user, router_id)
         # Fetch the router from database
         result = await db.execute(
             select(Router).where(Router.id == router_id)
@@ -491,6 +526,7 @@ async def check_device_status(
     from datetime import datetime as dt
 
     try:
+        await authorize_provisioning_router(db, current_user, router_id)
         # Fetch the router from database
         result = await db.execute(
             select(Router).where(Router.id == router_id)
@@ -629,6 +665,7 @@ async def check_device_status(
 @router.get("/provision-script/{session_id}", response_class=PlainTextResponse)
 async def get_provisioning_script(
     session_id: str,
+    response: Response,
     token: str = Query(..., description="Provisioning token"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -645,27 +682,27 @@ async def get_provisioning_script(
     4. Router fetches this script and executes it
     5. Script POSTs completion to /provision-script/{session_id}/complete
     """
-    from app.core.security import verify_token
+    from app.api.v1.provisioning.bootstrap import (
+        _issue_bootstrap_credential,
+        _verify_bootstrap_session,
+    )
     from app.modules.provisioning.commands import (
         generate_configuration_commands,
         generate_hotspot_commands,
         generate_pppoe_commands,
     )
 
-    # Verify token
-    try:
-        token_data = verify_token(token, token_type='access')
-    except Exception as e:
-        logger.warning(f'Provision script: token verification failed: {e}')
-        raise HTTPException(status_code=401, detail='Invalid token')
-
-    # Find the provisioning session
-    result = await db.execute(
-        select(ProvisioningSession).where(ProvisioningSession.session_id == session_id)
+    _, session, router = await _verify_bootstrap_session(
+        db, token, "provisioning.script", session_id
     )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Provisioning session not found")
+    response.headers["Cache-Control"] = "no-store, private"
+    response.headers["Pragma"] = "no-cache"
+    completion_token = _issue_bootstrap_credential(
+        session.user_id,
+        session.session_id,
+        router.id,
+        "provisioning.complete",
+    )
 
     # Get the session configuration
     config = session.configuration or {}
@@ -769,7 +806,7 @@ async def get_provisioning_script(
     # Completion callback to backend
     try:
         base_url = settings.backend_url or ''
-        complete_url = f"{base_url}/api/v1/provisioning/provision-script/{session_id}/complete?token={token}&status=completed"
+        complete_url = f"{base_url}/api/v1/provisioning/provision-script/{session_id}/complete?token={completion_token}&status=completed"
         complete_mode = "https" if complete_url.startswith("https://") else "http"
         lines.extend([
             "# Notify backend of completion",
@@ -782,7 +819,13 @@ async def get_provisioning_script(
     except Exception:
         lines.append(":put \"[WARN] Could not build completion callback URL\"")
 
-    return "\n".join(lines) + "\n"
+    return PlainTextResponse(
+        "\n".join(lines) + "\n",
+        headers={
+            "Cache-Control": "no-store, private",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @router.post("/provision-script/{session_id}/complete")
@@ -798,36 +841,47 @@ async def provisioning_script_complete(
     Called by the router after executing the provisioning script. Updates the
     session status and broadcasts completion via WebSocket.
     """
-    from app.core.security import verify_token
     from datetime import datetime
 
-    # Verify token
-    try:
-        token_data = verify_token(token, token_type='access')
-    except Exception as e:
-        logger.warning(f'Provision complete: token verification failed: {e}')
-        raise HTTPException(status_code=401, detail='Invalid token')
+    from app.api.v1.provisioning.bootstrap import _verify_bootstrap_session
 
-    # Find and update the session
-    result = await db.execute(
-        select(ProvisioningSession).where(ProvisioningSession.session_id == session_id)
+    _, session, _ = await _verify_bootstrap_session(
+        db, token, "provisioning.complete", session_id
     )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Provisioning session not found")
 
-    # Update session status
-    if status == 'completed':
-        session.status = ProvisioningStatus.COMPLETED
+    if status not in {"completed", "failed"}:
+        raise HTTPException(
+            status_code=422,
+            detail="Status must be either 'completed' or 'failed'",
+        )
+
+    terminal_status = (
+        ProvisioningStatus.COMPLETED
+        if status == "completed"
+        else ProvisioningStatus.FAILED
+    )
+    if session.status in {
+        ProvisioningStatus.COMPLETED,
+        ProvisioningStatus.FAILED,
+        ProvisioningStatus.CANCELLED,
+        ProvisioningStatus.TIMEOUT,
+    }:
+        if session.status != terminal_status:
+            raise HTTPException(
+                status_code=409,
+                detail="Provisioning session is already in a different terminal state",
+            )
+
+    # Apply the router's result only while the session is active.
+    if session.status != terminal_status:
+        session.status = terminal_status
+    if session.completed_at is None:
         session.completed_at = datetime.utcnow()
-        session.progress = 100
-    elif status == 'failed':
-        session.status = ProvisioningStatus.FAILED
-        session.completed_at = datetime.utcnow()
+    session.success = status == "completed"
+    if status == "completed":
+        session.progress_percentage = 100
+    elif not session.error_message:
         session.error_message = "Script-based provisioning reported failure"
-    else:
-        session.status = ProvisioningStatus.COMPLETED
-        session.completed_at = datetime.utcnow()
 
     await db.commit()
 
@@ -853,8 +907,10 @@ async def provisioning_script_complete(
             }
         })
     except Exception:
-        pass  # Best-effort
+        logger.exception(
+            "Failed to broadcast script provisioning completion for session %s",
+            session_id,
+        )
 
     logger.info(f"Script-based provisioning completed for session {session_id} (status={status})")
     return {'success': True, 'session_id': session_id, 'status': status}
-

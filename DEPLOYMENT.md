@@ -8,6 +8,8 @@
 `isp-hotspot-billing.vercel.app` is a **different project** in the same account
 and does not serve this app. Use the URL above, or attach a custom domain in
 the Vercel dashboard under Settings -> Domains.
+The screenshot URL `isp-hotspot-billing-phi.vercel.app` is not the configured
+production deployment; use the live URL above.
 
 ## Test accounts
 
@@ -306,6 +308,16 @@ vercel --prod   # production
 Or import the repo at <https://vercel.com/new> (framework auto-detected: Vite)
 and add the environment variables from §2.5.
 
+The production VPS API is `https://ispbillingapi.codevertexafrica.com`.
+`vercel.json` proxies `/api/v1/*` and `/health` to this host using HTTPS, so
+normal HTTP requests are same-origin from the browser and do not depend on
+direct browser-to-VPS CORS. `VITE_API_URL` is optional; leave it unset in Vercel
+to use this proxy. If using a direct API override, it must be a public HTTPS
+origin (not localhost, a private IP, or the Vercel frontend). `VITE_WS_URL`
+must be the public WSS API hostname because Vercel's HTTP rewrites do not carry
+WebSocket upgrades. Keep the Vercel origin explicitly allowlisted by the API
+for direct browser calls and authenticated preflight requests.
+
 `vercel.json` already configures the SPA rewrite, immutable asset caching and
 security headers.
 
@@ -315,36 +327,99 @@ security headers.
 
 ### 5.1 Requirements
 
-- Ubuntu 22.04+ (or any Docker host)
-- 1 GB RAM for the SPA alone; **4 GB** if self-hosting Supabase
-- A domain with an A record to the server
+- Ubuntu 22.04+ (or a compatible Docker host) for the API, PostgreSQL and Redis.
+- A public DNS hostname for the VPS API and a valid HTTPS certificate.
+- A separate VPS worker/FreeRADIUS runtime installed with the supplied script.
+- Supabase credentials for the worker and RADIUS SQL pooler, configured only
+  on the VPS.
 
-### 5.2 Build and run
+### 5.2 Provisioning API, worker and RADIUS on the VPS
 
-```bash
-cp .env.example .env       # fill in VITE_SUPABASE_*
-docker compose up -d --build
-docker compose ps
-```
+Keep the frontend on Vercel. On the VPS, set these values in the root `.env`:
 
-The app is on <http://server-ip:8080>. Add TLS with Caddy:
+- `VITE_APP_URL`: `https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app`
+  or the exact custom production origin (also used as the
+  backend CORS allowlist).
+- `BACKEND_URL`: the public HTTPS API origin,
+  `https://ispbillingapi.codevertexafrica.com`.
+  This is embedded in the MikroTik bootstrap command and must resolve to this
+  VPS; never use localhost or a private address.
+- `POSTGRES_PASSWORD`, `SECRET_KEY` (at least 32 random characters),
+  `ENCRYPTION_KEY`, `GLOBAL_ADMIN_EMAIL`, and `GLOBAL_ADMIN_PASSWORD`.
 
-```bash
-sudo apt install -y caddy
-cat > /etc/caddy/Caddyfile <<'EOF'
-your-domain.com {
-    reverse_proxy localhost:8080
+Put a TLS reverse proxy (for example Caddy) in front of the backend on
+`127.0.0.1:8000`; publish only HTTPS/443 for the API. A minimal Caddy site is:
+
+```caddyfile
+api.example.com {
+    reverse_proxy 127.0.0.1:8000
 }
-EOF
-sudo systemctl reload caddy
 ```
+
+Replace `api.example.com` with the hostname in `BACKEND_URL`, point its DNS A
+record at the VPS, and reload Caddy after it obtains a TLS certificate. The compose backend,
+Postgres and Redis are started without the web frontend:
+
+```bash
+cp .env.example .env
+# Edit .env and set the production-only values listed above.
+docker compose --profile backend up -d --build db redis backend
+docker compose ps
+curl -fsS http://127.0.0.1:8000/health
+```
+
+The Postgres port is bound to loopback for host-side administration only;
+Redis has no published port. Do not run `docker compose up` without selecting
+the services on this Vercel-plus-VPS deployment.
+
+Install the persistent RouterOS worker and FreeRADIUS from the checked-in
+installer, from the repository root on the VPS:
+
+```bash
+sudo ./deploy/install-vps.sh
+sudo systemctl status netisp-worker freeradius --no-pager
+sudo ss -lun
+```
+
+Complete the installer's secret and database configuration steps before
+expecting RADIUS authentication to succeed. RADIUS uses UDP 1812 (auth) and
+1813 (accounting); permit those ports only from the routers' known public
+addresses or the WireGuard subnet. Routers behind CGNAT need the WireGuard
+tunnel (`sudo ./deploy/install-vps.sh --with-wireguard`) configured on both
+ends. Never expose the RouterOS API or worker health port 9090 to the internet.
+HTTPS/443 must be reachable by browsers and routers for the API and bootstrap
+callbacks. The installer reports whether FreeRADIUS and the worker are active;
+verify both on the VPS after configuring their required credentials.
+
+In Vercel, leave `VITE_API_URL` unset to use the HTTPS proxy in `vercel.json`;
+set `VITE_WS_URL` to the VPS public WSS hostname if it differs from the current
+default. The Add a MikroTik wizard then asks only for the router name, generates the
+bootstrap command, and discovers interfaces and network settings after the
+router runs it.
+
+Verify externally after DNS and TLS are active:
+
+```bash
+curl -fsS https://api.example.com/health
+curl -fsS https://api.example.com/docs
+```
+
+Then confirm in Vercel that the provisioning sessions list loads without a
+localhost request or browser CORS/network error. Run the generated bootstrap
+command on a test router before onboarding production routers.
 
 ### 5.3 Update
 
 ```bash
 git pull
-docker compose up -d --build
+docker compose --profile backend up -d --build db redis backend
+sudo ./deploy/install-vps.sh
+sudo systemctl status netisp-worker freeradius --no-pager
 ```
+
+The installer preserves the existing worker environment file. Review its
+output, update the installed code/configuration as needed, and verify its final
+health checks after each update.
 
 ### 5.4 Self-hosted Supabase (optional)
 

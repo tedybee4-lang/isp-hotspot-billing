@@ -6,13 +6,13 @@
  * it owns the bootstrap one-liner, device scan, provisioning sessions, the
  * workflow and the live WebSocket log stream.
  *
- * Auth: the engine's provisioning endpoints accept ANONYMOUS calls (the
- * operator runs the wizard with no sign-in step). If `VITE_API_EMAIL` /
- * `VITE_API_PASSWORD` are configured, a JWT is obtained silently and sent;
- * otherwise requests go out unauthenticated and the engine resolves them to
- * its synthetic provisioning user. See backend/docs/PROVISIONING_AUTH.md.
+ * Provisioning requests require a backend bearer token. The frontend currently
+ * authenticates its application users through Supabase; the backend must have
+ * an explicitly configured and validated identity bridge before those tokens
+ * can authorize these requests. See backend/docs/PROVISIONING_AUTH.md.
  */
 import { config } from './config'
+import { supabase } from './supabase'
 
 const TOKEN_KEY = 'ispflow.provision.token'
 const USER_KEY = 'ispflow.provision.user'
@@ -46,9 +46,27 @@ export function clearAuthToken(): void {
   }
 }
 
+/** Build a URL against the VPS engine or Vercel's same-origin API rewrite. */
+function apiUrl(path: string): string {
+  const base = config.apiUrl
+  if (import.meta.env.PROD && base) {
+    let target: URL
+    try {
+      target = new URL(base)
+    } catch {
+      throw new ProvisionError('VITE_API_URL must be an absolute HTTPS URL for the VPS provisioning API.')
+    }
+    if (target.protocol !== 'https:' || target.hostname === 'localhost' || target.hostname === '127.0.0.1') {
+      throw new ProvisionError('VITE_API_URL must use the VPS public HTTPS hostname; localhost and plain HTTP are not supported in production.')
+    }
+    if (target.origin === location.origin) throw new ProvisionError('VITE_API_URL must point to the VPS API, not the Vercel frontend origin.')
+  }
+  return base ? `${base}${path}` : path
+}
+
 /** Sign in to the provisioning engine and cache the JWT. */
 export async function signIn(email: string, password: string): Promise<void> {
-  const res = await fetch(`${config.apiUrl}/api/v1/auth/login`, {
+  const res = await fetch(apiUrl('/api/v1/auth/login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ username: email, password }),
@@ -73,24 +91,25 @@ export async function signIn(email: string, password: string): Promise<void> {
   }
 }
 
-/**
- * Make sure we hold a JWT — but never gate the wizard on one.
- *
- * The engine's provisioning endpoints accept anonymous calls, so a missing
- * token is fine. When `VITE_API_EMAIL` / `VITE_API_PASSWORD` are configured
- * we still sign in silently (best effort: the token is then used for org
- * scoping and audit); if that fails we simply proceed without a token.
- */
+/** Use the current Supabase access token, or an explicit legacy backend login. */
 async function ensureAuth(): Promise<void> {
-  if (token) return
-  if (config.apiEmail && config.apiPassword) {
-    try {
-      await signIn(config.apiEmail, config.apiPassword)
-    } catch {
-      // Silent sign-in failed (engine unreachable or creds wrong) — the
-      // engine accepts anonymous provisioning calls, so continue without.
+  if (supabase) {
+    const { data, error } = await supabase.auth.getSession()
+    if (error) {
+      throw new ProvisionError(`Could not read the Supabase sign-in session: ${error.message}`)
+    }
+    const supabaseToken = data.session?.access_token
+    if (supabaseToken) {
+      token = supabaseToken
+      return
     }
   }
+  if (token) return
+  const err = new ProvisionError(
+    'Sign in to the application with an account mapped to an authorized provisioning user.',
+  )
+  err.needsSignIn = true
+  throw err
 }
 
 /**
@@ -100,11 +119,12 @@ async function ensureAuth(): Promise<void> {
  * reachable at `config.apiUrl`.
  */
 function toNetworkError(e: unknown, path: string): ProvisionError {
+  const target = config.apiUrl || 'the VPS API'
   const err = new ProvisionError(
-    `Cannot reach the provisioning engine at ${config.apiUrl} (${path}). ` +
-    'The engine must be running and reachable from this browser — start it ' +
-    'with `docker compose --profile backend up` (or `uvicorn` on this machine), ' +
-    'and make sure VITE_API_URL points at it.',
+    `Cannot reach the provisioning engine at ${target} (${path}). ` +
+    'Check that the VPS API is running with a valid HTTPS certificate, ' +
+    'the Vercel API rewrite targets its public hostname, and direct API ' +
+    'calls use an origin allowed by the VPS CORS policy.',
   ) as ProvisionError
   err.detail = { reason: 'engine-unreachable', cause: e instanceof Error ? e.message : String(e) }
   return err
@@ -128,19 +148,18 @@ function extractDetail(body: unknown): string {
   return 'The provisioning engine rejected the request.'
 }
 
-/**Authenticated-when-possible fetch against the engine. Retries once after re-auth on 401. */
+/** Make an authenticated request to the provisioning API. */
 async function api<T>(
   path: string,
   init: RequestInit = {},
-  allowReauth = true,
 ): Promise<T> {
   await ensureAuth()
   let res: Response
   try {
-    res = await fetch(`${config.apiUrl}${path}`, {
+    res = await fetch(apiUrl(path), {
       ...init,
       headers: {
-        Authorization: `Bearer ${token ?? ''}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(init.body && !(init.body instanceof URLSearchParams)
           ? { 'Content-Type': 'application/json' }
           : {}),
@@ -148,23 +167,26 @@ async function api<T>(
       },
     })
   } catch (e) {
+    if (e instanceof ProvisionError) throw e
     // Network-level failure (engine down, wrong port, CORS) — surface an
     // actionable message instead of the browser's "Failed to fetch".
     throw toNetworkError(e, path)
   }
 
-  if (res.status === 401 && allowReauth) {
-    // Expired JWT: drop it and retry once with a fresh sign-in.
-    clearAuthToken()
-    await ensureAuth()
-    return api<T>(path, init, false)
-  }
-
   const body = (await res.json().catch(() => null)) as unknown
+  if (res.ok && body === null) {
+    throw new ProvisionError(
+      `The provisioning API returned a non-JSON success response for ${path}. ` +
+      'Check that the Vercel API rewrite reaches the VPS API before the SPA fallback.',
+    )
+  }
   if (!res.ok) {
     const err = new ProvisionError(extractDetail(body)) as ProvisionError
     err.detail = (body ?? {}) as Record<string, unknown>
-    if (res.status === 401) err.needsSignIn = true
+    if (res.status === 401) {
+      clearAuthToken()
+      err.needsSignIn = true
+    }
     throw err
   }
   return body as T
@@ -491,8 +513,12 @@ export function openStream(
   onMessage: (msg: StreamMessage) => void,
   onClose?: () => void,
 ): WebSocket {
-  const wsUrl =
-    config.apiUrl.replace(/^http/, 'ws') + `/api/v1/provisioning/ws/${sessionId}`
+  const wsPath = `/api/v1/provisioning/ws/${sessionId}`
+  // Production remains same-origin. Vercel HTTP rewrites do not imply support
+  // for WebSocket upgrades, so the provisioning wizard uses status polling.
+  const wsUrl = config.apiUrl
+    ? config.apiUrl.replace(/^http/, 'ws') + wsPath
+    : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${wsPath}`
   const ws = new WebSocket(wsUrl)
   ws.onmessage = (ev) => {
     try {
@@ -504,6 +530,3 @@ export function openStream(
   ws.onclose = () => onClose?.()
   return ws
 }
-
-
-

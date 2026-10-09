@@ -1,50 +1,76 @@
-# Provisioning wizard authentication
+# Provisioning authentication status
 
-## Decision
+## Identity bridge
 
-The MikroTik provisioning wizard (`/app/provision` in the frontend,
-`backend/app/api/v1/provisioning/*` in the engine) runs **without a
-sign-in step**. The operator asked for this explicitly: adding a router
-must not require authenticating to the engine first.
+The frontend uses Supabase Auth. The provisioning client sends the current
+Supabase access token as a bearer token to the VPS API. The provisioning API
+validates it through the configured Supabase Auth `/auth/v1/user` endpoint;
+it does not trust unverified JWT claims, Supabase profile metadata, or
+browser-supplied roles or tenant IDs.
 
-## How it works
+The verified Supabase subject is looked up in `users.supabase_user_id`. The
+matched VPS `User` row is authoritative for active state, role, and
+organization. Its mapping is deliberately separate from
+`auth_service_user_id`, which belongs to Codevertex SSO. Missing mappings are
+denied; there is no automatic link by email and no synthetic platform-owner
+fallback.
 
-`backend/app/api/deps.py::get_optional_current_user` replaces
-`require_technician_or_admin()` on every provisioning endpoint:
+To enable the bridge on a VPS:
 
-- **Authenticated request** (valid `Authorization: Bearer <JWT>`): the real
-  user is resolved and used — organization scoping and audit fields
-  (`user_id`, `tenant_id`) are preserved exactly as before. The user object
-  is `expunge`d from the session so a later `db.commit()` in the endpoint
-  cannot expire it and force a mid-request async lazy-refresh (which trips
-  SQLAlchemy's *"greenlet_spawn has not been called"*).
-- **Anonymous request** (no/invalid token): a synthetic system user
-  (`id=0`, `username="provisioning-wizard"`, `role=platform_owner`,
-  `organization_id=None`) is returned, so every `current_user.*` access in
-  the endpoints keeps working unchanged.
+1. Configure `SUPABASE_AUTH_URL=https://<project-ref>.supabase.co` and
+   `SUPABASE_ANON_KEY=<project-anon-key>` in the backend environment. The anon
+   key is public; never configure or expose a service-role key here.
+2. Apply Alembic revision `f7a8b9c0d1e2`, which adds the nullable unique
+   `users.supabase_user_id` mapping field.
+3. Have an authorized administrator map each permitted Supabase Auth UUID to
+   the intended existing VPS user. The VPS user's organization and role must
+   already be correct.
 
-The frontend (`src/lib/provisionApi.ts`) mirrors this: `ensureAuth()` no
-longer gates on a token. If `VITE_API_EMAIL` / `VITE_API_PASSWORD` are set
-it signs in silently (best effort — the token is then used for org scoping);
-otherwise requests go out unauthenticated.
+No live backend configuration, migration, or account mapping has been applied
+from this workspace. Until configured, app users without a mapping cannot
+provision routers.
 
-## Why this is acceptable
+## Authorization and progress
 
-- The engine is the **operator's own service**: the deployed frontend reaches
-  it via `VITE_API_URL` (the ISP runs the engine locally / on-prem). It is
-  operator tooling, not a public multi-tenant API.
-- The router-facing callbacks (`/bootstrap/scan-report`, `/bootstrap/notify`,
-  `/bootstrap/wg-register`, `/bootstrap/script`) were **already public** —
-  the router itself calls them with a short-lived, signed bootstrap token.
-  This change only removes the extra human sign-in in front of the wizard.
-- The bootstrap one-liner carries a signed, 1-hour provisioning token minted
-  per request; that token — not the caller's identity — authorizes the
-  router-side steps.
+Provisioning HTTP endpoints require an active technician/admin/platform-owner
+identity. Router and session access is checked against the backend
+organization. Cross-tenant sessions are hidden as not found. Session status
+polling uses the same authenticated API dependency and ownership check.
 
-## If you need to lock it down again
+WebSocket connections remain rejected until session-scoped authenticated
+tickets are implemented. The frontend uses authenticated status polling;
+ordinary Vercel HTTP rewrites do not proxy WebSocket upgrades.
 
-Restore `Depends(require_technician_or_admin())` on the affected endpoints
-(bootstrap, device_scan, workflow, network, token) and set
-`VITE_API_EMAIL` / `VITE_API_PASSWORD` so the frontend signs in silently.
-The `get_optional_current_user` dependency can stay in place; it is a strict
-superset of the old behaviour.
+RouterOS bootstrap callbacks use distinct, ten-minute credentials for script
+retrieval, scan reporting, bootstrap notification, WireGuard enrollment, and
+script completion. Each credential is bound to one router, session, initiating
+VPS user, and one operation; it cannot be used as an API bearer token. The
+backend rechecks the active user, current router authorization, session status,
+and router identity, and records each credential ID under a database row lock
+before accepting the operation. Replays are rejected.
+
+RouterOS fetch implementations that support only URL authentication still
+carry these short-lived, single-operation credentials in query strings. This
+means the credential can be visible in router-side fetch history and reverse
+proxy/access logs. Use HTTPS, avoid logging query strings for these paths, and
+do not copy generated commands into shared logs or tickets. The design limits
+the exposure but cannot remove it while using this RouterOS protocol.
+
+Completion accepts only `completed` or `failed`, rejects conflicting terminal
+states, and persists success, progress, completion time, and failure details.
+
+## Deployment and verification
+
+The Vercel project currently deployed on the production alias does not contain
+the API proxy rules. The repository's current `main` branch `vercel.json`
+contains only the SPA fallback, which explains why production API paths return
+frontend HTML. The local configuration now routes `/api/*` and `/health` to
+the VPS before the SPA fallback; this must be pushed and deployed before it
+can affect production.
+
+The VPS `/health` endpoint has returned healthy production JSON. Direct
+unauthenticated provisioning requests return a JSON 401, which is expected.
+The production Vercel alias still returns frontend HTML for `/health` and the
+provisioning API path. No authorized session creation, worker execution,
+MikroTik configuration, WebSocket delivery, or RADIUS UDP port operation has
+been verified.

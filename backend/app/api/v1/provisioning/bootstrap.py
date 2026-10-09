@@ -7,15 +7,21 @@ import secrets
 import os
 import json
 import asyncio
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlencode
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from fastapi import APIRouter, Depends, Query, HTTPException, Request, Path
+from fastapi import APIRouter, Depends, Query, HTTPException, Request, Path, Response
 from fastapi.responses import PlainTextResponse
 from app.models.user import User
-from app.models.provisioning import ProvisioningSession
-from app.api.deps import get_optional_current_user, get_db
+from app.models.provisioning import ProvisioningSession, ProvisioningStatus
+from app.api.deps import (
+    authorize_provisioning_router,
+    get_optional_current_user,
+    get_db,
+)
 from app.core.security import create_access_token
 from app.core.secrets import get_secrets_manager
 from app.services.router_provisioning import can_use_direct_api
@@ -28,6 +34,115 @@ logger = logging.getLogger(__name__)
 DEFAULT_ROUTER_IP = settings.mikrotik_default_ip
 DEFAULT_SUBNET = settings.mikrotik_default_subnet
 router = APIRouter()
+
+
+def _issue_bootstrap_credential(
+    user_id: int,
+    session_id: str,
+    router_id: int,
+    operation: str,
+) -> str:
+    return create_access_token(
+        {
+            "sub": str(user_id),
+            "jti": secrets.token_urlsafe(24),
+            "iat": datetime.now(timezone.utc).timestamp(),
+            "purpose": "router_bootstrap",
+            "session_id": session_id,
+            "router_id": router_id,
+            "bootstrap_scopes": [operation],
+        },
+        expires_delta=timedelta(minutes=10),
+        token_type="router_bootstrap",
+    )
+
+
+async def _verify_bootstrap_session(
+    db: AsyncSession,
+    token: str,
+    operation: str,
+    session_id: Optional[str],
+    identity: Optional[str] = None,
+):
+    """Validate bootstrap scope and bind it to the persisted router/session."""
+    if not session_id:
+        raise HTTPException(status_code=401, detail="Bootstrap session is required")
+
+    import jwt
+    from app.core.config import settings as app_settings
+    from app.core.security import verify_bootstrap_credential
+    from app.models.router import Router as RouterModel
+
+    try:
+        unverified = jwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": False},
+            algorithms=[app_settings.algorithm],
+        )
+        router_id = unverified.get("router_id")
+        if type(router_id) is not int:
+            raise ValueError("invalid router binding")
+    except (jwt.PyJWTError, ValueError, TypeError):
+        raise HTTPException(status_code=401, detail="Invalid bootstrap credential")
+
+    claims = verify_bootstrap_credential(
+        token,
+        operation=operation,
+        session_id=session_id,
+        router_id=router_id,
+    )
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Invalid bootstrap credential")
+
+    result = await db.execute(
+        select(ProvisioningSession).where(
+            ProvisioningSession.session_id == session_id,
+            ProvisioningSession.router_id == router_id,
+            ProvisioningSession.user_id == int(claims["sub"]),
+        ).with_for_update()
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=403, detail="Bootstrap credential is not authorized for this session")
+
+    user_result = await db.execute(
+        select(User).where(User.id == int(claims["sub"]), User.is_active.is_(True))
+    )
+    bootstrap_user = user_result.scalar_one_or_none()
+    if bootstrap_user is None:
+        raise HTTPException(status_code=403, detail="Bootstrap user is no longer active")
+    await authorize_provisioning_router(db, bootstrap_user, router_id)
+
+    router_result = await db.execute(
+        select(RouterModel).where(RouterModel.id == router_id)
+    )
+    router_row = router_result.scalar_one_or_none()
+    if router_row is None or (identity and router_row.name != identity):
+        raise HTTPException(status_code=403, detail="Bootstrap credential is not authorized for this router")
+    if session.status not in {
+        ProvisioningStatus.PENDING,
+        ProvisioningStatus.IN_PROGRESS,
+    }:
+        raise HTTPException(status_code=409, detail="Provisioning session is not active")
+
+    configuration = dict(session.configuration or {})
+    consumed = configuration.get("consumed_bootstrap_credentials", {})
+    if not isinstance(consumed, dict):
+        raise HTTPException(status_code=500, detail="Bootstrap replay state is invalid")
+    jti = claims["jti"]
+    if jti in consumed:
+        raise HTTPException(status_code=401, detail="Bootstrap credential has already been used")
+    now = datetime.now().timestamp()
+    active_consumed = {
+        used_jti: issued_at
+        for used_jti, issued_at in consumed.items()
+        if isinstance(issued_at, (int, float)) and now - issued_at < 600
+    }
+    active_consumed[jti] = claims["iat"]
+    configuration["consumed_bootstrap_credentials"] = active_consumed
+    session.configuration = configuration
+    await db.commit()
+    return claims, session, router_row
 
 
 async def ping_device(ip_address: str, timeout_ms: int = 1000) -> dict:
@@ -148,6 +263,7 @@ def decrypt_payload(encrypted: str) -> dict:
 @router.get("/command")
 async def get_bootstrap_command(
     request: Request,
+    response: Response,
     identity: str = Query("MikroTik"),
     api_port: int = Query(8728),
     interface: str = Query("ether1"),
@@ -171,6 +287,40 @@ async def get_bootstrap_command(
       returns `bootstrap_already_done=true` so the UI can skip straight to API provisioning.
     """
     try:
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        if current_user is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not session_id:
+            raise HTTPException(
+                status_code=422,
+                detail="A provisioning session is required for router bootstrap",
+            )
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,63}", identity):
+            raise HTTPException(status_code=422, detail="Router identity contains unsupported characters")
+
+        from app.models.router import Router as RouterModel
+
+        session_result = await db.execute(
+            select(ProvisioningSession).where(
+                ProvisioningSession.session_id == session_id,
+                ProvisioningSession.user_id == current_user.id,
+            )
+        )
+        bootstrap_session = session_result.scalar_one_or_none()
+        if bootstrap_session is None:
+            raise HTTPException(status_code=404, detail="Provisioning session not found")
+        if router_id is not None and bootstrap_session.router_id != router_id:
+            raise HTTPException(status_code=403, detail="Session is not authorized for this router")
+        router_id = bootstrap_session.router_id
+        await authorize_provisioning_router(db, current_user, router_id)
+        router_result = await db.execute(
+            select(RouterModel).where(RouterModel.id == router_id)
+        )
+        bootstrap_router = router_result.scalar_one_or_none()
+        if bootstrap_router is None or bootstrap_router.name != identity:
+            raise HTTPException(status_code=403, detail="Session is not authorized for this router identity")
+
         # ── Ensure a router record exists BEFORE the device runs the script ──
         # The bootstrap script installs the NAT-safe polling agent only when a
         # Router row named `identity` already exists (it needs the row id to mint
@@ -181,7 +331,6 @@ async def get_bootstrap_command(
         # step. Get-or-create the row here so the very first bootstrap run installs
         # the agent. The later device-scan upsert (by name OR ip) reuses this row.
         try:
-            from app.models.router import Router as RouterModel
             from app.modules.routers.service import RouterService
             from app.services.router_provisioning import store_router_credentials
 
@@ -249,16 +398,12 @@ async def get_bootstrap_command(
             base = f"{request.url.scheme}://{request.url.netloc}"
             logger.warning(f"BACKEND_URL not set, using request URL: {base}")
 
-        # Generate provisioning token with limited permissions (1 hour expiry)
-        token_data = {
-            "sub": str(current_user.id),
-            "username": current_user.username,
-            "role": current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role),
-            "type": "provisioning",
-            "permissions": ["provisioning.execute", "router.configure"],
-            "nonce": secrets.token_hex(8),  # Unique per request
-        }
-        provisioning_token = create_access_token(token_data, expires_delta=timedelta(hours=1))
+        script_token = _issue_bootstrap_credential(
+            current_user.id, session_id, router_id, "bootstrap.script"
+        )
+        notify_token = _issue_bootstrap_credential(
+            current_user.id, session_id, router_id, "bootstrap.notify"
+        )
 
         # Choose between encrypted payload URL or traditional query params
         if use_encrypted_url:
@@ -269,17 +414,18 @@ async def get_bootstrap_command(
                 "interface": interface,
                 "user_id": current_user.id,
                 "tenant_id": current_user.organization_id if hasattr(current_user, 'organization_id') else None,
-                "token": provisioning_token,
+                "token": script_token,
+                "session_id": session_id,
                 "timestamp": datetime.utcnow().isoformat()
             }
             encrypted = generate_encrypted_payload(payload)
             script_url = f"{base}/api/v1/provisioning/bootstrap/script/{encrypted}"
         else:
             # Traditional query parameter approach
-            script_url = f"{base}/api/v1/provisioning/bootstrap/script?token={provisioning_token}&identity={identity}&api_port={api_port}&interface={interface}"
-            # Pass session_id into the script URL so the script's notify callback can include it
-            if session_id:
-                script_url += f"&session_id={session_id}"
+            script_url = (
+                f"{base}/api/v1/provisioning/bootstrap/script?"
+                f"{urlencode({'token': script_token, 'identity': identity, 'api_port': api_port, 'interface': interface, 'session_id': session_id})}"
+            )
 
         # Detect URL scheme and set mode to match (RouterOS 7.16+ requires consistency)
         fetch_mode = "https" if script_url.startswith("https://") else "http"
@@ -291,9 +437,12 @@ async def get_bootstrap_command(
         # bootstrap executed (works behind NAT).  Include session_id when
         # available for direct session correlation; otherwise the notify
         # handler falls back to IP/identity-based lookup.
-        notify_params = f"token={provisioning_token}&identity={identity}&status=bootstrap_completed"
-        if session_id:
-            notify_params = f"session_id={session_id}&{notify_params}"
+        notify_params = urlencode({
+            "session_id": session_id,
+            "token": notify_token,
+            "identity": identity,
+            "status": "bootstrap_completed",
+        })
         notify_url = f"{base}/api/v1/provisioning/bootstrap/notify?{notify_params}"
         notify_mode = "https" if notify_url.startswith("https://") else "http"
         command += f" :delay 1s; /tool fetch mode={notify_mode} url=\"{notify_url}\" http-method=post;"
@@ -308,8 +457,8 @@ async def get_bootstrap_command(
         response_data = {
             "command": command,
             "script_url": script_url,
-            "token": provisioning_token,
-            "expires_in": 3600,  # 1 hour
+            "token": script_token,
+            "expires_in": 600,
             "notes": notes,
             "encrypted_url": use_encrypted_url,
             "notify_url": notify_url,
@@ -327,6 +476,8 @@ async def get_bootstrap_command(
 
         return response_data
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to generate bootstrap command: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate bootstrap command")
@@ -336,6 +487,7 @@ async def get_bootstrap_command(
 @router.get("/script/{encrypted_payload}", response_class=PlainTextResponse)
 async def get_bootstrap_script(
     request: Request,
+    response: Response,
     encrypted_payload: Optional[str] = None,
     token: Optional[str] = Query(None),
     identity: Optional[str] = Query(None),
@@ -364,6 +516,7 @@ async def get_bootstrap_script(
                 identity = payload.get("identity", "MikroTik")
                 api_port = payload.get("api_port", 8728)
                 interface = payload.get("interface", "ether1")
+                session_id = payload.get("session_id")
                 logger.info(f"Using encrypted payload for user {payload.get('user_id')}")
             except Exception as e:
                 logger.error(f"Failed to decrypt payload: {e}")
@@ -376,19 +529,36 @@ async def get_bootstrap_script(
             api_port = api_port or 8728
             interface = interface or "ether1"
 
-        # Verify provisioning token using the security module
-        from app.core.security import verify_token
-
-        token_data = verify_token(token, token_type="access")
-        if not token_data or not hasattr(token_data, 'user_id'):
-            raise HTTPException(status_code=401, detail="Invalid provisioning token")
+        if not token:
+            raise HTTPException(status_code=401, detail="Bootstrap credential is required")
+        token_data, bootstrap_session, router_obj = await _verify_bootstrap_session(
+            db,
+            token,
+            "bootstrap.script",
+            session_id,
+            identity,
+        )
+        scan_token = _issue_bootstrap_credential(
+            int(token_data["sub"]),
+            session_id,
+            router_obj.id,
+            "bootstrap.scan",
+        )
+        wireguard_token = _issue_bootstrap_credential(
+            int(token_data["sub"]),
+            session_id,
+            router_obj.id,
+            "bootstrap.wireguard",
+        )
 
         # Log the provisioning attempt
-        logger.info(f"Provisioning script requested by user {token_data.user_id} for identity: {identity}")
+        logger.info(
+            "Provisioning script requested for bootstrap session %s and router %s",
+            session_id,
+            router_obj.id,
+        )
 
-        # Get user_id from token_data (it's a Pydantic model, not a dict)
-        user_id = token_data.user_id
-        permissions = getattr(token_data, 'permissions', []) or []
+        user_id = int(token_data["sub"])
 
         # Fetch user and organization to get org_slug for template URLs
         from app.models.organization import Organization
@@ -407,12 +577,8 @@ async def get_bootstrap_script(
 
         # Generate agent token for the polling agent (if router record exists)
         agent_token = None
-        router_obj = None
         try:
-            from app.models.router import Router as RouterModel
             from app.services.router_agent import RouterAgentService
-            router_result = await db.execute(select(RouterModel).where(RouterModel.name == identity))
-            router_obj = router_result.scalar_one_or_none()
             if router_obj:
                 agent_service = RouterAgentService(db)
                 # IMPORTANT: reuse the existing agent token if one is already
@@ -587,9 +753,10 @@ async def get_bootstrap_script(
         # POST scan data to backend scan-report endpoint
         try:
             base_scan = settings.backend_url or (request.url.scheme + '://' + request.url.netloc)
-            scan_report_url = f"{base_scan}/api/v1/provisioning/bootstrap/scan-report?token={token}&identity={identity}"
-            if session_id:
-                scan_report_url += f"&session_id={session_id}"
+            scan_report_url = (
+                f"{base_scan}/api/v1/provisioning/bootstrap/scan-report?"
+                f"{urlencode({'token': scan_token, 'identity': identity, 'session_id': session_id})}"
+            )
             scan_mode = "https" if scan_report_url.startswith("https://") else "http"
             lines.extend([
                 "# Collect device scan data (interfaces, system info, network, services)",
@@ -704,8 +871,8 @@ async def get_bootstrap_script(
                 await db.commit()
 
                 wg_register_url = (
-                    f"{settings.backend_url}/api/v1/provisioning/bootstrap/wg-register"
-                    f"?token={token}&identity={identity}"
+                    f"{settings.backend_url}/api/v1/provisioning/bootstrap/wg-register?"
+                    f"{urlencode({'token': wireguard_token, 'identity': identity, 'session_id': session_id})}"
                 )
                 lines.extend(
                     wg_service.build_bootstrap_lines(
@@ -743,8 +910,12 @@ async def get_bootstrap_script(
         # the .rsc script itself because the JWT token would make the
         # URL extremely long and fragile.  The outer command handles it.
 
-        return "\n".join(lines) + "\n"
+        response.headers["Cache-Control"] = "no-store, private"
+        response.headers["Pragma"] = "no-cache"
+        return PlainTextResponse("\n".join(lines) + "\n", headers=dict(response.headers))
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to generate bootstrap script: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate bootstrap script")
@@ -768,15 +939,11 @@ async def bootstrap_scan_report(
     The scan data is stored via store_scanned_config() so the frontend's device scan
     endpoint can return cached data without needing a direct connection.
     """
-    from app.core.security import verify_token
     from app.services.router_provisioning import store_scanned_config
 
-    # Verify token
-    try:
-        token_data = verify_token(token, token_type='access')
-    except Exception as e:
-        logger.warning(f'Scan report: token verification failed: {e}')
-        raise HTTPException(status_code=401, detail='Invalid token')
+    _, bootstrap_session, router_obj = await _verify_bootstrap_session(
+        db, token, "bootstrap.scan", session_id, identity
+    )
 
     # Parse POST body (form-encoded from RouterOS /tool/fetch http-data=)
     try:
@@ -898,19 +1065,6 @@ async def bootstrap_scan_report(
         'timezone': '',
     }
 
-    # Find router by identity or IP
-    from app.models.router import Router as RouterModel
-    client_ip = request.client.host if request.client else None
-    router_obj = None
-
-    if identity:
-        result = await db.execute(select(RouterModel).where(RouterModel.name == identity))
-        router_obj = result.scalar_one_or_none()
-
-    if not router_obj and client_ip:
-        result = await db.execute(select(RouterModel).where(RouterModel.ip_address == client_ip))
-        router_obj = result.scalar_one_or_none()
-
     if router_obj:
         try:
             await store_scanned_config(
@@ -945,18 +1099,18 @@ async def bootstrap_scan_report(
         from app.services.ping_monitor import ping_monitor
         # Stores in-memory AND Redis (keyed by session + identity) so the browser's
         # device-scan reads it even when it lands on a different backend replica.
-        await ping_monitor.store_scan(session_id, identity, scan_payload)
+        await ping_monitor.store_scan(bootstrap_session.session_id, identity, scan_payload)
     except Exception:
         pass
 
     # ALWAYS broadcast scan_complete (router record or not) so the live wizard
     # replaces the fallback ports with the device's actual interfaces.
-    if session_id:
+    if bootstrap_session.session_id:
         try:
             from app.api.v1.provisioning.stream import manager
-            await manager.send_message(session_id, {
+            await manager.send_message(bootstrap_session.session_id, {
                 'type': 'scan_complete',
-                'session_id': session_id,
+                'session_id': bootstrap_session.session_id,
                 'data': {
                     'interfaces': interfaces,
                     'wan_interface': wan_interface,
@@ -1003,12 +1157,12 @@ async def provisioning_notify(
     if not token:
         raise HTTPException(status_code=400, detail='Token is required')
 
-    from app.core.security import verify_token
     try:
-        token_data = verify_token(token, token_type='access')
-    except Exception as e:
-        logger.warning(f'Provisioning notify: token verification failed: {e}')
-        raise HTTPException(status_code=401, detail='Invalid token')
+        token_data, session_found, found_router = await _verify_bootstrap_session(
+            db, token, "bootstrap.notify", session_id, identity
+        )
+    except HTTPException:
+        raise
 
     client_ip = ip_address or (request.client.host if request.client else None)
 
@@ -1017,48 +1171,6 @@ async def provisioning_notify(
         from app.models.provisioning import ProvisioningSession, ProvisioningStatus
         from app.api.v1.provisioning.stream import manager
         from app.services.router_provisioning import store_router_credentials
-
-        session_found = None
-        found_router = None
-
-        # Strategy 1: Direct session_id lookup
-        if session_id:
-            result = await db.execute(
-                select(ProvisioningSession).where(ProvisioningSession.session_id == session_id)
-            )
-            session_found = result.scalar_one_or_none()
-            if session_found:
-                # Resolve the router for credential storage
-                if session_found.router_id:
-                    rr = await db.execute(select(Router).where(Router.id == session_found.router_id))
-                    found_router = rr.scalar_one_or_none()
-
-        # Strategy 2: IP / identity based lookup
-        if not session_found:
-            if client_ip:
-                rr = await db.execute(select(Router).where(Router.ip_address == client_ip))
-                found_router = rr.scalar_one_or_none()
-            if not found_router and identity:
-                try:
-                    rr = await db.execute(select(Router).where(Router.name == identity))
-                    found_router = rr.scalar_one_or_none()
-                except Exception:
-                    pass
-
-            if found_router:
-                sr = await db.execute(
-                    select(ProvisioningSession)
-                    .where(
-                        ProvisioningSession.router_id == found_router.id,
-                        ProvisioningSession.status.in_([
-                            ProvisioningStatus.PENDING,
-                            ProvisioningStatus.IN_PROGRESS,
-                        ])
-                    )
-                    .order_by(ProvisioningSession.created_at.desc())
-                    .limit(1)
-                )
-                session_found = sr.scalar_one_or_none()
 
         # ── Store API credentials on the router for future reprovisioning ──
         if found_router:
@@ -1115,7 +1227,7 @@ async def provisioning_notify(
             client_ip,
             {
                 'identity': identity,
-                'token_sub': getattr(token_data, 'sub', None),
+                'token_sub': token_data.get('sub'),
                 'timestamp': datetime.utcnow().isoformat(),
             },
         )
@@ -1132,6 +1244,7 @@ async def bootstrap_wg_register(
     request: Request,
     token: str = Query(..., description="Provisioning token (required)"),
     identity: Optional[str] = Query(None, description="Router identity name"),
+    session_id: Optional[str] = Query(None, description="Provisioning session UUID"),
     db: AsyncSession = Depends(get_db),
 ):
     """Receive a router's WireGuard PUBLIC key during bootstrap.
@@ -1145,14 +1258,11 @@ async def bootstrap_wg_register(
     Auth: the provisioning token (same as the other bootstrap callbacks). No
     private key material is ever transmitted or stored.
     """
-    from app.core.security import verify_token
     from urllib.parse import parse_qs
 
-    try:
-        verify_token(token, token_type='access')
-    except Exception as e:
-        logger.warning(f'wg-register: token verification failed: {e}')
-        raise HTTPException(status_code=401, detail='Invalid token')
+    _, _, router_obj = await _verify_bootstrap_session(
+        db, token, "bootstrap.wireguard", session_id, identity
+    )
 
     # Parse the form body for public_key
     public_key = None
@@ -1168,23 +1278,7 @@ async def bootstrap_wg_register(
     if not public_key:
         raise HTTPException(status_code=400, detail='Missing public_key')
 
-    from app.models.router import Router as RouterModel
     from app.services.wireguard import WireGuardService
-
-    # Correlate the router by identity (name) then by reporting IP.
-    router_obj = None
-    if identity:
-        result = await db.execute(select(RouterModel).where(RouterModel.name == identity))
-        router_obj = result.scalar_one_or_none()
-    if not router_obj and request.client:
-        result = await db.execute(
-            select(RouterModel).where(RouterModel.ip_address == request.client.host)
-        )
-        router_obj = result.scalar_one_or_none()
-
-    if not router_obj:
-        logger.warning(f'wg-register: no router found for identity={identity}')
-        raise HTTPException(status_code=404, detail='Router not found')
 
     try:
         svc = WireGuardService(db)

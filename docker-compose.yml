@@ -8,16 +8,19 @@
 
 services:
   web:
+    profiles: ["web"]
     build:
       context: .
       dockerfile: Dockerfile
       args:
         # These are PUBLIC values — the anon key is designed to ship in the
         # browser (row-level security is what protects your data).
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?set VITE_SUPABASE_URL in .env}
-        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:?set VITE_SUPABASE_ANON_KEY in .env}
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
         VITE_APP_NAME: ${VITE_APP_NAME:-ISPFlow}
-        VITE_APP_URL: ${VITE_APP_URL:-http://localhost}
+        VITE_APP_URL: ${VITE_APP_URL:-}
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_WS_URL: ${VITE_WS_URL:-wss://ispbillingapi.codevertexafrica.com}
         VITE_SUPER_ADMIN_EMAILS: ${VITE_SUPER_ADMIN_EMAILS:-}
     image: ispflow-web:latest
     restart: unless-stopped
@@ -70,6 +73,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-ispbilling}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -113,11 +118,11 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       GLOBAL_ADMIN_EMAIL: ${GLOBAL_ADMIN_EMAIL:-}
       GLOBAL_ADMIN_PASSWORD: ${GLOBAL_ADMIN_PASSWORD:-}
-      FRONTEND_URL: ${VITE_APP_URL:-http://localhost}
-      BACKEND_URL: ${BACKEND_URL:-http://localhost:8000}
-      CORS_ORIGINS: '["${VITE_APP_URL:-http://localhost}"]'
+      FRONTEND_URL: ${VITE_APP_URL:?set VITE_APP_URL to the Vercel production origin}
+      BACKEND_URL: ${BACKEND_URL:?set BACKEND_URL to the public HTTPS VPS API origin}
+      CORS_ORIGINS: '["${VITE_APP_URL:?set VITE_APP_URL to the Vercel production origin}"]'
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]

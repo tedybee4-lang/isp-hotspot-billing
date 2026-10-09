@@ -20,12 +20,15 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: false,
-    // Lets you call the Edge Functions through the dev server if needed.
     proxy: {
+      // Provisioning engine (FastAPI) for local dev. With VITE_API_URL unset the
+      // app calls relative /api/... URLs; this forwards them to a locally-running
+      // engine. ws:true keeps the live provisioning log stream working too.
+      // (For a remote engine, set VITE_API_URL to its base URL instead.)
       "/api": {
-        target: "http://localhost:54321",
+        target: "http://localhost:8000",
         changeOrigin: true,
-        rewrite: (p) => `/functions/v1${p.replace(/^\/api/, "")}`,
+        ws: true,
       },
     },
   },

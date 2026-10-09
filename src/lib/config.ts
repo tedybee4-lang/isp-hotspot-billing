@@ -26,17 +26,12 @@ export const config = {
   /**
    * FastAPI provisioning backend (the provision engine).
    *
-   * The provisioning screen talks to this service directly (bootstrap command,
-   * device scan, workflow, live WebSocket logs). It is independent of the
-   * Supabase project above: set `VITE_API_URL` to reach it.
+   * Development talks directly to the local API. Production always uses
+   * Vercel's same-origin HTTPS rewrite for HTTP requests (avoids browser
+   * CORS). VITE_API_URL is development-only so production cannot bypass it.
    */
-  apiUrl: (import.meta.env.VITE_API_URL ?? 'http://localhost:8000').replace(/\/+$/, ''),
-  /**
-   * Optional credentials used to sign in to the provisioning backend silently
-   * (so the wizard works without a manual prompt). Both must be set together.
-   */
-  apiEmail: (import.meta.env.VITE_API_EMAIL ?? '').trim(),
-  apiPassword: (import.meta.env.VITE_API_PASSWORD ?? '').trim(),
+  apiUrl: (import.meta.env.PROD ? '' : (import.meta.env.VITE_API_URL ?? 'http://localhost:8000'))
+    .replace(/\/+$/, ''),
   /** Comma-separated list of emails auto-promoted to super admin (live mode). */
   superAdminEmails: (import.meta.env.VITE_SUPER_ADMIN_EMAILS ?? '')
     .split(',')

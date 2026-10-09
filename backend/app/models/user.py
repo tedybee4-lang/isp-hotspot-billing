@@ -77,6 +77,9 @@ class User(Base):
     # unique so existing local-only users are unaffected.
     auth_service_user_id = Column(String(255), unique=True, index=True, nullable=True)
     auth_synced_at = Column(DateTime, nullable=True)
+    # Explicit Supabase Auth subject mapping. Roles and organization continue
+    # to come only from this local user row, never Supabase profile metadata.
+    supabase_user_id = Column(String(255), unique=True, index=True, nullable=True)
     
     # Profile
     role = Column(Enum(UserRole), default=UserRole.CUSTOMER, nullable=False)

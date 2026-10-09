@@ -4,14 +4,15 @@
  * The engine (backend/) owns everything router-side. This page walks the
  * operator through its 3-step wizard:
  *
- *   1. Bootstrap — enters the router identity/IP, creates the router row +
+ *   1. Bootstrap — enters the router identity, creates the router row +
  *      a create-only session, and shows the one-liner to paste into the
  *      router terminal (Winbox: New Terminal).
  *   2. Device scan — reads the router's interfaces, services and network
  *      config (reported by the bootstrap script itself, so it works behind
  *      NAT), then continues into configuration.
- *   3. Apply & watch — sends the service configuration and streams the
- *      engine's live log (WebSocket) until provisioning completes.
+ *   3. Apply & watch — sends the service configuration and polls session
+ *      status. Live streaming remains unavailable until authenticated tickets
+ *      are implemented by the API.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -23,10 +24,10 @@ import {
 } from '../../../components/ui'
 import {
   upsertRouter, createSession, getBootstrapCommand, scanDevice, startWorkflow,
-  getSessionStatus, listSessions, cancelActiveSessions, openStream,
+  getSessionStatus, listSessions, cancelActiveSessions,
   waitForScanReport,
   type BackendRouter, type ProvisionSession, type BootstrapCommand,
-  type DeviceScan, type StreamMessage, type ProvisioningServiceType,
+  type DeviceScan, type ProvisioningServiceType,
 } from '../../../lib/provisionApi'
 import { cn } from '../../../utils/cn'
 
@@ -47,11 +48,10 @@ const STATUS_TONE: Record<string, string> = {
   timeout: 'rose',
 }
 
-const SERVICE_LABEL: Record<ProvisioningServiceType, string> = {
-  hotspot: 'Hotspot',
-  pppoe_server: 'PPPoE server',
-  both: 'Hotspot + PPPoE',
-}
+const SERVICE_TYPE: ProvisioningServiceType = 'hotspot'
+const DEFAULT_ROUTER_IP = '192.168.88.1'
+const DEFAULT_API_PORT = 8728
+const DEFAULT_WAN_INTERFACE = 'ether1'
 
 function lineLevel(level: string): string {
   switch (level) {
@@ -134,11 +134,8 @@ export function ProvisioningPage() {
 
   // Step 1 - router details
   const [step, setStep] = useState<1 | 2 | 3>(1)
-  const [identity, setIdentity] = useState('MikroTik')
-  const [routerIp, setRouterIp] = useState('192.168.88.1')
-  const [apiPort, setApiPort] = useState('8728')
-  const [wanIface, setWanIface] = useState('ether1')
-  const [serviceType, setServiceType] = useState<ProvisioningServiceType>('hotspot')
+  const [identity, setIdentity] = useState('')
+  const [wanIface, setWanIface] = useState(DEFAULT_WAN_INTERFACE)
 
   // Created records
   const [router, setRouter] = useState<BackendRouter | null>(null)
@@ -161,7 +158,6 @@ export function ProvisioningPage() {
   const [logs, setLogs] = useState<LogLine[]>([])
   const [runStatus, setRunStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const wsRef = useRef<WebSocket | null>(null)
   const pollRef = useRef<number | null>(null)
 
   const pushLog = useCallback((level: string, message: string) => {
@@ -169,8 +165,6 @@ export function ProvisioningPage() {
   }, [])
 
   const stopStream = useCallback(() => {
-    wsRef.current?.close()
-    wsRef.current = null
     if (pollRef.current !== null) {
       window.clearInterval(pollRef.current)
       pollRef.current = null
@@ -192,36 +186,7 @@ export function ProvisioningPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /* ── stream handling ── */
-
-  const handleStream = useCallback((msg: StreamMessage) => {
-    const d = msg.data ?? {}
-    if (msg.type === 'log' || msg.type === 'router_log') {
-      pushLog(
-        String(d.level ?? 'info'),
-        String(d.message ?? JSON.stringify(d)),
-      )
-    } else if (msg.type === 'status') {
-      const pct = d.progress_percentage ?? d.progress
-      pushLog('info', pct != null
-        ? `Progress ${Number(pct).toFixed(0)}% — ${String(d.current_operation ?? d.current_step ?? '')}`
-        : `Status: ${JSON.stringify(d)}`)
-    } else if (msg.type === 'scan_complete') {
-      pushLog('success', 'Device scan data received from the router (bootstrap report).')
-    } else if (msg.type === 'provisioning_complete') {
-      setRunStatus('completed')
-      pushLog('success', String(d.message ?? 'Provisioning completed.'))
-      void refreshSessions()
-    }
-  }, [pushLog, refreshSessions])
-
-  const connectStream = useCallback((sid: string) => {
-    stopStream()
-    pushLog('info', 'Live log connected.')
-    wsRef.current = openStream(sid, handleStream)
-  }, [handleStream, pushLog, stopStream])
-
-  /** Poll GET /sessions/{id}/status as a backup to the WebSocket. */
+  /** Poll GET /sessions/{id}/status until the workflow reaches a terminal state. */
   const pollStatus = useCallback((sid: string) => {
     if (pollRef.current !== null) window.clearInterval(pollRef.current)
     const tick = async () => {
@@ -257,13 +222,13 @@ export function ProvisioningPage() {
     setBusy(true); setError(null)
     try {
       const r = await upsertRouter({
-        name: identity.trim() || 'MikroTik',
-        ip_address: routerIp.trim() || '192.168.88.1',
-        api_port: Number(apiPort) || 8728,
+        name: identity.trim(),
+        ip_address: DEFAULT_ROUTER_IP,
+        api_port: DEFAULT_API_PORT,
       })
       setRouter(r)
 
-      const s = await createSession(r.id, serviceType, {
+      const s = await createSession(r.id, SERVICE_TYPE, {
         identity: r.name,
         subnet_address: cfg.subnet_address,
         cidr: Number(cfg.cidr) || 16,
@@ -273,7 +238,7 @@ export function ProvisioningPage() {
       const b = await getBootstrapCommand({
         identity: r.name,
         api_port: r.port,
-        interface: wanIface.trim() || 'ether1',
+        interface: wanIface,
         ip_address: r.ip_address,
         session_id: s.session_id,
         router_id: r.id,
@@ -281,7 +246,6 @@ export function ProvisioningPage() {
       setBootstrap(b)
       setLogs([])
       setRunStatus(null)
-      connectStream(s.session_id)
       setStep(2)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
@@ -356,9 +320,9 @@ export function ProvisioningPage() {
       // The create-only session from step 1 is still PENDING; the engine
       // refuses a new workflow while it is active, so clear it first.
       await cancelActiveSessions(router.id)
-      const w = await startWorkflow(router.id, serviceType, buildConfiguration())
+      const w = await startWorkflow(router.id, SERVICE_TYPE, buildConfiguration())
       pushLog('info', w.message)
-      connectStream(w.session_id)
+      pushLog('info', 'Tracking progress with authenticated status polling.')
       pollStatus(w.session_id)
       setStep(3)
     } catch (e) {
@@ -435,39 +399,18 @@ export function ProvisioningPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               {field('Router identity', (
                 <input className={cn(inputClass, 'mt-1')} value={identity}
-                  onChange={(e) => setIdentity(e.target.value)} placeholder="MikroTik" />
+                  onChange={(e) => setIdentity(e.target.value)} placeholder="e.g. Office Router"
+                  autoComplete="off" maxLength={64} required />
               ))}
-              {field('Router IP', (
-                <input className={cn(inputClass, 'mt-1')} value={routerIp}
-                  onChange={(e) => setRouterIp(e.target.value)} placeholder="192.168.88.1" />
-              ))}
-              {field('API port', (
-                <input className={cn(inputClass, 'mt-1')} value={apiPort}
-                  onChange={(e) => setApiPort(e.target.value)} placeholder="8728" />
-              ))}
-              {field('WAN interface', (
-                <input className={cn(inputClass, 'mt-1')} value={wanIface}
-                  onChange={(e) => setWanIface(e.target.value)} placeholder="ether1" />
-              ))}
-              <div className="sm:col-span-2">
-                {field('Service', (
-                  <select className={cn(inputClass, 'mt-1')} value={serviceType}
-                    onChange={(e) => setServiceType(e.target.value as ProvisioningServiceType)}>
-                    {(Object.keys(SERVICE_LABEL) as ProvisioningServiceType[]).map((k) => (
-                      <option key={k} value={k}>{SERVICE_LABEL[k]}</option>
-                    ))}
-                  </select>
-                ))}
-              </div>
               <div className="sm:col-span-2">
                 <Alert kind="info">
-                  The engine will create the router record and a provisioning session,
-                  then hand you the bootstrap one-liner. The session id is embedded in
-                  the router's callback URL, so this page follows the run live.
+                  Enter the router name only. The wizard uses RouterOS defaults for
+                  first contact, then discovers the router interfaces and network
+                  automatically. The session id is embedded in the callback URL.
                 </Alert>
               </div>
               <div className="sm:col-span-2 flex justify-end">
-                <Button onClick={() => void generate()} disabled={busy}
+                <Button onClick={() => void generate()} disabled={busy || !identity.trim()}
                   icon={<ChevronRight className="w-3.5 h-3.5" />}>
                   {busy ? 'Generating...' : 'Generate bootstrap command'}
                 </Button>
@@ -509,7 +452,7 @@ export function ProvisioningPage() {
               )}
               {bootstrap.ping_check && !bootstrap.ping_check.reachable && (
                 <Alert kind="error">
-                  Device not responding to ping/check at {routerIp}. Check the network connection,
+                  Device not responding to ping/check at {router.ip_address}. Check the network connection,
                   then run the bootstrap command on the router anyway — its callback reaches the
                   engine even from behind NAT.
                 </Alert>
@@ -619,5 +562,3 @@ export function ProvisioningPage() {
     </div>
   )
 }
-
-

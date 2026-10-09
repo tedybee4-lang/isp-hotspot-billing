@@ -736,7 +736,11 @@ describe('payment settlement grants what was paid and stays idempotent', () => {
     const used = [...config.matchAll(/import\.meta\.env\.([A-Z_0-9]+)/g)]
       .map((m) => m[1])
     expect(used.length).toBeGreaterThan(0)
+    // `import.meta.env.PROD` is a Vite builtin, not a VITE_* env var, so it is
+    // not a secret that would be inlined into the bundle. Only VITE_* names
+    // have to match the whitelist.
     for (const name of used) {
+      if (!name.startsWith('VITE_')) continue
       expect(
         /^VITE_(SUPABASE_URL|SUPABASE_ANON_KEY|APP_NAME|APP_URL|SUPER_ADMIN_EMAILS|API_URL|API_EMAIL|API_PASSWORD)$/.test(name),
         `${name} is inlined into the public bundle and must not be a secret`,

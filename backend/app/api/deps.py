@@ -3,12 +3,15 @@
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Optional, Union
 
+import httpx
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials, OAuth2PasswordBearer
 from fastapi.security.utils import get_authorization_scheme_param
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, AsyncSessionLocal
+from app.core.config import settings
 from app.core.security import verify_token
 from app.models.user import User, UserRole
 from app.modules.auth import UserService
@@ -311,68 +314,138 @@ def require_technician_or_admin():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Optional auth for the provisioning wizard
-#
-# The provisioning wizard is driven by the operator's own engine: the
-# deployed frontend (VITE_API_URL) talks to the engine the ISP runs
-# locally/on-prem, and the operator explicitly does NOT want a manual
-# sign-in step on the provisioning page. These endpoints therefore accept
-# anonymous calls: when a valid token IS supplied the real user is used
-# (org scoping + audit are preserved for authenticated callers); when no
-# token (or an invalid one) is supplied a synthetic system user is
-# returned so every downstream `current_user.*` access keeps working
-# unchanged. The wizard endpoints are operator tooling, not tenant data
-# APIs, so this is intentional — see backend/docs/PROVISIONING_AUTH.md.
+# Provisioning operator authentication
 # ──────────────────────────────────────────────────────────────────────────
-
-_ANONYMOUS_PROVISIONING_USER = User(
-    id=0,
-    organization_id=None,
-    username="provisioning-wizard",
-    email="provisioning-wizard@system.local",
-    first_name="Provisioning",
-    last_name="Wizard",
-    hashed_password="!",
-    role=UserRole.PLATFORM_OWNER,
-    status=None,
-    is_active=True,
-)
-
-
 async def get_optional_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """
-    Like ``require_technician_or_admin()`` but never rejects the request.
+    """Require an active technician/admin identity for operator provisioning.
 
-    Authenticated callers resolve to their real user (full back-compat);
-    everyone else resolves to the synthetic system user above. Used by the
-    provisioning wizard endpoints so the wizard works with no sign-in.
-
-    Note: the local-HS256 token is verified and the user loaded *inline*
-    (not by calling ``get_current_user`` directly) so the DB lookup runs in
-    FastAPI's own dependency greenlet context — calling a ``Depends()``-based
-    coroutine by hand trips SQLAlchemy's "greenlet_spawn has not been called".
+    The historical name is retained to avoid breaking route imports. Missing,
+    invalid, and expired credentials are rejected by the unified resolver;
+    no synthetic or privileged user is ever substituted.
     """
-    auth_header = request.headers.get("authorization") or ""
-    if auth_header.lower().startswith("bearer "):
+    try:
+        user = await get_current_user_unified(request=request, db=db)
+    except HTTPException as auth_error:
+        authorization = request.headers.get("Authorization", "")
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            raise auth_error
+
+        supabase_url = (settings.supabase_auth_url or "").rstrip("/")
+        anon_key = (settings.supabase_anon_key or "").strip()
+        if not supabase_url.startswith("https://") or not anon_key:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase provisioning identity verification is not configured with a public HTTPS URL and anon key",
+            ) from auth_error
+
         try:
-            token_data = verify_token(auth_header[len("bearer "):].strip())
-            if token_data is not None:
-                user = await UserService(db).get_by_id(token_data.user_id)
-                if user is not None:
-                    # Detach so the endpoint's own db.commit() (router
-                    # pre-creation etc.) cannot expire this object and force
-                    # an async lazy-refresh of current_user.* mid-request —
-                    # that refresh trips SQLAlchemy's "greenlet_spawn has not
-                    # been called". The loaded column attributes stay intact.
-                    db.expunge(user)
-                    return user
-        except Exception:
-            # Invalid/expired token or a DB hiccup must not block the wizard.
-            pass
-    return _ANONYMOUS_PROVISIONING_USER
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f"{supabase_url}/auth/v1/user",
+                    headers={
+                        "apikey": anon_key,
+                        "Authorization": f"Bearer {token.strip()}",
+                    },
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase identity verification is temporarily unavailable",
+            ) from exc
+
+        if response.status_code != status.HTTP_200_OK:
+            raise auth_error
+
+        try:
+            supabase_subject = response.json().get("id")
+        except (ValueError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Supabase identity verification returned an invalid response",
+            ) from exc
+        if not isinstance(supabase_subject, str) or not supabase_subject:
+            raise auth_error
+
+        result = await db.execute(
+            select(User).where(User.supabase_user_id == supabase_subject)
+        )
+        user = result.scalar_one_or_none()
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Supabase account is not mapped to a provisioning user",
+            )
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user",
+        )
+
+    allowed_roles = {
+        UserRole.PLATFORM_OWNER,
+        UserRole.ISP_ADMIN,
+        UserRole.ISP_TECHNICIAN,
+    }
+    for legacy_role in ("ADMIN", "TECHNICIAN"):
+        if hasattr(UserRole, legacy_role):
+            allowed_roles.add(getattr(UserRole, legacy_role))
+    if user.role not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+    return user
+
+
+async def authorize_provisioning_router(
+    db: AsyncSession,
+    current_user: User,
+    router_id: int,
+):
+    """Return a router only when it is in the caller's backend tenant."""
+    from app.models.router import Router
+
+    query = select(Router).where(Router.id == router_id)
+    if current_user.role != UserRole.PLATFORM_OWNER:
+        if current_user.organization_id is None:
+            raise HTTPException(status_code=404, detail="Router not found")
+        query = query.where(Router.organization_id == current_user.organization_id)
+
+    result = await db.execute(query)
+    router = result.scalars().first()
+    if router is None:
+        raise HTTPException(status_code=404, detail="Router not found")
+    return router
+
+
+async def authorize_provisioning_session(
+    db: AsyncSession,
+    current_user: User,
+    session_id: str,
+):
+    """Return a session only when its router belongs to the caller's tenant."""
+    from app.models.provisioning import ProvisioningSession
+    from app.models.router import Router
+
+    query = (
+        select(ProvisioningSession)
+        .join(Router, Router.id == ProvisioningSession.router_id)
+        .where(ProvisioningSession.session_id == session_id)
+    )
+    if current_user.role != UserRole.PLATFORM_OWNER:
+        if current_user.organization_id is None:
+            raise HTTPException(status_code=404, detail="Provisioning session not found")
+        query = query.where(Router.organization_id == current_user.organization_id)
+
+    result = await db.execute(query)
+    session = result.scalars().first()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Provisioning session not found")
+    return session
 
 
 def require_customer_or_admin():

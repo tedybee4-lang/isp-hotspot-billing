@@ -8,7 +8,10 @@ export default defineConfig({
     environment: 'jsdom',
     // Frontend tests live in src/.
     include: [
-      'src/**/*.{test,spec}.{ts,tsx}',
+      'src/**/*.test.ts',
+      'src/**/*.spec.ts',
+      'src/**/*.test.tsx',
+      'src/**/*.spec.tsx',
       // The Edge Function shared library is pure TypeScript with no Deno
       // imports, so the RouterOS protocol and compatibility rules are covered
       // by the same runner. This is how the hAP lite and CHR paths are tested

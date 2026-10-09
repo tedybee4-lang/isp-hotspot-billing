@@ -54,9 +54,11 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(
-    data: Dict[str, Any], expires_delta: Optional[timedelta] = None
+    data: Dict[str, Any],
+    expires_delta: Optional[timedelta] = None,
+    token_type: str = "access",
 ) -> str:
-    """Create JWT access token."""
+    """Create a signed token with an explicit token class."""
     to_encode = data.copy()
     
     if expires_delta:
@@ -65,11 +67,60 @@ def create_access_token(
         expire = datetime.now(timezone.utc) + timedelta(
             minutes=settings.access_token_expire_minutes
         )
-    to_encode.update({"exp": expire, "type": "access"})
+    to_encode.update({"exp": expire, "type": token_type})
     encoded_jwt = jwt.encode(
         to_encode, settings.secret_key, algorithm=settings.algorithm
     )
     return encoded_jwt
+
+
+def verify_bootstrap_credential(
+    token: str,
+    *,
+    operation: str,
+    session_id: str,
+    router_id: int,
+) -> Optional[Dict[str, Any]]:
+    """Validate a short-lived credential limited to one bootstrap session.
+
+    Bootstrap credentials are deliberately a distinct JWT type and cannot be
+    used by the normal bearer-token dependency.
+    """
+    try:
+        claims = jwt.decode(
+            token,
+            settings.secret_key,
+            algorithms=[settings.algorithm],
+            options={"require": ["exp", "iat", "sub", "jti"]},
+        )
+    except InvalidTokenError:
+        return None
+
+    scopes = claims.get("bootstrap_scopes")
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    valid_lifetime = (
+        isinstance(issued_at, (int, float))
+        and not isinstance(issued_at, bool)
+        and isinstance(expires_at, (int, float))
+        and not isinstance(expires_at, bool)
+        and 0 < expires_at - issued_at <= 600
+        and issued_at <= datetime.now(timezone.utc).timestamp() + 30
+    )
+    if (
+        claims.get("type") != "router_bootstrap"
+        or claims.get("purpose") != "router_bootstrap"
+        or scopes != [operation]
+        or not isinstance(claims.get("sub"), str)
+        or not claims["sub"].isdecimal()
+        or str(claims.get("session_id")) != session_id
+        or claims.get("router_id") != router_id
+        or not isinstance(claims.get("jti"), str)
+        or not claims["jti"]
+        or not valid_lifetime
+    ):
+        return None
+    return claims
 
 
 def create_refresh_token(

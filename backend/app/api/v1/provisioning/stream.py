@@ -27,7 +27,7 @@ import logging
 import json
 import asyncio
 from typing import Dict, Set, Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket
 from fastapi.websockets import WebSocketState
 
 logger = logging.getLogger(__name__)
@@ -318,35 +318,13 @@ async def stop_ws_subscriber() -> None:
 
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for live provisioning updates."""
-    await manager.connect(websocket, session_id)
-
-    # Replay recent history so a client that connected just after a broadcast
-    # (e.g. the "queued to agent" line emitted as POST /workflow returns) still
-    # sees it. Guarded so a replay failure never breaks the connection.
-    try:
-        await manager.replay_buffer(websocket, session_id)
-    except Exception as e:
-        logger.warning(f"Replay buffer delivery failed for session {session_id}: {e}")
-
-    try:
-        while True:
-            # Keep the connection alive and handle any incoming messages
-            data = await websocket.receive_text()
-
-            # Handle client messages if needed
-            try:
-                message = json.loads(data)
-                if message.get("type") == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong"}))
-            except json.JSONDecodeError:
-                pass
-
-    except WebSocketDisconnect:
-        manager.disconnect(websocket, session_id)
-    except Exception as e:
-        logger.error(f"WebSocket error for session {session_id}: {e}")
-        manager.disconnect(websocket, session_id)
+    """Reject streams until an authenticated, session-scoped ticket is supported."""
+    logger.warning(
+        "Rejected provisioning WebSocket for session %s: authenticated tickets "
+        "are not configured",
+        session_id,
+    )
+    await websocket.close(code=4401, reason="Authenticated stream ticket required")
 
 
 # Function to broadcast provisioning updates (called by ProvisioningService)

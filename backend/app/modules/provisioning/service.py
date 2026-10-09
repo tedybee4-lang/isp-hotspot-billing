@@ -234,18 +234,15 @@ class ProvisioningService:
                     and getattr(agent_router, "agent_installed", False)
                     and getattr(agent_router, "agent_token", None)
                 ):
-                    from datetime import timedelta
                     from app.core.config import settings
-                    from app.core.security import create_access_token
+                    from app.api.v1.provisioning.bootstrap import _issue_bootstrap_credential
                     from app.services.router_agent import RouterAgentService
 
-                    prov_token = create_access_token(
-                        {
-                            "sub": str(getattr(session, "user_id", 0) or 0),
-                            "type": "access",
-                            "permissions": ["provisioning.execute", "router.configure"],
-                        },
-                        expires_delta=timedelta(hours=2),
+                    prov_token = _issue_bootstrap_credential(
+                        session.user_id,
+                        session.session_id,
+                        session.router_id,
+                        "provisioning.script",
                     )
                     base = (settings.backend_url or "").rstrip("/")
                     script_url = (

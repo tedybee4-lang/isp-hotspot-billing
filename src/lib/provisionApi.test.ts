@@ -11,6 +11,7 @@ import {
   signIn, hasAuthToken, clearAuthToken, listSessions, ProvisionError,
   waitForScanReport,
 } from './provisionApi'
+import { config } from './config'
 import type { DeviceScan } from './provisionApi'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -22,6 +23,7 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 beforeEach(() => {
+  vi.unstubAllEnvs()
   clearAuthToken()
   vi.unstubAllGlobals()
   localStorage.clear()
@@ -90,29 +92,73 @@ describe('authenticated calls', () => {
     expect(sessions[0].session_id).toBe('s1')
   })
 
-  it('sends anonymous calls when no token and no env creds exist', async () => {
-    // The engine accepts anonymous provisioning calls, so a missing token
-    // must NOT gate the wizard — the request goes out unauthenticated.
-    let auth = ''
-    stubFetch((url, init) => {
-      expect(String(url)).toContain('/api/v1/provisioning/sessions?limit=20')
-      auth = String((init?.headers as Record<string, string>).Authorization)
-      return jsonResponse({ sessions: [] })
+  it('does not send provisioning requests without a backend identity token', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(listSessions()).rejects.toMatchObject({ needsSignIn: true })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('clears an expired backend token and preserves the API 401 response', async () => {
+    let requestCount = 0
+    stubFetch((url) => {
+      if (String(url).includes('/api/v1/auth/login')) {
+        return jsonResponse({ data: { access_token: 'expired-token' } })
+      }
+      requestCount += 1
+      return jsonResponse({ detail: 'Not authenticated' }, 401)
     })
-    const sessions = await listSessions()
-    expect(sessions).toEqual([])
-    // Sent with an empty bearer (engine resolves it to its system user).
-    expect(auth).toBe('Bearer ')
+    await signIn('a', 'b')
+
+    await expect(listSessions()).rejects.toMatchObject({
+      message: 'Not authenticated',
+      needsSignIn: true,
+    })
+    expect(requestCount).toBe(1)
+    expect(hasAuthToken()).toBe(false)
   })
 
   it('turns a network failure into an engine-unreachable ProvisionError', async () => {
     // "Failed to fetch" (engine down / wrong port / CORS) must surface an
     // actionable message naming the engine URL, not the browser's TypeError.
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    stubFetch((url) => {
+      if (String(url).includes('/api/v1/auth/login')) {
+        return jsonResponse({ data: { access_token: 'tok123' } })
+      }
+      throw new TypeError('Failed to fetch')
+    })
+    await signIn('a', 'b')
     await expect(listSessions()).rejects.toMatchObject({
       detail: { reason: 'engine-unreachable' },
     })
     await expect(listSessions()).rejects.toThrowError(/Cannot reach the provisioning engine/)
+  })
+
+  it('rejects an HTML SPA fallback returned as a successful API response', async () => {
+    stubFetch((url) => String(url).includes('/api/v1/auth/login')
+      ? jsonResponse({ data: { access_token: 'tok123' } })
+      : ({
+        ok: true,
+        status: 200,
+        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+      } as Response))
+
+    await signIn('a', 'b')
+    await expect(listSessions()).rejects.toThrowError(/non-JSON success response/)
+  })
+
+  it('uses the configured API base instead of silently switching origins', async () => {
+    let requestUrl = ''
+    stubFetch((url) => {
+      if (String(url).includes('/api/v1/auth/login')) {
+        return jsonResponse({ data: { access_token: 'tok123' } })
+      }
+      requestUrl = String(url)
+      return jsonResponse({ sessions: [] })
+    })
+    await signIn('a', 'b')
+    await expect(listSessions()).resolves.toEqual([])
+    expect(requestUrl).toBe(`${config.apiUrl}/api/v1/provisioning/sessions?limit=20`)
   })
 })
 

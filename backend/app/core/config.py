@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     sso_jwks_url: Optional[str] = None
     # Audience this service expects in SSO tokens (the isp-billing client id).
     sso_audience: str = "isp-billing-ui"
+    # Supabase Auth token verification for browser-to-provisioning requests.
+    # The anon key is public by design; service-role keys must never be used.
+    supabase_auth_url: Optional[str] = None
+    supabase_anon_key: Optional[str] = None
     # Shared secret for trusted service-to-service (S2S) callers via X-API-Key.
     internal_service_key: Optional[str] = None
     # Base URL of the central auth-api (the SSO host). auth-api is the SoT for

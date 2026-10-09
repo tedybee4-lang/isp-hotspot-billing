@@ -12,7 +12,11 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_optional_current_user
+from app.api.deps import (
+    authorize_provisioning_router,
+    get_db,
+    get_optional_current_user,
+)
 from app.core.config import settings
 from app.integrations.mikrotik import get_mikrotik_client
 from app.models.router import Router
@@ -110,6 +114,8 @@ async def scan_device(
     from app.services.router_provisioning import get_router_credentials, store_scanned_config, get_scanned_config
 
     logger.info(f"Device scan request for router_id={request.router_id} by user={current_user.username} (force_rescan={request.force_rescan})")
+
+    await authorize_provisioning_router(db, current_user, request.router_id)
 
     # Get router from database
     result = await db.execute(select(Router).where(Router.id == request.router_id))
