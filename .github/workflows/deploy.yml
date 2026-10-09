@@ -1,4 +1,10 @@
-name: 🚀 CI — Build & Deploy
+name: 🚀 CI — Build & Verify
+
+# Hosting architecture: the frontend is deployed by Vercel's GitHub integration
+# (project prj_Ze350DIlVGCyAVw1M9ZeBhezLSai, production branch `main`) and the API
+# is served from the VPS at https://ispbillingapi.codevertexafrica.com and proxied
+# through vercel.json rewrites. GitHub Pages is NOT the hosting target, so this
+# workflow only builds and verifies; it never publishes an artifact to Pages.
 
 on:
   push:
@@ -9,17 +15,15 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: "pages"
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   # ─────────────────────────────────────────────────────────
-  build:
-    name: 🔨 Build
+  frontend:
+    name: 🔨 Frontend — typecheck, tests, build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -35,31 +39,55 @@ jobs:
         run: npm ci
 
       - name: TypeScript check
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: Unit tests (Vitest)
+        run: npm test
 
       - name: Build production bundle
         run: npm run build
 
-      - name: Build provisioning worker
+      - name: Validate vercel.json rewrites
         run: |
-          npm ci --prefix worker
-          npm run build --prefix worker
-
-      - name: Upload build artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist/
+          set -euo pipefail
+          node -e '
+            const cfg = require("./vercel.json");
+            const rewrites = cfg.rewrites ?? [];
+            const fail = (m) => { console.error(m); process.exit(1); };
+            const api = rewrites.findIndex((r) => r.source === "/api/:path*");
+            const health = rewrites.findIndex((r) => r.source === "/health");
+            const spa = rewrites.findIndex((r) => r.destination === "/index.html");
+            if (api === -1) fail("missing /api/:path* rewrite");
+            if (health === -1) fail("missing /health rewrite");
+            if (spa === -1) fail("missing SPA fallback rewrite");
+            if (api > spa || health > spa) fail("api/health rewrites must precede the SPA fallback");
+            if (!rewrites[api].destination.includes("/api/:path*")) fail("/api rewrite must preserve the path");
+            if (!rewrites[health].destination.endsWith("/health")) fail("/health rewrite must target the backend health route");
+            console.log("vercel.json routing OK:", JSON.stringify(rewrites));
+          '
 
   # ─────────────────────────────────────────────────────────
-  deploy:
-    name: 🌐 Deploy to GitHub Pages
+  worker:
+    name: ⚙️ Worker — typecheck, tests, build
     runs-on: ubuntu-latest
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci --prefix worker
+
+      - name: TypeScript check
+        run: npm run typecheck --prefix worker
+
+      - name: Unit tests (Vitest)
+        run: npm test --prefix worker
+
+      - name: Build worker bundle
+        run: npm run build --prefix worker

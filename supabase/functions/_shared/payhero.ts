@@ -357,7 +357,9 @@ export class PayHeroClient {
     }
 
     // Field names are PayHero's own, verbatim from its documented request body.
-    const body = await this.request<Record<string, unknown>>('registerChannel', {
+    // The label is only used for error attribution, so it must still be a real
+    // endpoint name — 'registerChannel' is the operation, not the route.
+    const body = await this.request<Record<string, unknown>>('paymentChannels', {
       method: 'POST',
       path: PAYHERO_ENDPOINTS.paymentChannels,
       json: {

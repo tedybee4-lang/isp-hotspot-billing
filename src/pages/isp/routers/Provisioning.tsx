@@ -450,7 +450,7 @@ export function ProvisioningPage() {
                   you can scan and apply straight away.
                 </Alert>
               )}
-              {bootstrap.ping_check && !bootstrap.ping_check.reachable && (
+              {router && bootstrap.ping_check && !bootstrap.ping_check.reachable && (
                 <Alert kind="error">
                   Device not responding to ping/check at {router.ip_address}. Check the network connection,
                   then run the bootstrap command on the router anyway — its callback reaches the

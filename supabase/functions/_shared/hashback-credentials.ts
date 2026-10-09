@@ -44,13 +44,30 @@ export type AdminClient = {
  *
  * Every method returns the builder itself, so calls chain; awaiting the builder
  * resolves to a QueryResult because it is thenable.
+ *
+ * The comparison filters are declared even though the real supabase-js builder
+ * types them, because that library is loaded from a `https://` specifier at
+ * runtime and cannot be resolved here. Omitting one is not harmless: the
+ * `.neq`/`.not` filters below are what keep one ISP's Till from being read as
+ * another ISP's revenue, so a missing declaration silently drops the filter.
  */
 export type QueryBuilder = PromiseLike<QueryResult> & {
   select(columns?: string): QueryBuilder
   insert(values: unknown): QueryBuilder
   update(values: unknown): QueryBuilder
   upsert(values: unknown): PromiseLike<QueryResult>
+  delete(): QueryBuilder
   eq(column: string, value: unknown): QueryBuilder
+  /** `neq(column, value)` → `column != value`. */
+  neq(column: string, value: unknown): QueryBuilder
+  /** `not(column, 'is', null)` → `column IS NOT NULL`. */
+  not(column: string, operator: 'is' | 'eq' | 'gt' | 'lt', value: unknown): QueryBuilder
+  is(column: string, value: unknown): QueryBuilder
+  lt(column: string, value: unknown): QueryBuilder
+  lte(column: string, value: unknown): QueryBuilder
+  gt(column: string, value: unknown): QueryBuilder
+  gte(column: string, value: unknown): QueryBuilder
+  in(column: string, values: readonly unknown[]): QueryBuilder
   maybeSingle(): QueryBuilder
   single(): QueryBuilder
   order(column: string, opts?: unknown): QueryBuilder

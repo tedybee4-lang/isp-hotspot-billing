@@ -350,13 +350,17 @@ export function buildRouterPullJobScript(o: {
   }
 
   const payload = job.payload
-  const userName = printable(
-    job.kind === 'voucher_sync' || job.kind === 'voucher_revoke'
-      ? payload.code
-      : payload.username,
-    64,
-  )
-  if (!userName) throw new Error('Router job is missing a safe HotSpot username.')
+  const rawUserName = job.kind === 'voucher_sync' || job.kind === 'voucher_revoke'
+    ? payload.code
+    : payload.username
+  // `printable` is a *type predicate*, so it returns a boolean and never the
+  // value. Calling it in an expression (`const userName = printable(x, 64)`)
+  // would bind `true` to the name and push the literal string "true" into the
+  // RouterOS script, so validate first and use the narrowed original.
+  if (!printable(rawUserName, 64)) {
+    throw new Error('Router job is missing a safe HotSpot username.')
+  }
+  const userName = rawUserName
   const user = ros(userName)
   const tag = ros(`NETISP:${job.isp_id.slice(0, 8)}`)
   const ownsUser = ownedUserGuard('ispflowUser', tag)
