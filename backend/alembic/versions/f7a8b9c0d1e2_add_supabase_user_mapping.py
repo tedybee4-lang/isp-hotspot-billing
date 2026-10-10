@@ -1,15 +1,21 @@
 """add explicit Supabase Auth subject mapping to users
 
 Revision ID: f7a8b9c0d1e2
-Revises: f6a7b8c9d0e1
+Revises: e1f2a3b4c5d6
 Create Date: 2026-10-09 00:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
 
 
+# This must chain onto the then-current head, e1f2a3b4c5d6, not onto
+# f6a7b8c9d0e1. f6a7b8c9d0e1 already has a descendant branch
+# (a7b8c9d0e1f2 -> ... -> e1f2a3b4c5d6), so pointing down_revision back at it
+# created a second head. `alembic upgrade head` then refuses to run at all with
+# "Multiple head revisions are present", which means the Supabase mapping column
+# would never reach the production database.
 revision = "f7a8b9c0d1e2"
-down_revision = "f6a7b8c9d0e1"
+down_revision = "e1f2a3b4c5d6"
 branch_labels = None
 depends_on = None
 
