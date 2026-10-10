@@ -1,11 +1,12 @@
 name: 🚀 CI — Build & Verify
 
-# Hosting architecture: the frontend is deployed by Vercel's GitHub integration
-# (project prj_Ze350DIlVGCyAVw1M9ZeBhezLSai, production branch `main`) and the API
-# is served from the VPS at https://ispbillingapi.codevertexafrica.com and proxied
-# through vercel.json rewrites. GitHub Pages is NOT the hosting target, so this
-# workflow only builds and verifies; it never publishes an artifact to Pages.
-
+# Node 24 is required, not cosmetic. jsdom 30 depends on undici ^8, which
+# declares engines.node >=22.19.0. On Node 20 undici throws
+# "webidl.util.markAsUncloneable is not a function" while jsdom initialises, so
+# every jsdom (src/**) test file dies before collecting: the run silently
+# reported 23 files instead of 37 and produced 14 "unhandled errors" that
+# vitest warned could cause false-positive passes.
+# NOTE: `npm run typecheck` / `tsc --noEmit` and `vite build` are unaffected.
 on:
   push:
     branches: [main]
@@ -32,8 +33,43 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
+
+      - name: Verify Node satisfies every declared engine
+        run: |
+          set -euo pipefail
+          node --version
+          node -e '
+            const lock = require("./package-lock.json");
+            const [maj, min, pat] = process.versions.node.split(".").map(Number);
+            const atLeast = (a, b, c) =>
+              maj > a || (maj === a && (min > b || (min === b && pat >= c)));
+            // Ranges are OR-ed (e.g. "^22.22.2 || ^24.15.0 || >=26.0.0"), so any
+            // single satisfied alternative is enough. Parsing only the first
+            // token would report a false failure on exactly the supported Node.
+            const satisfied = (req) =>
+              String(req).split("||").some((alt) => {
+                const t = alt.trim();
+                const ge = />=\s*(\d+)\.(\d+)\.(\d+)/.exec(t);
+                if (ge) return atLeast(+ge[1], +ge[2], +ge[3]);
+                const caret = /\^\s*(\d+)\.(\d+)\.(\d+)/.exec(t);
+                if (caret) return atLeast(+caret[1], +caret[2], +caret[3]);
+                const plain = /^(\d+)\.(\d+)\.(\d+)$/.exec(t);
+                if (plain) return atLeast(+plain[1], +plain[2], +plain[3]);
+                return true;
+              });
+            let bad = 0;
+            for (const [p, meta] of Object.entries(lock.packages ?? {})) {
+              const req = meta && meta.engines && meta.engines.node;
+              if (req && !satisfied(req)) {
+                console.error(`UNSATISFIED: ${p} requires node ${req}`);
+                bad++;
+              }
+            }
+            if (bad) { console.error(`${bad} package(s) unsatisfied on this Node`); process.exit(1); }
+            console.log("every declared engine is satisfied");
+          '
 
       - name: Install dependencies
         run: npm ci
@@ -43,6 +79,23 @@ jobs:
 
       - name: Unit tests (Vitest)
         run: npm test
+
+      - name: Assert every unit test file actually ran
+        run: |
+          set -euo pipefail
+          # Guards against a silent-collection failure: a test file that cannot
+          # even start is reported as neither passed nor failed, so the count has
+          # to be checked rather than trusted. Node 20 vs jsdom/undici made all
+          # 14 jsdom files vanish this way (23 reported instead of 37).
+          # e2e/*.spec.ts are Playwright specs (`npm run test:e2e`) and are
+          # correctly outside vitest, so they are excluded from the expectation.
+          expected=$(git ls-files | grep -E '\.(test|spec)\.tsx?$' | grep -v '^e2e/' | wc -l | tr -d ' ')
+          actual=$(node_modules/.bin/vitest list --filesOnly | wc -l | tr -d ' ')
+          echo "tracked unit test files: $expected / vitest collects: $actual"
+          if [ "$actual" -lt "$expected" ]; then
+            echo "vitest is not collecting every unit test file" >&2
+            exit 1
+          fi
 
       - name: Build production bundle
         run: npm run build
@@ -77,7 +130,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: "npm"
 
       - name: Install dependencies
@@ -91,3 +144,4 @@ jobs:
 
       - name: Build worker bundle
         run: npm run build --prefix worker
+

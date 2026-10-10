@@ -17,6 +17,7 @@
 import { describe, expect, it, vi, beforeAll } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   PaymentGatewayService,
   PaymentServiceError,
@@ -25,7 +26,12 @@ import {
 import { encryptFor } from './secrets.ts'
 
 // Directory holding this shared module; the STK endpoint is a sibling of it.
-const here = dirname(new URL(import.meta.url).pathname.replace(/^\//, ''))
+// Must be `fileURLToPath(new URL(...))`. The previous form,
+// `dirname(new URL(import.meta.url).pathname.replace(/^\//, ''))`, stripped the
+// leading slash that POSIX needs, so `here` resolved to a *relative* path and
+// every readFileSync below failed with ENOENT on Linux CI while still passing
+// on Windows, where the drive letter keeps the path absolute.
+const here = dirname(fileURLToPath(import.meta.url))
 
 // The credential store encrypts before writing and decrypts before reading, so
 // these tests need a real AES key in the environment. The value is a throwaway
