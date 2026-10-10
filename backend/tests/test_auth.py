@@ -72,7 +72,9 @@ class TestAuthEndpoints:
         response = await client.post("/api/v1/auth/login", data=login_data)
         
         assert response.status_code == 200
-        data = response.json()
+        # The login endpoint returns the shared success envelope,
+        # {"data": {"access_token": ...}}, not a bare token payload.
+        data = response.json().get("data", response.json())
         assert "access_token" in data
         assert "refresh_token" in data
         assert data["token_type"] == "bearer"
@@ -120,7 +122,8 @@ class TestAuthEndpoints:
         response = await client.get("/api/v1/auth/me", headers=auth_headers)
         
         assert response.status_code == 200
-        data = response.json()
+        # /auth/me also returns the {"data": {...}} envelope.
+        data = response.json().get("data", response.json())
         assert data["id"] == test_user.id
         assert data["username"] == test_user.username
         assert data["email"] == test_user.email
@@ -142,14 +145,14 @@ class TestAuthEndpoints:
         login_response = await client.post("/api/v1/auth/login", data=login_data)
         assert login_response.status_code == 200
         
-        refresh_token = login_response.json()["refresh_token"]
+        refresh_token = login_response.json().get("data", login_response.json())["refresh_token"]
         
         # Refresh token
         refresh_data = {"refresh_token": refresh_token}
         response = await client.post("/api/v1/auth/refresh", json=refresh_data)
         
         assert response.status_code == 200
-        data = response.json()
+        data = response.json().get("data", response.json())
         assert "access_token" in data
         assert "refresh_token" in data
 

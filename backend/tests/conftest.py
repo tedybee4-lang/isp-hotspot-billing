@@ -1,10 +1,10 @@
 """Test configuration and fixtures."""
 
-import asyncio
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base, get_db
@@ -18,18 +18,6 @@ from app.core.security import get_password_hash
 # Test database URL
 TEST_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/ispbilling_test"
 
-# Create test engine
-test_engine = create_async_engine(
-    TEST_DATABASE_URL,
-    echo=False,
-    pool_pre_ping=True,
-)
-
-# Create test session factory
-TestSessionLocal = sessionmaker(
-    test_engine, class_=AsyncSession, expire_on_commit=False
-)
-
 
 # Event loop is now managed automatically by pytest-asyncio with asyncio_mode = auto
 # No need for manual event_loop fixture
@@ -37,18 +25,39 @@ TestSessionLocal = sessionmaker(
 
 @pytest_asyncio.fixture
 async def db_session():
-    """Create a test database session."""
+    """Create a test database session.
+
+    The engine is built *inside* this fixture rather than at module import.
+    pytest.ini sets `asyncio_default_fixture_loop_scope = function`, so
+    pytest-asyncio gives every test a brand new event loop. A module-level
+    engine binds its asyncpg connection pool to whatever loop existed at
+    import time, and that loop is closed by the first teardown — so the second
+    test raised `RuntimeError: Event loop is closed` /
+    `AttributeError: 'NoneType' object has no attribute 'send'` during setup.
+    One engine per test, disposed before the loop closes, keeps the pool on the
+    loop that actually owns the test.
+    """
+    engine = create_async_engine(
+        TEST_DATABASE_URL,
+        echo=False,
+        pool_pre_ping=True,
+        poolclass=NullPool,  # never carry a connection across loops
+    )
+
     # Create all tables
-    async with test_engine.begin() as conn:
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    
-    # Create session
-    async with TestSessionLocal() as session:
+
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_factory() as session:
         yield session
-    
-    # Drop all tables
-    async with test_engine.begin() as conn:
+
+    # Drop all tables, then close the pool while this test's loop is still open.
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+    await engine.dispose()
+
 
 
 @pytest_asyncio.fixture
@@ -58,8 +67,12 @@ async def client(db_session: AsyncSession):
         return db_session
     
     app.dependency_overrides[get_db] = override_get_db
-    
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+
+    # httpx 0.28 removed the `AsyncClient(app=...)` shortcut; the ASGI app must
+    # now be passed as an explicit transport. Without this the fixture raises
+    # TypeError and every test that uses `client` fails during setup.
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     
     app.dependency_overrides.clear()
@@ -131,6 +144,20 @@ async def test_technician_user(db_session: AsyncSession) -> User:
     return technician
 
 
+def _login_token(response) -> str:
+    """Read the access token out of a login response.
+
+    /api/v1/auth/login wraps its payload in the shared success envelope
+    ({"data": {"access_token": ...}}), so reading `access_token` off the top
+    level raises KeyError and every fixture below fails during setup.
+    """
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    token_data = payload.get("data", payload)
+    assert "access_token" in token_data, payload
+    return token_data["access_token"]
+
+
 @pytest_asyncio.fixture
 async def auth_headers(client: AsyncClient, test_user: User):
     """Get authentication headers for test user."""
@@ -139,10 +166,7 @@ async def auth_headers(client: AsyncClient, test_user: User):
         data={"username": test_user.username, "password": "testpassword"}
     )
     
-    assert response.status_code == 200
-    token_data = response.json()
-    
-    return {"Authorization": f"Bearer {token_data['access_token']}"}
+    return {"Authorization": f"Bearer {_login_token(response)}"}
 
 
 @pytest_asyncio.fixture
@@ -153,10 +177,7 @@ async def admin_auth_headers(client: AsyncClient, test_admin_user: User):
         data={"username": test_admin_user.username, "password": "adminpassword"}
     )
     
-    assert response.status_code == 200
-    token_data = response.json()
-    
-    return {"Authorization": f"Bearer {token_data['access_token']}"}
+    return {"Authorization": f"Bearer {_login_token(response)}"}
 
 
 @pytest_asyncio.fixture
@@ -167,10 +188,7 @@ async def technician_auth_headers(client: AsyncClient, test_technician_user: Use
         data={"username": test_technician_user.username, "password": "techpassword"}
     )
     
-    assert response.status_code == 200
-    token_data = response.json()
-    
-    return {"Authorization": f"Bearer {token_data['access_token']}"}
+    return {"Authorization": f"Bearer {_login_token(response)}"}
 
 
 @pytest_asyncio.fixture

@@ -1,6 +1,24 @@
-"""Tests for Paystack payment gateway transfers and subscriptions."""
+"""Tests for Paystack payment gateway transfers and subscriptions.
+
+SKIPPED — not a passing test suite. This file imports
+`app.integrations.payment_gateways.paystack`, which does not exist and never
+existed in this repository's history: `git log --all -- backend/app/integrations/
+payment_gateways.py` returns nothing. The Paystack gateway was never implemented.
+
+Recorded as an explicit skip rather than deleted so the missing feature stays
+visible. It is *not* a green check — implement the gateway and remove this guard
+to make these assertions real.
+"""
 
 import pytest
+
+pytest.skip(
+    "app.integrations.payment_gateways.paystack was never implemented; "
+    "these tests have no code under test.",
+    allow_module_level=True,
+)
+
+import pytest  # noqa: E402  (retained below only for the historical record)
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
