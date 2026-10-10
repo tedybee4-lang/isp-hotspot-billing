@@ -9,7 +9,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
   signIn, hasAuthToken, clearAuthToken, listSessions, ProvisionError,
-  waitForScanReport,
+  waitForScanReport, findRouter,
 } from './provisionApi'
 import { config } from './config'
 import type { DeviceScan } from './provisionApi'
@@ -146,6 +146,58 @@ describe('authenticated calls', () => {
     await signIn('a', 'b')
     await expect(listSessions()).rejects.toThrowError(/non-JSON success response/)
   })
+
+  it('regression: findRouter reports the SPA fallback instead of fake router data (prod /app/provision bug)', async () => {
+    // Production returned the SPA (HTTP 200, text/html) for
+    // `/api/v1/routers/?search=mapito&size=50` because the trailing-slash URL
+    // missed the Vercel proxy rewrite. The wizard must surface that as an
+    // error rather than parse it or invent a result.
+    let requested = ''
+    stubFetch((url) => {
+      const u = String(url)
+      if (u.includes('/api/v1/auth/login')) {
+        return jsonResponse({ data: { access_token: 'tok123' } })
+      }
+      requested = u
+      // The SPA index.html: res.json() rejects exactly like production.
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/html; charset=utf-8' },
+        json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON')),
+      } as unknown as Response)
+    })
+
+    await signIn('a', 'b')
+    await expect(findRouter('mapito')).rejects.toThrowError(
+      /non-JSON success response for \/api\/v1\/routers\/\?search=mapito&size=50/,
+    )
+    expect(requested).toContain('/api/v1/routers/?search=mapito&size=50')
+  })
+
+  it('surfaces a non-JSON error response (HTML challenge/proxy page) with its status', async () => {
+    stubFetch((url) => {
+      if (String(url).includes('/api/v1/auth/login')) {
+        return jsonResponse({ data: { access_token: 'tok123' } })
+      }
+      // e.g. a Cloudflare interstitial or proxy error page: non-2xx + HTML.
+      return Promise.resolve({
+        ok: false,
+        status: 403,
+        headers: { get: () => 'text/html; charset=UTF-8' },
+        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
+      } as unknown as Response)
+    })
+
+    await signIn('a', 'b')
+    await expect(listSessions()).rejects.toMatchObject({
+      detail: { status: 403, reason: 'non-json-error' },
+    })
+    await expect(listSessions()).rejects.toThrowError(
+      /non-JSON error response \(HTTP 403\).*The body is HTML/s,
+    )
+  })
+
 
   it('uses the configured API base instead of silently switching origins', async () => {
     let requestUrl = ''

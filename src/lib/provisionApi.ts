@@ -173,6 +173,8 @@ async function api<T>(
     throw toNetworkError(e, path)
   }
 
+  // `headers` may be absent on the fetch stubs used in tests.
+  const contentType = res.headers?.get('content-type') ?? ''
   const body = (await res.json().catch(() => null)) as unknown
   if (res.ok && body === null) {
     throw new ProvisionError(
@@ -181,6 +183,24 @@ async function api<T>(
     )
   }
   if (!res.ok) {
+    if (body === null) {
+      // A non-2xx response whose body is not JSON (an HTML challenge page, a
+      // proxy error, or the SPA fallback) must never be reported as a generic
+      // API rejection — surface the status and the content type instead.
+      const err = new ProvisionError(
+        `The provisioning API returned a non-JSON error response (HTTP ${res.status}) for ${path}.` +
+        (contentType.includes('text/html')
+          ? ' The body is HTML — a proxy/bot-challenge page or the SPA fallback, not the API.'
+          : ' The body was not valid JSON.') +
+        ' Check that the Vercel API rewrite reaches the VPS API before the SPA fallback.',
+      ) as ProvisionError
+      err.detail = { status: res.status, content_type: contentType, reason: 'non-json-error' }
+      if (res.status === 401) {
+        clearAuthToken()
+        err.needsSignIn = true
+      }
+      throw err
+    }
     const err = new ProvisionError(extractDetail(body)) as ProvisionError
     err.detail = (body ?? {}) as Record<string, unknown>
     if (res.status === 401) {

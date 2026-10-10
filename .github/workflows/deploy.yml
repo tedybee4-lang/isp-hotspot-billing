@@ -108,14 +108,30 @@ jobs:
             const rewrites = cfg.rewrites ?? [];
             const fail = (m) => { console.error(m); process.exit(1); };
             const api = rewrites.findIndex((r) => r.source === "/api/:path*");
+            const apiSlash = rewrites.findIndex((r) => r.source === "/api/:path*/");
             const health = rewrites.findIndex((r) => r.source === "/health");
             const spa = rewrites.findIndex((r) => r.destination === "/index.html");
             if (api === -1) fail("missing /api/:path* rewrite");
+            // Regression guard for the production /app/provision bug: Vercel
+            // compiles sources with strict:true, so /api/:path* does NOT match
+            // trailing-slash routes like /api/v1/routers/ (FastAPI collection
+            // URLs). Without this rule those requests fall through to the SPA.
+            if (apiSlash === -1) fail("missing /api/:path*/ rewrite (trailing-slash API routes)");
             if (health === -1) fail("missing /health rewrite");
             if (spa === -1) fail("missing SPA fallback rewrite");
-            if (api > spa || health > spa) fail("api/health rewrites must precede the SPA fallback");
+            if (api > spa || apiSlash > spa || health > spa) fail("api/health rewrites must precede the SPA fallback");
             if (!rewrites[api].destination.includes("/api/:path*")) fail("/api rewrite must preserve the path");
+            if (!rewrites[apiSlash].destination.includes("/api/:path*/")) fail("/api/ rewrite must preserve the trailing slash");
             if (!rewrites[health].destination.endsWith("/health")) fail("/health rewrite must target the backend health route");
+            // Compile with Vercel's own matcher and assert the exact failing
+            // request from production resolves to the VPS API.
+            const { convertRewrites } = require("@vercel/routing-utils");
+            const routes = convertRewrites(rewrites);
+            const first = (p) => routes.find((r) => r.src && new RegExp(r.src).test(p));
+            const target = first("/api/v1/routers/");
+            if (!target || !String(target.dest).startsWith("https://ispbillingapi.codevertexafrica.com/api/")) {
+              fail("/api/v1/routers/ must be proxied to the VPS API, not the SPA fallback");
+            }
             console.log("vercel.json routing OK:", JSON.stringify(rewrites));
           '
 

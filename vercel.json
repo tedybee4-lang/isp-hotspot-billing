@@ -5,7 +5,9 @@
   "installCommand": "npm ci",
   "rewrites": [
     { "source": "/api/:path*", "destination": "https://ispbillingapi.codevertexafrica.com/api/:path*" },
+    { "source": "/api/:path*/", "destination": "https://ispbillingapi.codevertexafrica.com/api/:path*/" },
     { "source": "/health", "destination": "https://ispbillingapi.codevertexafrica.com/health" },
+    { "source": "/health/", "destination": "https://ispbillingapi.codevertexafrica.com/health" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
