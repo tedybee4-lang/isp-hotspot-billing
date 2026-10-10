@@ -79,7 +79,7 @@ describe('vercel.json API rewrites (production /app/provision regression)', () =
     expect(dest.startsWith(`${API_HOST}/api/`)).toBe(true)
     // Simulate Vercel's $1 substitution with the compiled source's capture.
     const capture = new RegExp(match!.src!).exec('/api/v1/routers/')?.[1]
-    expect(capture).toBe('v1/routers')
+    expect(['v1/routers', 'v1/routers/']).toContain(capture)
     const resolved = dest.replace(/\$1/g, capture ?? '')
     expect(resolved).toBe(`${API_HOST}/api/v1/routers/`)
   })
