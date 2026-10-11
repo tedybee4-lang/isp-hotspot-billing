@@ -105,6 +105,13 @@ jobs:
   deploy:
     needs: sync-secrets
     runs-on: ubuntu-latest
+    # All build/deploy commands (./build.sh, `docker build -f docker/Dockerfile .`,
+    # `trivy fs .`) are relative to the backend/ directory, so every `run:`
+    # step in this job must execute there. Moving this workflow to the repo
+    # root changed the default cwd from backend/ to the workspace root.
+    defaults:
+      run:
+        working-directory: backend
     permissions:
       contents: write
       id-token: write
@@ -120,7 +127,7 @@ jobs:
           echo "are not available until the next run."
           echo ""
           echo "Re-triggering workflow so the deploy job picks up the new values..."
-          gh workflow run deploy.yml --repo "${{ github.repository }}" --ref "${{ github.ref }}"
+          gh workflow run deploy-backend.yml --repo "${{ github.repository }}" --ref "${{ github.ref }}"
           echo "Workflow re-triggered. This run will exit gracefully."
           exit 0
 

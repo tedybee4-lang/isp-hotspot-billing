@@ -166,9 +166,10 @@ docker-compose up -d
 
 ### Production Deployment (GitOps)
 
-Pushes to `main`/`master` trigger `.github/workflows/deploy.yml`, which runs
-`build.sh`: it builds `docker.io/codevertex/isp-billing-backend:<short-sha>` (the
-8-char commit/merge SHA), pushes it, bumps the image `tag` in the devops-k8s
+Pushes to `main`/`master` trigger `.github/workflows/deploy-backend.yml`, which
+runs `build.sh` (from the `backend/` working directory): it builds
+`docker.io/codevertex/isp-billing-backend:<short-sha>` (the 8-char commit/merge
+SHA), pushes it, bumps the image `tag` in the devops-k8s
 `apps/isp-billing-backend/values.yaml`, and **ArgoCD auto-syncs** the
 `isp-billing` namespace. Deployment secrets are synced on-demand from the
 `Bengo-Hub/devops-k8s` repo (`GH_PAT` must exist in this repo). DB migrations run
