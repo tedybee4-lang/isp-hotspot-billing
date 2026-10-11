@@ -164,7 +164,74 @@ async def get_current_user(
         request.state.sso_claims = claims
         return await provision_sso_user(db, claims)
 
+    # 3) Supabase fall-through. The web frontend authenticates every user
+    #    through Supabase, so a Supabase-issued access token must resolve here
+    #    too — otherwise operator endpoints (e.g. GET /api/v1/routers/, used by
+    #    the Add-a-MikroTik wizard via src/lib/provisionApi.ts) 401 with
+    #    AUTH_1003 ("Not authenticated") for a correctly signed-in user.
+    #    Identity only: the mapped local User row is authoritative for active
+    #    state, role, and organization, and the existing downstream active/role
+    #    checks (get_current_active_user, require_technician_or_admin) still run
+    #    unchanged — so tenant isolation and authorization are preserved.
+    supabase_user = await _resolve_supabase_user(request, db)
+    if supabase_user is not None:
+        return supabase_user
+
     raise credentials_exception
+
+
+async def _resolve_supabase_user(
+    request: Request,
+    db: AsyncSession,
+) -> Optional[User]:
+    """Resolve a local User from a Supabase-issued access token.
+
+    Returns the mapped local ``User`` when the request carries a valid Supabase
+    JWT whose subject is mapped via ``users.supabase_user_id``. Returns ``None``
+    when there is no Bearer token, the Supabase bridge is not configured, the
+    token is not a valid Supabase token, or the subject is unmapped — so the
+    caller falls back to its normal 401. Raises 503 only when the bridge is
+    configured but Supabase is unreachable (mirrors get_optional_current_user).
+    """
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+
+    supabase_url = (settings.supabase_auth_url or "").rstrip("/")
+    anon_key = (settings.supabase_anon_key or "").strip()
+    if not supabase_url.startswith("https://") or not anon_key:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"{supabase_url}/auth/v1/user",
+                headers={
+                    "apikey": anon_key,
+                    "Authorization": f"Bearer {token.strip()}",
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supabase identity verification is temporarily unavailable",
+        ) from exc
+
+    if response.status_code != status.HTTP_200_OK:
+        return None
+
+    try:
+        supabase_subject = response.json().get("id")
+    except (ValueError, AttributeError):
+        return None
+    if not isinstance(supabase_subject, str) or not supabase_subject:
+        return None
+
+    result = await db.execute(
+        select(User).where(User.supabase_user_id == supabase_subject)
+    )
+    return result.scalar_one_or_none()
 
 
 # ──────────────────────────────────────────────────────────────────────────
