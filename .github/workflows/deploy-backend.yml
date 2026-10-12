@@ -96,4 +96,4 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd /opt/ispflow-backend && docker-compose pull isp-billing-backend && docker-compose up -d isp-billing-backend"
 
           # Health check (retry for ~60s)
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "for i in $(seq 1 30); do if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then echo "backend healthy on $DEPLOY_HOST"; exit 0; fi; sleep 2; done; echo "backend NOT healthy"; exit 1"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'for i in $(seq 1 30); do if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then echo "backend healthy on $DEPLOY_HOST"; exit 0; fi; sleep 2; done; echo "backend NOT healthy"; exit 1'
