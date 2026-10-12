@@ -458,10 +458,6 @@ async def get_optional_current_user(
 
     # Skip role check - allow any authenticated Supabase user
     return user
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Insufficient permissions",
-        )
-    return user
 
 
 async def authorize_provisioning_router(
