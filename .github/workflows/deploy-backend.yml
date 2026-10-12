@@ -12,7 +12,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-billing-backend
-  COMPOSE_DIR: /opt/isp-billing
+  COMPOSE_DIR: /opt/ispflow-backend
 
 # Independent deployment pipeline (VPS Docker Compose only; no K8s /
 # legacy GitOps repo).
@@ -77,7 +77,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST || '87.76.137.72' }}
           VPS_USER: ${{ secrets.VPS_USER || 'root' }}
           SSH_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
-          COMPOSE_DIR: /opt/isp-billing
+          COMPOSE_DIR: /opt/ispflow-backend
         run: |
           export DEPLOY_HOST="${VPS_HOST}"
           export DEPLOY_USER="${VPS_USER}"
