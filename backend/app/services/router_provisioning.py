@@ -52,11 +52,13 @@ async def store_router_credentials(
     Returns:
         Updated router instance
     """
-    # Use default API credentials if not provided
+    # Use default API credentials if not provided. When the password falls back
+    # to the environment default, enforce the point-of-use guard so we never
+    # persist (and later push to a router) an empty or shipped/weak credential.
     if username is None:
         username = settings.mikrotik_api_username
     if password is None:
-        password = settings.mikrotik_api_password
+        password = settings.require_mikrotik_api_password()
     # Get router
     result = await db.execute(select(Router).where(Router.id == router_id))
     router = result.scalar_one_or_none()

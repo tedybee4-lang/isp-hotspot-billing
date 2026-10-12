@@ -340,19 +340,23 @@ async def get_bootstrap_command(
                 _q = _q.where(RouterModel.organization_id == _org_id)
             _existing = (await db.execute(_q)).scalars().first()
             if not _existing:
+                # Fail closed here too: never pre-create a router record with a
+                # weak/empty shared API password. If it's unset, this raises and
+                # the outer except logs a warning; no weak credential is stored.
+                _api_password = settings.require_mikrotik_api_password()
                 _svc = RouterService(db, organization_id=_org_id)
                 _created = await _svc.create_router(
                     name=identity,
                     ip_address=ip_address or "192.168.88.1",
                     username=settings.mikrotik_api_username,
-                    password=settings.mikrotik_api_password,
+                    password=_api_password,
                     port=api_port,
                 )
                 await store_router_credentials(
                     db=db,
                     router_id=_created.id,
                     username=settings.mikrotik_api_username,
-                    password=settings.mikrotik_api_password,
+                    password=_api_password,
                     bootstrap_completed=False,
                 )
                 logger.info(
@@ -600,7 +604,11 @@ async def get_bootstrap_script(
 
         # Get API user credentials from settings
         api_username = settings.mikrotik_api_username
-        api_password = settings.mikrotik_api_password
+        # This password is embedded verbatim into the generated RouterOS bootstrap
+        # script (and pushed onto the router), so refuse to emit a weak/empty
+        # value. require_mikrotik_api_password() raises ValueError with a
+        # sanitized message, surfaced below as a 400.
+        api_password = settings.require_mikrotik_api_password()
 
         # Helper: escape a string value for safe use inside RouterOS
         # double-quoted strings.  RouterOS expands $var inside "..." so we
@@ -916,6 +924,12 @@ async def get_bootstrap_script(
 
     except HTTPException:
         raise
+    except ValueError as e:
+        # require_mikrotik_api_password() raises ValueError when the shared API
+        # password is unset/weak. Surface it as a clean 400 (misconfiguration),
+        # not a 500. The message is already sanitized (no secret value).
+        logger.warning(f"Bootstrap script blocked by router API config: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to generate bootstrap script: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate bootstrap script")

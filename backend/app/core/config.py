@@ -422,13 +422,15 @@ class Settings(BaseSettings):
                     "value in production"
                 )
 
-            # The MikroTik API user password is pushed onto customer routers
-            # during bootstrap, so it must never fall back to a shipped default.
-            if self.mikrotik_api_password.lower() in weak_admin_passwords:
-                issues.append(
-                    "MIKROTIK_API_PASSWORD must be set to a strong, non-default "
-                    "value in production"
-                )
+            # NOTE: MIKROTIK_API_PASSWORD is intentionally NOT enforced here.
+            # It is only consumed when provisioning a router (it is pushed onto
+            # the MikroTik device / embedded in the bootstrap script), never at
+            # basic startup. Enforcing it globally re-introduced the "backend
+            # won't boot without an unrelated credential" problem the deployment
+            # kept hitting. Instead, Settings.require_mikrotik_api_password()
+            # raises a clear error at the point of use so provisioning fails
+            # loudly rather than shipping a weak/empty credential to a router.
+            # The insecure "Vertex2020!" default remains removed (empty above).
 
             # Check database URL
             if "localhost" in self.database_url or "127.0.0.1" in self.database_url:
@@ -443,6 +445,42 @@ class Settings(BaseSettings):
                 )
 
         return self
+
+    def require_mikrotik_api_password(self) -> str:
+        """Return the MikroTik API user password, raising if unset or weak.
+
+        This password is pushed onto customer routers during bootstrap and
+        provisioning (and embedded in the generated RouterOS bootstrap script),
+        so it must never fall back to a shipped/empty default. It is validated
+        at the point of use — not at application startup — so the backend can
+        boot before any router exists while router provisioning still fails
+        loudly with a sanitized message instead of writing a weak credential.
+
+        Raises:
+            ValueError: if MIKROTIK_API_PASSWORD is empty or a known weak/default
+                value.
+        """
+        weak = {
+            "",
+            "vertex2020!",
+            "superuser123",
+            "changeme",
+            "change-me",
+            "change_me",
+            "admin",
+            "password",
+            "router",
+            "mikrotik",
+        }
+        value = (self.mikrotik_api_password or "").strip()
+        if value.lower() in weak or len(value) < 8:
+            raise ValueError(
+                "MIKROTIK_API_PASSWORD must be set to a strong (>=8 chars), "
+                "non-default value before provisioning routers. Configure it on "
+                "the server environment; the insecure 'Vertex2020!' default is "
+                "not restored."
+            )
+        return self.mikrotik_api_password
 
     @property
     def database_url_sync(self) -> str:

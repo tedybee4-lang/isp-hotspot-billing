@@ -130,12 +130,15 @@ async def create_router(
 
     service = RouterService(db, organization_id=current_user.organization_id)
     try:
-        # Always use credentials from env settings, never from frontend
+        # Always use credentials from env settings, never from frontend.
+        # Fail fast (400) if the shared API password is unset/weak rather than
+        # writing a weak credential to the router record.
+        api_password = settings.require_mikrotik_api_password()
         router = await service.create_router(
             name=router_data.name,
             ip_address=router_data.ip_address,
             username=settings.mikrotik_api_username,
-            password=settings.mikrotik_api_password,
+            password=api_password,
             router_type=router_data.router_type,
             port=router_data.port,
             location=router_data.location,
@@ -174,6 +177,10 @@ async def upsert_router(
     service = RouterService(db, organization_id=current_user.organization_id)
 
     try:
+        # Fail fast if the shared API password is unset/weak before touching any
+        # router record (create or update stores it encrypted).
+        api_password = settings.require_mikrotik_api_password()
+
         # Match an existing router by IP OR by NAME within the org. The router's
         # name (identity) is stable across provisions while its IP can change
         # (NAT / WireGuard), so matching by IP alone would miss it and the create
@@ -209,7 +216,7 @@ async def upsert_router(
                 db=db,
                 router_id=existing_router.id,
                 username=settings.mikrotik_api_username,
-                password=settings.mikrotik_api_password,
+                password=api_password,
                 bootstrap_completed=existing_router.bootstrap_completed or False
             )
 
@@ -220,7 +227,7 @@ async def upsert_router(
                 name=router_data.name,
                 ip_address=router_data.ip_address,
                 username=settings.mikrotik_api_username,
-                password=settings.mikrotik_api_password,
+                password=api_password,
                 router_type=router_data.router_type,
                 port=router_data.port,
                 location=router_data.location,
@@ -232,7 +239,7 @@ async def upsert_router(
                 db=db,
                 router_id=new_router.id,
                 username=settings.mikrotik_api_username,
-                password=settings.mikrotik_api_password,
+                password=api_password,
                 bootstrap_completed=False
             )
 
