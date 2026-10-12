@@ -1,6 +1,6 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-Complete Setup Script for Codevertex ISP Billing System
+Complete Setup Script for ISP ISP Billing System
 
 This script performs the following operations:
 1. Run database migrations
@@ -213,10 +213,10 @@ def create_admin_accounts(db: Session, roles: dict):
         if not superuser:
             superuser = User(
                 username="superuser",
-                email="superuser@codevertexafrica.com",
+                email="superuser@ispbilling.example.com",
                 first_name="Super",
                 last_name="User",
-                company_name="Codevertex Africa Limited",
+                company_name="ISP Billing Platform Limited",
                 hashed_password=superuser_password_hash,
                 role=UserRole.SUPERUSER,
                 status=UserStatus.ACTIVE,
@@ -245,7 +245,7 @@ def create_admin_accounts(db: Session, roles: dict):
         if not demo_admin:
             demo_admin = User(
                 username="demo",
-                email="demo@codevertexafrica.com",
+                email="demo@ispbilling.example.com",
                 first_name="Demo",
                 last_name="Admin",
                 company_name="Demo ISP Company",
@@ -334,7 +334,7 @@ def create_demo_licence(db: Session):
             demo_licence = rbac_service.create_system_licence(
                 licence_key="DEMO-TRIAL-2024",
                 organization_name="Demo ISP Company",
-                contact_email="demo@codevertexafrica.com",
+                contact_email="demo@ispbilling.example.com",
                 contact_phone="+254 700 000 000",
                 licence_type="trial",
                 trial_days=14,
@@ -486,7 +486,7 @@ def fresh_install(db: Session):
 def main():
     """Main setup function."""
     parser = argparse.ArgumentParser(
-        description="Complete setup script for Codevertex ISP Billing System"
+        description="Complete setup script for ISP ISP Billing System"
     )
     parser.add_argument(
         '--skip-sample-data',
@@ -501,7 +501,7 @@ def main():
     
     args = parser.parse_args()
     
-    print_header("Codevertex ISP Billing System - Complete Setup")
+    print_header("ISP ISP Billing System - Complete Setup")
     print(f"Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Database: {settings.database_url.split('@')[-1] if '@' in settings.database_url else 'Unknown'}")
     

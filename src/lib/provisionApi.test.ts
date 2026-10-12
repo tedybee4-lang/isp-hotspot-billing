@@ -40,7 +40,7 @@ describe('engine sign-in', () => {
       return jsonResponse({ data: { access_token: 'tok123', user: { username: 'superuser' } } })
     })
     expect(hasAuthToken()).toBe(false)
-    await signIn('superuser@codevertexafrica.com', 'pw')
+    await signIn('superuser@example.com', 'pw')
     expect(hasAuthToken()).toBe(true)
     expect(localStorage.getItem('ispflow.provision.token')).toBe('tok123')
   })

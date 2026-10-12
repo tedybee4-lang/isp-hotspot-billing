@@ -308,7 +308,7 @@ vercel --prod   # production
 Or import the repo at <https://vercel.com/new> (framework auto-detected: Vite)
 and add the environment variables from §2.5.
 
-The production VPS API is `https://ispbillingapi.codevertexafrica.com`.
+The production VPS API origin is configurable; the docs/code use the placeholder `https://ispbilling.example.com` (replace with your own domain — no working domain is assumed).
 `vercel.json` proxies `/api/v1/*` and `/health` to this host using HTTPS, so
 normal HTTP requests are same-origin from the browser and do not depend on
 direct browser-to-VPS CORS. `VITE_API_URL` is optional; leave it unset in Vercel
@@ -340,8 +340,7 @@ Keep the frontend on Vercel. On the VPS, set these values in the root `.env`:
 - `VITE_APP_URL`: `https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app`
   or the exact custom production origin (also used as the
   backend CORS allowlist).
-- `BACKEND_URL`: the public HTTPS API origin,
-  `https://ispbillingapi.codevertexafrica.com`.
+- `BACKEND_URL`: the public HTTPS API origin (placeholder: `https://ispbilling.example.com` — replace with your own domain).
   This is embedded in the MikroTik bootstrap command and must resolve to this
   VPS; never use localhost or a private address.
 - `POSTGRES_PASSWORD`, `SECRET_KEY` (at least 32 random characters),

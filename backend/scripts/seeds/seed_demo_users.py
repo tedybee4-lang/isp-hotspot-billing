@@ -106,8 +106,8 @@ async def create_demo_users(db: AsyncSession) -> tuple:
             router_type="mikrotik",
             ip_address="192.168.100.7",  # Actual provisioned router IP
             port=8728,
-            # Use the demo API user credentials requested: codevertex_api_user / Vertex2020
-            username="codevertex_api_user",
+            # Use the demo API user credentials requested: ISP_api_user / Vertex2020
+            username="ISP_api_user",
             password="Vertex2020",
             winbox_port=8291,
             status=RouterStatus.ONLINE,

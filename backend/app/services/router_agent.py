@@ -1,7 +1,7 @@
 """Router agent service for polling-based command queue architecture.
 
 Handles command queuing, poll processing, and result reporting
-for MikroTik routers running the CodeVertex polling agent.
+for MikroTik routers running the ISP polling agent.
 """
 
 import secrets

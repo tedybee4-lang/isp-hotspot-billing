@@ -1,4 +1,4 @@
-# Database Scripts - Codevertex ISP Billing System
+# Database Scripts - ISP ISP Billing System
 
 ## Overview
 This directory contains utility scripts for database management, seeding, and system initialization.

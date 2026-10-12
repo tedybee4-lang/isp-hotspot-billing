@@ -194,10 +194,10 @@ pytest tests/test_auth.py -v
 - Added SMS Credit API surface (accounts, top-ups, balance, transactions, analytics) to match UI.
 - Added Router active-connections listing and a disconnect-user endpoint to support Active Users actions.
 - Added provisioning bootstrap endpoints generating a RouterOS one‑liner and script based on the current domain.
-- Replaced any remaining references to Centipid with Codevertex in provisioning bootstrap logic.
+- Replaced any remaining references to Centipid with ISP in provisioning bootstrap logic.
 - Updated `docs/API_DOCUMENTATION.md` with the new endpoints.
 
-### Provisioning Overview (Codevertex)
+### Provisioning Overview (ISP)
 The provisioning workflow consists of three steps:
 1. Connection – validate connectivity, gather system info, verify RouterOS version.
 2. Configuration – backup current config, apply base config (identity, bridge, pool, DNS), verify.

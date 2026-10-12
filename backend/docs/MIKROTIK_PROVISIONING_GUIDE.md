@@ -30,7 +30,7 @@
 
 ## 1. The core constraint: routers are behind NAT
 
-In production the cloud backend (`ispbillingapi.codevertexafrica.com`) **cannot
+In production the cloud backend (`ispbilling.example.com`) **cannot
 open a connection to a router's API** (`192.168.x.x:8728`) because the router sits
 behind NAT on a customer LAN. Every integration is therefore **router-initiated
 (outbound)**: the router fetches scripts and polls the backend; the backend never
@@ -55,7 +55,7 @@ WireGuard tunnel exists — see the audit doc §3). It is never the primary path
 
 | # | Channel | Endpoint(s) | Purpose |
 |---|---------|-------------|---------|
-| 1 | **Bootstrap** | `GET /provisioning/bootstrap/command` → `/bootstrap/script` → `/bootstrap/scan-report` + `/bootstrap/notify` | First touch: enable API/FTP/Winbox, create the `codevertex-api` user, scan the device, **install the polling agent**, (optionally enroll WireGuard). |
+| 1 | **Bootstrap** | `GET /provisioning/bootstrap/command` → `/bootstrap/script` → `/bootstrap/scan-report` + `/bootstrap/notify` | First touch: enable API/FTP/Winbox, create the `ISP-api` user, scan the device, **install the polling agent**, (optionally enroll WireGuard). |
 | 2 | **Script-based provisioning** | `GET /provisioning/provision-script/{session_id}` → `/provision-script/{session_id}/complete` | Step 3 service setup. The router fetches a full `.rsc` (bridge / pool / DHCP / DNS / NAT / hotspot / walled-garden / captive portal) and runs it locally, then POSTs completion. |
 | 3 | **Polling agent** | `POST /router-agent/poll-text`, `POST /router-agent/report` | Ongoing command channel. A `/system/scheduler` on the router polls every ~30 s and runs queued commands (`create_user`, `disable_user`, `enable_user`, `disconnect`, `fetch_import`, …). This is what turns a *paid subscription* into actual router access. |
 
@@ -77,7 +77,7 @@ NAT-safe channels above.
 Step 1  Connection  → POST /provisioning/sessions (create-only) returns session_id
                       GET  /provisioning/bootstrap/command?...&session_id=...
                       User pastes the one-liner in the router terminal.
-                      Router: identity + API/FTP/Winbox + codevertex-api user
+                      Router: identity + API/FTP/Winbox + ISP-api user
                               + POST scan-report + POST notify (+ install agent).
 
 Step 2  Device scan → scan data arrives via /bootstrap/scan-report (router→cloud).
@@ -103,15 +103,15 @@ Step 3  Services    → POST /provisioning/workflow (or the script path).
 `GET /api/v1/provisioning/bootstrap/command` returns a copy-paste command:
 
 ```routeros
-/tool fetch mode=https url="https://<backend>/api/v1/provisioning/bootstrap/script?token=<JWT>&identity=<NAME>&api_port=8728&interface=ether1" dst-path=codevertex.rsc;:delay 2s;/import codevertex.rsc; :delay 1s; /tool fetch mode=https url="https://<backend>/api/v1/provisioning/bootstrap/notify?session_id=<SID>&token=<JWT>&identity=<NAME>&status=bootstrap_completed" http-method=post;
+/tool fetch mode=https url="https://<backend>/api/v1/provisioning/bootstrap/script?token=<JWT>&identity=<NAME>&api_port=8728&interface=ether1" dst-path=ISP.rsc;:delay 2s;/import ISP.rsc; :delay 1s; /tool fetch mode=https url="https://<backend>/api/v1/provisioning/bootstrap/notify?session_id=<SID>&token=<JWT>&identity=<NAME>&status=bootstrap_completed" http-method=post;
 ```
 
-The downloaded `codevertex.rsc` (`bootstrap.py::get_bootstrap_script`) does, in order:
+The downloaded `ISP.rsc` (`bootstrap.py::get_bootstrap_script`) does, in order:
 
 1. Set system identity.
 2. Enable **API** (port from query), **FTP** (21), **Winbox**, and move **SSH** to **2222**.
-3. Create user group `codevertex-api` and user (`mikrotik_api_username` from settings)
-   in group `codevertex-api` — comment `"Codevertex ISP Billing API - DO NOT DELETE"`.
+3. Create user group `ISP-api` and user (`mikrotik_api_username` from settings)
+   in group `ISP-api` — comment `"ISP ISP Billing API - DO NOT DELETE"`.
 4. Verify the WAN interface exists; tune memory logging.
 5. **POST a scan report** (`/bootstrap/scan-report`) with interfaces, version, board,
    WAN interface (derived from the default route), service counts, IPs, DNS.
@@ -156,19 +156,19 @@ continue. At the end the script POSTs `/provision-script/{session_id}/complete`.
 **Order of operations (hotspot path):**
 
 1. **Identity, NTP, timezone** (timezone from the org; default `Africa/Nairobi`).
-2. **Clean slate** — remove the previous run's `codevertex-*` objects first (see §13).
-3. **Bridge** `codevertex-bridge` (ensured, not stripped from the default bridge).
+2. **Clean slate** — remove the previous run's `ISP-*` objects first (see §13).
+3. **Bridge** `ISP-bridge` (ensured, not stripped from the default bridge).
 4. **Bridge ports** — each selected port is removed from any current bridge, then
-   added to `codevertex-bridge`. **WAN is filtered out** (`filter_wan_from_bridge_ports`).
-5. **Gateway IP** on the bridge, **IP pool** `codevertex-pool`, **DNS** (`allow-remote-requests`).
-6. **DHCP server** `codevertex-dhcp` + network — DHCP hands clients the **router/gateway
+   added to `ISP-bridge`. **WAN is filtered out** (`filter_wan_from_bridge_ports`).
+5. **Gateway IP** on the bridge, **IP pool** `ISP-pool`, **DNS** (`allow-remote-requests`).
+6. **DHCP server** `ISP-dhcp` + network — DHCP hands clients the **router/gateway
    as their DNS** (so captive-portal detection works), not 8.8.8.8.
-7. **NAT masquerade** out the WAN interface (`comment=codevertex-masquerade`).
+7. **NAT masquerade** out the WAN interface (`comment=ISP-masquerade`).
 8. Hotspot: enable FTP, create CA + server **certificate** (for RFC 7710/8910 /
-   DHCP Option 114), hotspot **profile** `codevertex-hsprof`
+   DHCP Option 114), hotspot **profile** `ISP-hsprof`
    (`login-by=http-chap,http-pap,https,mac-cookie`), assign the SSL cert.
 9. Create the **hotspot server** — **named `ISP-Hotspot`** (from service-config
-   enrichment), bound to `codevertex-bridge`, `addresses-per-mac=1`, `idle-timeout=5m`.
+   enrichment), bound to `ISP-bridge`, `addresses-per-mac=1`, `idle-timeout=5m`.
 10. **Captive-portal redirect install** — fetch `login.html` + `alogin.html` from the
     backend into `hotspot/` and set `html-directory=hotspot` on the profile (see §8 — this
     is what makes the redirect actually happen).
@@ -178,8 +178,8 @@ continue. At the end the script POSTs `/provision-script/{session_id}/complete`.
     **anti-sharing** TTL rules.
 
 > **Hotspot server name caveat:** the server is `ISP-Hotspot`, the *profile* is
-> `codevertex-hsprof`. Cleanup/reset must match the **server by interface**
-> (`interface=codevertex-bridge`), not by `name~"codevertex"`. See
+> `ISP-hsprof`. Cleanup/reset must match the **server by interface**
+> (`interface=ISP-bridge`), not by `name~"ISP"`. See
 > [`reset-router-provision.md`](./reset-router-provision.md).
 
 ---
@@ -189,9 +189,9 @@ continue. At the end the script POSTs `/provision-script/{session_id}/complete`.
 Installed during bootstrap (channel 3). Two script modes from
 `GET /router-agent/script/{router_id}` (`router_agent.py`):
 
-- **`installer`** (default): removes any prior `codevertex-agent` scheduler + cached
+- **`installer`** (default): removes any prior `ISP-agent` scheduler + cached
   `cvagent.rsc`, downloads the agent **body** to `cvagent.rsc`, creates a
-  `/system/scheduler name="codevertex-agent" interval=<poll>s on-event="/import file-name=cvagent.rsc"`,
+  `/system/scheduler name="ISP-agent" interval=<poll>s on-event="/import file-name=cvagent.rsc"`,
   and runs it once immediately. **This is what makes polling recurring** — a
   previous bug returned only the body, so `/import` ran a single poll and never
   scheduled anything.
@@ -296,15 +296,15 @@ platform-level** (`organization_id IS NULL`); ISPs don't configure their own.
 
 - Default subnet **`172.31.0.0/16`** (gateway `.0.1`, pool `.0.2`–`.255.254`).
   `calculate_network_config()` also handles /22, /23, /24.
-- Bridge `codevertex-bridge`; pool `codevertex-pool`; DHCP `codevertex-dhcp`;
-  hotspot profile `codevertex-hsprof`; hotspot **server `ISP-Hotspot`**.
+- Bridge `ISP-bridge`; pool `ISP-pool`; DHCP `ISP-dhcp`;
+  hotspot profile `ISP-hsprof`; hotspot **server `ISP-Hotspot`**.
 - Version handling: `is_v7_or_later()` branches NTP and timezone syntax (v7 uses
   `servers=` and IANA `time-zone-name=`; v6 uses `primary-ntp/secondary-ntp` and
   `time-zone-autodetect`). The generated `.rsc` uses slash-separated paths
   (`/ip/firewall/nat/add …`) which both versions accept. See
   [`mikrotikv6-v7-comparison.md`](./mikrotikv6-v7-comparison.md).
 - **No DROP-all firewall rule** is added (avoids lockout); only permissive
-  management-allow rules (`comment=codevertex-allow-*`) — and those are **never**
+  management-allow rules (`comment=ISP-allow-*`) — and those are **never**
   removed by cleanup.
 
 ---
@@ -321,18 +321,18 @@ later via the router `sync_time` action. v6 routers fall back to timezone auto-d
 
 `generate_configuration_commands()` emits a **clean-slate block first** so a
 reprovision (e.g. to add `ether2`) starts from a known state and re-adds never hit
-"already exists". Every removal is `on-error`-guarded and scoped to `codevertex-*`
+"already exists". Every removal is `on-error`-guarded and scoped to `ISP-*`
 objects, in dependency order (dependents → deps):
 
-- hotspot **server by `interface=codevertex-bridge`** (name varies — `ISP-Hotspot`),
-  hotspot profile `codevertex-hsprof`, gateway ip-binding, walled-garden hosts/IPs,
+- hotspot **server by `interface=ISP-bridge`** (name varies — `ISP-Hotspot`),
+  hotspot profile `ISP-hsprof`, gateway ip-binding, walled-garden hosts/IPs,
 - DHCP server + network, IP pool,
 - captive-detection DNS static, DNS-redirect NAT, masquerade NAT, DoH-block filter,
   anti-sharing mangle/filter,
 - bridge IP, then the bridge itself.
 
 What is deliberately **never** touched: the default `bridge`, the WAN interface, the
-management IP, and the `codevertex-allow-*` management firewall rules.
+management IP, and the `ISP-allow-*` management firewall rules.
 
 For a manual wipe before re-provisioning, use
 [`reset-router-provision.md`](./reset-router-provision.md) (which matches the same
@@ -361,13 +361,13 @@ For a manual wipe before re-provisioning, use
 **Symptom: the router's own built-in open Wi-Fi says "No internet" yet still browses.**
 - The provision script installs **global** `/ip/dns/static` captive-detection entries
   (probe domains → gateway) and a **global** masquerade. These also affect clients on
-  the router's **built-in Wi-Fi**, which is **not** part of `codevertex-bridge` and so
+  the router's **built-in Wi-Fi**, which is **not** part of `ISP-bridge` and so
   is **not** gated by the hotspot. Such clients reach the internet (via masquerade)
   but their OS captive probe resolves to the gateway and gets intercepted, so the OS
   shows "No internet / sign-in required" even though browsing works.
 - **The built-in open Wi-Fi bypasses the hotspot entirely** — anyone on it gets
   unauthenticated internet. For production, the built-in Wi-Fi should be **disabled**
-  or **bridged into `codevertex-bridge`** so it is gated by the hotspot like the wired
+  or **bridged into `ISP-bridge`** so it is gated by the hotspot like the wired
   ports. (Provisioning intentionally does not touch the default bridge / built-in
   Wi-Fi to avoid locking out the operator, so this is a manual step.)
 
@@ -395,7 +395,7 @@ For a manual wipe before re-provisioning, use
   URL is `https://`.
 - **Agent never polls (no commands ever delivered):** confirm the bootstrap actually
   imported the agent installer (`router_obj` existed at bootstrap so a token was
-  issued) and that the `codevertex-agent` scheduler exists
+  issued) and that the `ISP-agent` scheduler exists
   (`/system/scheduler/print`). Historically `agent_installed=true` was set without
   anything installing the agent — both that and the "installer returned body only"
   bug are fixed.

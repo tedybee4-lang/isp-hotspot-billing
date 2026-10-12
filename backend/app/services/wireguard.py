@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 # RouterOS interface + peer naming. Guarded by :if find=… checks so re-running
 # the bootstrap is idempotent (never creates a duplicate interface/peer).
 WG_INTERFACE_NAME = "cvvpn"
-WG_PEER_COMMENT = "codevertex-vpn-server"
+WG_PEER_COMMENT = "ISP-vpn-server"
 
 
 class WireGuardService:
@@ -240,18 +240,18 @@ class WireGuardService:
         # URL where possible.
         return [
             "",
-            "# ── CodeVertex WireGuard VPN overlay (NAT-safe router management) ──",
-            ":put \"Configuring CodeVertex VPN tunnel...\"",
+            "# ── ISP WireGuard VPN overlay (NAT-safe router management) ──",
+            ":put \"Configuring ISP VPN tunnel...\"",
             ":do {",
             f"  :if ([:len [/interface/wireguard/find name={iface}]] = 0) do={{",
-            f"    /interface/wireguard/add name={iface} comment=\"CodeVertex VPN - DO NOT DELETE\"",
+            f"    /interface/wireguard/add name={iface} comment=\"ISP VPN - DO NOT DELETE\"",
             f"    :put \"[OK] WireGuard interface {iface} created\"",
             "  } else={",
             f"    :put \"[SKIP] WireGuard interface {iface} already exists\"",
             "  }",
             "} on-error={ :put \"[FAIL] Could not create WireGuard interface\"; :log error \"VPN: wg interface add failed\" }",
             "",
-            "# Add the CodeVertex server as a peer (idempotent on public-key)",
+            "# Add the ISP server as a peer (idempotent on public-key)",
             ":do {",
             f"  :if ([:len [/interface/wireguard/peers/find public-key=\"{server_pub}\"]] = 0) do={{",
             f"    /interface/wireguard/peers/add interface={iface} \\",
@@ -268,21 +268,21 @@ class WireGuardService:
             "# Assign the tunnel IP on the wg interface (idempotent)",
             ":do {",
             f"  :if ([:len [/ip/address/find address=\"{tunnel_ip}/{prefix}\" interface={iface}]] = 0) do={{",
-            f"    /ip/address/add address={tunnel_ip}/{prefix} interface={iface} comment=\"CodeVertex VPN\"",
+            f"    /ip/address/add address={tunnel_ip}/{prefix} interface={iface} comment=\"ISP VPN\"",
             f"    :put \"[OK] Tunnel IP {tunnel_ip}/{prefix} assigned\"",
             "  } else={",
             "    :put \"[SKIP] Tunnel IP already assigned\"",
             "  }",
             "} on-error={ :put \"[FAIL] Could not assign tunnel IP\"; :log error \"VPN: tunnel address add failed\" }",
             "",
-            "# Allow CodeVertex VPN management (winbox 8291 + API 8728) FROM the tunnel",
+            "# Allow ISP VPN management (winbox 8291 + API 8728) FROM the tunnel",
             "# subnet only, placed at the top of the input chain so the router's default",
             "# drop does not block remote winbox over the tunnel. Idempotent on comment.",
             ":do {",
-            f"  :if ([:len [/ip/firewall/filter/find comment=\"codevertex-vpn-mgmt\"]] = 0) do={{",
+            f"  :if ([:len [/ip/firewall/filter/find comment=\"ISP-vpn-mgmt\"]] = 0) do={{",
             f"    /ip/firewall/filter/add chain=input action=accept protocol=tcp \\",
-            f"      dst-port=8291,8728 src-address={allowed} comment=\"codevertex-vpn-mgmt\"",
-            f"    :do {{ /ip/firewall/filter/move [find comment=\"codevertex-vpn-mgmt\"] destination=0 }} on-error={{}}",
+            f"      dst-port=8291,8728 src-address={allowed} comment=\"ISP-vpn-mgmt\"",
+            f"    :do {{ /ip/firewall/filter/move [find comment=\"ISP-vpn-mgmt\"] destination=0 }} on-error={{}}",
             "    :put \"[OK] VPN management firewall rule added (winbox/API from tunnel)\"",
             "  } else={",
             "    :put \"[SKIP] VPN management firewall rule already exists\"",
@@ -296,7 +296,7 @@ class WireGuardService:
             "  :delay 1s",
             f"  /tool/fetch mode=https url=\"{wg_register_url}\" http-method=post \\",
             "    http-data=(\"public_key=\" . $wgPub) dst-path=wg-register.result",
-            "  :put \"[OK] Registered VPN public key with CodeVertex\"",
+            "  :put \"[OK] Registered VPN public key with ISP\"",
             "  :log info \"VPN: registered wg public key\"",
             "} on-error={ :put \"[WARN] Failed to register VPN public key (will retry on next bootstrap)\"; :log warning \"VPN: wg-register failed\" }",
             "",

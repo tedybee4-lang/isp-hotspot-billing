@@ -1,4 +1,4 @@
-# MikroTik Provisioning — Overview (Codevertex ISP Billing)
+# MikroTik Provisioning — Overview (ISP ISP Billing)
 
 > **Canonical reference:** the full technical detail lives in
 > [`MIKROTIK_PROVISIONING_GUIDE.md`](./MIKROTIK_PROVISIONING_GUIDE.md). This file
@@ -14,7 +14,7 @@ Routers are behind NAT, so the cloud backend **cannot** connect to a router's AP
 Everything is router-initiated over three outbound channels:
 
 1. **Bootstrap** — user pastes a `/tool fetch … /import` one-liner; the router
-   enables API/FTP/Winbox, creates the `codevertex-api` user, POSTs a scan report +
+   enables API/FTP/Winbox, creates the `ISP-api` user, POSTs a scan report +
    notify, and **installs the polling agent**.
 2. **Script-based provisioning** — the router fetches a generated `.rsc`
    (`GET /provisioning/provision-script/{session_id}`) that builds the bridge, pool,

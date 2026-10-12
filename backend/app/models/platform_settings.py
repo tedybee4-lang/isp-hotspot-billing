@@ -30,7 +30,7 @@ class PlatformSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
 
     # Company information
-    company_name = Column(String(200), nullable=False, default="CodeVertex IT Solutions")
+    company_name = Column(String(200), nullable=False, default="ISP IT Solutions")
     address = Column(Text, nullable=True)
     city = Column(String(100), nullable=True)
     country = Column(String(100), default="Kenya", nullable=False)

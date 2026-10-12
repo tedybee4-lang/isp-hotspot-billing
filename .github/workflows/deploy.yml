@@ -134,7 +134,7 @@ jobs:
             const routes = convertRewrites(rewrites);
             const first = (p) => routes.find((r) => r.src && new RegExp(r.src).test(p));
             const target = first("/api/v1/routers/");
-            if (!target || !String(target.dest).startsWith("https://ispbillingapi.codevertexafrica.com/api/")) {
+            if (!target || !String(target.dest).startsWith("https://ispbilling.example.com/api/")) {
               fail("/api/v1/routers/ must be proxied to the VPS API, not the SPA fallback");
             }
             console.log("vercel.json routing OK:", JSON.stringify(rewrites));

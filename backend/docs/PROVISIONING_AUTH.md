@@ -11,7 +11,7 @@ browser-supplied roles or tenant IDs.
 The verified Supabase subject is looked up in `users.supabase_user_id`. The
 matched VPS `User` row is authoritative for active state, role, and
 organization. Its mapping is deliberately separate from
-`auth_service_user_id`, which belongs to Codevertex SSO. Missing mappings are
+`auth_service_user_id`, which belongs to ISP SSO. Missing mappings are
 denied; there is no automatic link by email and no synthetic platform-owner
 fallback.
 

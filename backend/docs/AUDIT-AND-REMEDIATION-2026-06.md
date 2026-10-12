@@ -6,11 +6,11 @@
 
 ## 0. How the system is actually wired (prod)
 
-- **Cloud backend**: `ispbillingapi.codevertexafrica.com` (k3s ns `isp-billing`, 2 pods). Frontend: `ispbilling.codevertexafrica.com`.
+- **Cloud backend**: `ispbilling.example.com` (VPS Docker Compose, `isp-billing-backend` service). Frontend: `ispbilling.example.com` (Vercel; `/api/*` and `/health` proxied to the VPS API).
 - **Routers are behind NAT**, so the cloud backend **cannot** open a connection
   to a router's API (`192.168.x:8728`). Two outbound, NAT‑safe mechanisms exist:
   1. **Bootstrap** (`/api/v1/provisioning/bootstrap/*`): user pastes a `/tool fetch … /import`
-     one‑liner; the router enables API/FTP/winbox, creates the `codevertex-api`
+     one‑liner; the router enables API/FTP/winbox, creates the `ISP-api`
      user, POSTs a scan report + `notify` callback. **Works.**
   2. **Script‑based provisioning** (`GET /api/v1/provisioning/provision-script/{session}`):
      router fetches + runs the full hotspot/PPPoE/bridge/DNS/NAT config locally,
@@ -56,9 +56,9 @@ agent stays as a NAT fallback.
 
 **Topology**
 - WG server in cluster (ns `vpn`), wg0 = `10.8.0.1/16`, listen UDP `51820`,
-  exposed on the node `77.237.232.66` (hostPort/NodePort) at DNS `vpn.codevertexafrica.com`.
+  exposed on the VPS host at DNS `vpn.ispbilling.example.com` (placeholder — point your own `vpn.<yourdomain>` A record at the VPS).
 - Each router: tunnel IP `10.8.0.<n>/16`, peer = server pubkey, endpoint =
-  `vpn.codevertexafrica.com:51820`, `persistent-keepalive=25s`.
+  `vpn.ispbilling.example.com:51820` (placeholder), `persistent-keepalive=25s`.
 - Backend manages router at `10.8.0.<n>:8728`; remote winbox via `10.8.0.<n>:8291`.
 
 **Backend pieces (code)**
@@ -68,13 +68,13 @@ agent stays as a NAT fallback.
 - Reconcile: WG server pulls the authoritative peer list from a backend endpoint (`GET /router-agent/wg-peers`, server‑token auth) and applies `wg syncconf` (avoids in‑cluster `kubectl exec`).
 
 **External prerequisites (USER action — cannot self‑serve):**
-1. **DNS**: create `vpn.codevertexafrica.com` A → `77.237.232.66` (DNS is managed at the registrar; see `iot-domain-dns-missing`).
+1. **DNS (USER action — cannot self-serve)**: create `vpn.<yourdomain>` A → `<VPS-IP>` at your registrar; no DNS is assumed to be configured. `iot-domain-dns-missing`.
 2. **UDP exposure**: open/forward UDP `51820` to the node and allow the WG pod `NET_ADMIN` + `/dev/net/tun` (privileged); enable `net.ipv4.ip_forward` (already on for k8s).
 3. Confirm Calico `natOutgoing` so backend‑pod → `10.8.0.0/16` is SNAT'd to the node (return path works).
 
 ## 4. Deploy (GitOps)
-- Backend image: CI in `Bengo-Hub/isp-billing-backend` builds `docker.io/codevertex/isp-billing-backend:<sha>`; bump `tag` in `devops-k8s/apps/isp-billing-backend/values.yaml`; ArgoCD app `isp-billing-backend` auto‑syncs. Migrations run idempotently on container start.
-- WG server: new `devops-k8s/apps/vpn` + ArgoCD app.
+- Backend image: `.github/workflows/deploy-backend.yml` builds `ghcr.io/tedybee4-lang/isp-billing-backend:<sha>` and deploys it to the VPS via Docker Compose. Migrations run idempotently on container start.
+- WG server: WireGuard gateway on the VPS (see `deploy/wireguard/`).
 
 ## 5. Live e2e plan (dry‑run gated — every router command shown for approval first)
 1. Bootstrap the live router (RB951Ui‑2HnD, RouterOS 7.18.2) → API user + agent scheduler + (WG tunnel).

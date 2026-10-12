@@ -51,7 +51,7 @@ async def get_platform_settings(
     if not settings:
         return {
             "id": None,
-            "company_name": "CodeVertex IT Solutions",
+            "company_name": "ISP IT Solutions",
             "address": None,
             "city": None,
             "country": "Kenya",

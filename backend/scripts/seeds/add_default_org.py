@@ -25,20 +25,20 @@ async def add_default_organizations():
     async with AsyncSessionLocal() as db:
         created_orgs = []
 
-        # 1. Create Platform Organization (Codevertex)
+        # 1. Create Platform Organization (ISP)
         # NOTE: This is the PLATFORM ORGANIZATION, not an ISP
         # Platform org should NOT have a subscription_tier_id
         platform_org = await db.scalar(
-            select(Organization).where(Organization.slug == "codevertex")
+            select(Organization).where(Organization.slug == "ISP")
         )
 
         if not platform_org:
             platform_org = Organization(
-                name="Codevertex Africa Limited",  # Fixed typo
-                slug="codevertex",
+                name="ISP Billing Platform Limited",  # Fixed typo
+                slug="ISP",
                 organization_type=OrganizationType.HOTSPOT,
                 status=OrganizationStatus.ACTIVE,
-                email="info@codevertexafrica.com",
+                email="info@ispbilling.example.com",
                 phone="+254743793901",
                 address="Onginga Street, Pioneer, Kisumu",
                 city="Kisumu",
@@ -72,11 +72,11 @@ async def add_default_organizations():
             db.add(platform_settings)
 
             logger.info(f"Created platform organization (id={platform_org.id})")
-            print(f"✓ Created platform organization: Codevertex (id={platform_org.id})")
+            print(f"✓ Created platform organization: ISP (id={platform_org.id})")
             created_orgs.append(platform_org)
         else:
             logger.info(f"Platform organization already exists (id={platform_org.id})")
-            print(f"✓ Platform organization already exists: Codevertex (id={platform_org.id})")
+            print(f"✓ Platform organization already exists: ISP (id={platform_org.id})")
 
         # 2. Create Demo ISP Organization
         # This is an actual ISP that will have customers, routers, etc.
@@ -179,7 +179,7 @@ async def add_default_organizations():
         await db.commit()
 
         print("\n✓ Organization setup complete!")
-        print(f"  Platform Org: Codevertex (id={platform_org.id}) - No org_slug in routes")
+        print(f"  Platform Org: ISP (id={platform_org.id}) - No org_slug in routes")
         print(f"  ISP Org: Demo ISP (id={demo_isp.id}, slug=demo-isp) - Use /demo-isp/... routes")
         print(f"\nPortal URLs:")
         print(f"  Platform Admin: /platform")

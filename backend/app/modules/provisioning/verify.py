@@ -1,4 +1,4 @@
-"""Verification helpers for Codevertex MikroTik provisioning."""
+"""Verification helpers for ISP MikroTik provisioning."""
 
 from __future__ import annotations
 

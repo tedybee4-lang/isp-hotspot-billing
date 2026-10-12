@@ -28,7 +28,7 @@ const config = JSON.parse(
   readFileSync(resolve(HERE, '..', '..', 'vercel.json'), 'utf8'),
 ) as { rewrites?: Rewrite[] }
 
-const API_HOST = 'https://ispbillingapi.codevertexafrica.com'
+const API_HOST = 'https://ispbilling.example.com'
 
 /** Routes compiled exactly the way Vercel's CDN compiles them. */
 const routes = convertRewrites(config.rewrites ?? [])

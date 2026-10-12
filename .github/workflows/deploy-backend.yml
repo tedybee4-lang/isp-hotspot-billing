@@ -1,326 +1,99 @@
-name: Build and Deploy ISP Billing Backend
+name: Build & Deploy ISP Billing Backend
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
-# Deployment secrets are stored in devops-k8s repo and synced here on demand.
-# The sync-secrets job checks which secrets are missing and only requests those.
-# GH_PAT must exist in THIS repo to authenticate cross-repo workflow triggers.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-billing-backend
+  COMPOSE_DIR: /opt/isp-billing
+
+# Independent deployment pipeline (VPS Docker Compose only; no K8s /
+# legacy GitOps repo).
+# Builds backend/docker/Dockerfile from the REPO ROOT (paths in that Dockerfile
+# are relative to backend/), publishes to GHCR, then deploys to the VPS with
+# Docker Compose.
+# Requires GitHub Actions secrets (set via Settings -> Secrets and variables -> Actions):
+#   - GITHUB_TOKEN          (auto; used to publish isp-billing-backend to GHCR)
+#   - VPS_DEPLOY_KEY        (SSH private key for the deployment account)
+#   - VPS_HOST              (VPS IP/host, default 87.76.137.72)
+#   - VPS_USER              (SSH user, default root)
 
 jobs:
-  sync-secrets:
+  build-and-push:
     runs-on: ubuntu-latest
     outputs:
-      result: ${{ steps.sync.outputs.result }}
+      tags: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Check and sync missing secrets
-        id: sync
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          # Map required secrets to detect empty values (gh secret list can't check values)
-          _REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          _REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          _REGISTRY_EMAIL: ${{ secrets.REGISTRY_EMAIL }}
-          _POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          _REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-          _RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
-          _KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-          _GLOBAL_ADMIN_EMAIL: ${{ secrets.GLOBAL_ADMIN_EMAIL }}
-          _GLOBAL_ADMIN_PASSWORD: ${{ secrets.GLOBAL_ADMIN_PASSWORD }}
-        run: |
-          REQUIRED_SECRETS="REGISTRY_USERNAME REGISTRY_PASSWORD REGISTRY_EMAIL POSTGRES_PASSWORD REDIS_PASSWORD RABBITMQ_PASSWORD KUBE_CONFIG GLOBAL_ADMIN_EMAIL GLOBAL_ADMIN_PASSWORD"
-
-          # Step 1: Delete any secrets that exist but have empty values.
-          # gh secret list reports empty-value secrets as "existing", so the
-          # name-only check passes but deployment fails with empty values.
-          # By deleting them, the existence check below will find them missing
-          # and trigger the devops-k8s sync to recreate them with real values.
-          echo "Checking for empty-valued secrets..."
-          EXISTING=$(gh secret list --repo "${{ github.repository }}" --json name -q '.[].name' 2>/dev/null || echo "")
-          for secret in $REQUIRED_SECRETS; do
-            env_var="_${secret}"
-            value="${!env_var}"
-            if echo "$EXISTING" | grep -qx "$secret" && [ -z "$value" ]; then
-              echo "  Deleting $secret (exists but empty)"
-              gh secret delete "$secret" --repo "${{ github.repository }}" 2>/dev/null || true
-            fi
-          done
-
-          # Step 2: Re-check which secrets actually exist with values
-          echo ""
-          echo "Checking which deployment secrets exist..."
-          EXISTING=$(gh secret list --repo "${{ github.repository }}" --json name -q '.[].name' 2>/dev/null || echo "")
-
-          MISSING=()
-          for secret in $REQUIRED_SECRETS; do
-            if echo "$EXISTING" | grep -qx "$secret"; then
-              echo "  $secret"
-            else
-              echo "  $secret -- missing"
-              MISSING+=("$secret")
-            fi
-          done
-
-          echo ""
-          if [ ${#MISSING[@]} -eq 0 ]; then
-            echo "All secrets already exist -- skipping sync"
-            echo "result=skipped" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          MISSING_LIST="${MISSING[*]}"
-          echo "${#MISSING[@]} secret(s) need syncing: $MISSING_LIST"
-          echo ""
-
-          # Trigger devops-k8s sync for ONLY the missing secrets
-          echo "Triggering devops-k8s/sync-secrets.yml..."
-          gh workflow run sync-secrets.yml \
-            --repo Bengo-Hub/devops-k8s \
-            --ref main \
-            -f target_repo="${{ github.repository }}" \
-            -f secrets="$MISSING_LIST"
-
-          # Wait for the missing secrets to appear (max 3 min)
-          echo "Waiting for secrets to be synced..."
-          for i in $(seq 1 18); do
-            sleep 10
-            CURRENT=$(gh secret list --repo "${{ github.repository }}" --json name -q '.[].name' 2>/dev/null || echo "")
-            STILL_MISSING=0
-            for secret in "${MISSING[@]}"; do
-              echo "$CURRENT" | grep -qx "$secret" || STILL_MISSING=$((STILL_MISSING + 1))
-            done
-            if [ $STILL_MISSING -eq 0 ]; then
-              echo "All ${#MISSING[@]} secrets synced after $((i * 10))s"
-              echo "result=synced" >> $GITHUB_OUTPUT
-              exit 0
-            fi
-            echo "  ${STILL_MISSING} still missing ($((i * 10))s)..."
-          done
-
-          echo "Timeout -- some secrets may not have synced"
-          echo "result=partial" >> $GITHUB_OUTPUT
-
-  deploy:
-    needs: sync-secrets
-    runs-on: ubuntu-latest
-    # All build/deploy commands (./build.sh, `docker build -f docker/Dockerfile .`,
-    # `trivy fs .`) are relative to the backend/ directory, so every `run:`
-    # step in this job must execute there. Moving this workflow to the repo
-    # root changed the default cwd from backend/ to the workspace root.
-    defaults:
-      run:
-        working-directory: backend
-    permissions:
-      contents: write
-      id-token: write
-
-    steps:
-      - name: Re-trigger if secrets were just synced
-        if: needs.sync-secrets.outputs.result == 'synced'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          echo "Secrets were just synced in this workflow run."
-          echo "GitHub loads secret values at job start — newly created secrets"
-          echo "are not available until the next run."
-          echo ""
-          echo "Re-triggering workflow so the deploy job picks up the new values..."
-          gh workflow run deploy-backend.yml --repo "${{ github.repository }}" --ref "${{ github.ref }}"
-          echo "Workflow re-triggered. This run will exit gracefully."
-          exit 0
-
-      - name: Abort if sync was partial
-        if: needs.sync-secrets.outputs.result == 'partial'
-        run: |
-          echo "Secret sync timed out — some secrets may not have been created."
-          echo "Check the devops-k8s sync-secrets workflow run for errors:"
-          echo "  https://github.com/Bengo-Hub/devops-k8s/actions"
-          exit 1
-
-      - name: Checkout code
-        if: needs.sync-secrets.outputs.result != 'synced'
+      - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
       - name: Set up Docker Buildx
-        if: needs.sync-secrets.outputs.result != 'synced'
         uses: docker/setup-buildx-action@v3
 
-      - name: Install DevOps Tools
-        if: needs.sync-secrets.outputs.result != 'synced'
-        # NOTE: Repository name is case-sensitive - must be Bengo-Hub (not bengo-hub)
-        uses: Bengo-Hub/devops-k8s/.github/actions/install-devops-tools@main
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set deployment variables
-        if: needs.sync-secrets.outputs.result != 'synced'
-        run: |
-          echo "DEPLOY=true" >> $GITHUB_ENV
-          echo "SETUP_DATABASES=true" >> $GITHUB_ENV
-          echo "DB_TYPES=postgres,redis" >> $GITHUB_ENV
-          echo "NAMESPACE=isp-billing" >> $GITHUB_ENV
-          echo "ENV_SECRET_NAME=isp-billing-backend-secrets" >> $GITHUB_ENV
-          echo "REGISTRY_SERVER=docker.io" >> $GITHUB_ENV
-          echo "REGISTRY_NAMESPACE=codevertex" >> $GITHUB_ENV
-          echo "VALUES_FILE_PATH=apps/isp-billing-backend/values.yaml" >> $GITHUB_ENV
-          echo "APP_NAME=isp-billing-backend" >> $GITHUB_ENV
-          echo "SERVICE_DB_NAME=isp_billing" >> $GITHUB_ENV
-          echo "SERVICE_DB_USER=isp_billing_user" >> $GITHUB_ENV
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./backend/docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Verify secrets
-        if: needs.sync-secrets.outputs.result != 'synced'
-        run: |
-          echo "Verifying deployment secrets..."
-          echo "Sync result: ${{ needs.sync-secrets.outputs.result }}"
-          echo ""
-          FAIL=0
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-          check_secret() {
-            local name="$1" min_len="$2" value="$3"
-            if [[ -z "$value" ]]; then
-              echo "❌ $name — empty"
-              FAIL=1
-            elif [[ ${#value} -lt $min_len ]]; then
-              echo "⚠️  $name — ${#value} chars (need >=$min_len)"
-              FAIL=1
-            else
-              echo "✅ $name (${#value} chars)"
-            fi
-          }
-
-          check_secret "REGISTRY_USERNAME"  5    "$REGISTRY_USERNAME"
-          check_secret "REGISTRY_PASSWORD"  12   "$REGISTRY_PASSWORD"
-          check_secret "KUBE_CONFIG"        1000 "$KUBE_CONFIG"
-          check_secret "POSTGRES_PASSWORD"  8    "$POSTGRES_PASSWORD"
-          check_secret "REDIS_PASSWORD"     8    "$REDIS_PASSWORD"
-
-          if [[ $FAIL -eq 1 ]]; then
-            echo ""
-            echo "❌ Secret verification failed!"
-            echo ""
-            echo "Possible causes:"
-            echo "  1. Secrets were just synced in this workflow run."
-            echo "     GitHub loads secrets when each job STARTS."
-            echo "     If sync-secrets just created them, re-run this workflow."
-            echo ""
-            echo "  2. devops-k8s PROPAGATE_PAT may lack write access."
-            echo "     Check: https://github.com/Bengo-Hub/devops-k8s/actions"
-            echo ""
-            echo "  3. Corrupted repo-level secret overriding correct value."
-            echo "     Fix: delete the bad secret, then re-run:"
-            echo "     gh secret delete <NAME> --repo ${{ github.repository }}"
-            exit 1
-          fi
-
-          echo ""
-          echo "✅ All secrets verified"
+      - name: Deploy to VPS (Docker Compose)
         env:
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-
-      - name: Run production deployment
-        if: needs.sync-secrets.outputs.result != 'synced'
-        env:
-          KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          REGISTRY_EMAIL: ${{ secrets.REGISTRY_EMAIL }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-          RABBITMQ_PASSWORD: ${{ secrets.RABBITMQ_PASSWORD }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GITHUB_SHA: ${{ github.sha }}
-          DEPLOY: true
-          SETUP_DATABASES: true
-          DB_TYPES: postgres,redis
-          NAMESPACE: isp-billing
-          ENV_SECRET_NAME: isp-billing-backend-secrets
-          REGISTRY_SERVER: docker.io
-          REGISTRY_NAMESPACE: codevertex
-          VALUES_FILE_PATH: apps/isp-billing-backend/values.yaml
-          APP_NAME: isp-billing-backend
-          SERVICE_DB_NAME: isp_billing
-          SERVICE_DB_USER: isp_billing_user
-          GLOBAL_ADMIN_EMAIL: ${{ secrets.GLOBAL_ADMIN_EMAIL }}
-          GLOBAL_ADMIN_PASSWORD: ${{ secrets.GLOBAL_ADMIN_PASSWORD }}
-          GIT_USER: ${{ secrets.GIT_USER || 'ISPBilling Bot' }}
-          GIT_EMAIL: ${{ secrets.GIT_EMAIL || 'dev@bengobox.com' }}
+          VPS_HOST: ${{ secrets.VPS_HOST || '87.76.137.72' }}
+          VPS_USER: ${{ secrets.VPS_USER || 'root' }}
+          SSH_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          COMPOSE_DIR: /opt/isp-billing
         run: |
-          chmod +x build.sh
-          ./build.sh
+          export DEPLOY_HOST="${VPS_HOST}"
+          export DEPLOY_USER="${VPS_USER}"
+          export COMPOSE_DIR="${COMPOSE_DIR}"
 
-      - name: Tag and push :latest
-        if: success() && needs.sync-secrets.outputs.result != 'synced'
-        env:
-          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
-          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          REGISTRY_EMAIL: ${{ secrets.REGISTRY_EMAIL }}
-          REGISTRY_SERVER: docker.io
-          REGISTRY_NAMESPACE: codevertex
-        run: |
-          set -e
-          IMAGE_REPO="${REGISTRY_SERVER}/${REGISTRY_NAMESPACE}/isp-billing-backend"
-          SHORT_SHA=${GITHUB_SHA::8}
-          echo "Tagging ${IMAGE_REPO}:${SHORT_SHA} as :latest"
-          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_SERVER" -u "$REGISTRY_USERNAME" --password-stdin
-          docker pull "${IMAGE_REPO}:${SHORT_SHA}" || true
-          docker tag "${IMAGE_REPO}:${SHORT_SHA}" "${IMAGE_REPO}:latest"
-          docker push "${IMAGE_REPO}:latest"
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Check ArgoCD Application status
-        if: success() && needs.sync-secrets.outputs.result != 'synced'
-        env:
-          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
-          NS: isp-billing
-          APP_NAME: isp-billing-backend
-        run: |
-          if [ -z "${KUBE_CONFIG_B64}" ]; then
-            echo "⏭️ Skipping ArgoCD check — no KUBE_CONFIG"
-            exit 0
-          fi
-          echo "::group::ArgoCD Application Status"
-          mkdir -p ~/.kube
-          echo "$KUBE_CONFIG_B64" | base64 -d > ~/.kube/config
-          if kubectl get application ${APP_NAME} -n argocd >/dev/null 2>&1; then
-            echo "✓ ArgoCD Application '${APP_NAME}' found"
-            kubectl patch application ${APP_NAME} -n argocd --type merge \
-              -p '{"metadata":{"annotations":{"argocd.argoproj.io/refresh":"hard"}}}' || true
-            SYNC=$(kubectl get application ${APP_NAME} -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-            HEALTH=$(kubectl get application ${APP_NAME} -n argocd -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-            echo "Status — Sync: ${SYNC}, Health: ${HEALTH}"
-          else
-            echo "⚠️ ArgoCD Application '${APP_NAME}' not found"
-          fi
-          echo "::endgroup::"
+          eval "$(ssh-agent -s)"
+          echo "$SSH_KEY" | tr -d "\r" | ssh-add - >/dev/null
 
-      - name: Verify API health
-        if: success() && needs.sync-secrets.outputs.result != 'synced'
-        env:
-          KUBE_CONFIG_B64: ${{ secrets.KUBE_CONFIG }}
-          NS: isp-billing
-        run: |
-          if [ -z "${KUBE_CONFIG_B64}" ]; then
-            echo "⏭️ Skipping health check — no KUBE_CONFIG"
-            exit 0
-          fi
-          echo "::group::Health check"
-          mkdir -p ~/.kube
-          echo "$KUBE_CONFIG_B64" | base64 -d > ~/.kube/config
-          if kubectl get deployment isp-billing-backend -n ${NS} >/dev/null 2>&1; then
-            kubectl rollout status deployment/isp-billing-backend -n ${NS} --timeout=1200s
-            HOSTS=$(kubectl get ingress -n ${NS} -o jsonpath='{.items[*].spec.rules[*].host}' \
-              | tr ' ' '\n' | grep -E 'isp.*billing|wifi.*billing' || true)
-            for H in $HOSTS; do
-              echo "Checking https://$H/health ..."
-              if curl -sk --max-time 10 "https://$H/health" | grep -qi "ok\|healthy"; then
-                echo "✅ Health OK for $H"
-                break
-              fi
-            done
-          else
-            echo "Deployment not found yet — ArgoCD may still be syncing"
-          fi
-          echo "::endgroup::"
+          # Back up existing compose files before updating
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "if [ -f $COMPOSE_DIR/docker-compose.yml ]; then cp -a $COMPOSE_DIR/docker-compose.yml $COMPOSE_DIR/docker-compose.yml.bak.$(date +%s); fi; if [ -f $COMPOSE_DIR/.env ]; then cp -a $COMPOSE_DIR/.env $COMPOSE_DIR/.env.bak.$(date +%s); fi"
+
+          # Pull the new image and restart the backend
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd $COMPOSE_DIR && docker compose pull isp-billing-backend && docker compose up -d isp-billing-backend"
+
+          # Health check (retry for ~60s)
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "for i in $(seq 1 30); do if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then echo "backend healthy on $DEPLOY_HOST"; exit 0; fi; sleep 2; done; echo "backend NOT healthy"; exit 1"

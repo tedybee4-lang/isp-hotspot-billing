@@ -521,7 +521,7 @@ async def complete_registration(
 
     return OnboardingCompleteResponse(
         success=True,
-        message=f"Welcome to Codevertex! Your {trial_days}-day free trial has started.",
+        message=f"Welcome to ISP! Your {trial_days}-day free trial has started.",
         organization_id=organization.id,
         organization_slug=organization.slug,
         access_token=token,

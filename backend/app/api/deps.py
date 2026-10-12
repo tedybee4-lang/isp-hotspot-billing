@@ -605,7 +605,7 @@ def _claims_is_exempt(claims: dict) -> bool:
 
     Platform owner / superuser, demo tenants, and service-charge billing. Keeping
     this identical to the frontend exemption ensures the backend gate and the
-    subscription banner agree on who is bypassed (e.g. the codevertex-demo ISP and
+    subscription banner agree on who is bypassed (e.g. the ISP-demo ISP and
     the platform owner never see gating or the expiry banner).
     """
     if claims.get("is_platform_owner") or claims.get("is_demo"):
@@ -616,7 +616,7 @@ def _claims_is_exempt(claims: dict) -> bool:
     if roles & {"platform_owner", "superuser"}:
         return True
     slug = str(claims.get("tenant_slug", "")).strip().lower()
-    return slug in {"codevertex", "codevertex-demo"}
+    return slug in {"ISP", "ISP-demo"}
 
 
 async def enforce_subscription_active(request: Request) -> None:

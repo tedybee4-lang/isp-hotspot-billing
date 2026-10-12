@@ -217,7 +217,7 @@ async def run_startup_seeds() -> None:
             #
             # NOTE: no demo/customer user seeding. Seeding creates ONLY roles +
             # permissions + the platform admin (superuser). The demo ISP tenant
-            # (codevertex-demo) and its admin come from the central SSO, not a local
+            # (ISP-demo) and its admin come from the central SSO, not a local
             # seeder, so we never fabricate hotspot/PPPoE customers or demo users.
 
             await db.commit()
@@ -353,7 +353,7 @@ async def _seed_platform_admin(db: AsyncSession, roles: dict) -> User:
             email=admin_email,
             first_name="Platform",
             last_name="Admin",
-            company_name="CodeVertex IT Solutions",
+            company_name="ISP IT Solutions",
             hashed_password=get_password_hash(admin_password),
             role=UserRole.PLATFORM_OWNER,
             status=UserStatus.ACTIVE,
@@ -382,13 +382,13 @@ async def _seed_platform_settings(db: AsyncSession, admin: User) -> None:
 
     logger.info("Seeding platform settings...")
     ps = PlatformSettings(
-        company_name="CodeVertex IT Solutions",
+        company_name="ISP IT Solutions",
         address="OGINGA STREET, BANK ST., PIONEER HSE",
         city="KISUMU",
         country="Kenya",
         phone="254792548766",
         mobile="254742201368",
-        email="info@codevertexafrica.com",
+        email="info@ispbilling.example.com",
         logo_url="/images/logo/logo.png",
         primary_color="#ec4899",
         secondary_color="#8b5cf6",

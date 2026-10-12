@@ -157,7 +157,7 @@ async def get_available_payment_gateways(
     # Layer 1 — HYBRID sourcing. Treasury is the source of truth for enabled
     # gateways. First try the ISP tenant's OWN selected gateways (tenant override);
     # if it has none, fall back to the PLATFORM operating tenant's gateways, because
-    # captive customers pay the platform rail ("Codevertex Africa Limited"). Empty
+    # captive customers pay the platform rail ("ISP Billing Platform Limited"). Empty
     # list on any treasury problem (never raises).
     client = TreasuryClient()
     raw_gateways = await client.list_active_gateways(tenant=str(organization.uuid))

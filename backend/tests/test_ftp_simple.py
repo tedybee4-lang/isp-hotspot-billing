@@ -4,7 +4,7 @@ import ftplib
 
 # From your screenshot and bootstrap logs
 ROUTER_IP = "192.168.100.7"
-USERNAME = "codevertex_api_user"
+USERNAME = "ISP_api_user"
 # Password from bootstrap script - should match what's in the database
 # This is the default from config.py unless you changed it
 PASSWORD = "changeme_in_production"  # Default from settings

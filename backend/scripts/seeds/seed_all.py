@@ -1,4 +1,4 @@
-﻿"""Master seed script for seeding all demo data with configurable options.
+"""Master seed script for seeding all demo data with configurable options.
 
 Supports environment-aware seeding:
   --env dev         (default) Seeds everything including demo data
@@ -335,7 +335,7 @@ class MasterSeeder:
                 admin = await _seed_platform_admin(db, roles)
                 await _seed_platform_settings(db, admin)
 
-                # Ensure platform org (Codevertex Africa Limited) exists
+                # Ensure platform org (ISP Billing Platform Limited) exists
                 await self._seed_platform_org(db)
 
                 await db.commit()
@@ -346,22 +346,22 @@ class MasterSeeder:
                 raise
 
     async def _seed_platform_org(self, db: AsyncSession):
-        """Ensure the platform organization (Codevertex Africa Limited) exists."""
+        """Ensure the platform organization (ISP Billing Platform Limited) exists."""
         from app.models.organization import Organization, OrganizationType, OrganizationStatus
 
         result = await db.execute(
-            select(Organization).where(Organization.slug == "codevertex")
+            select(Organization).where(Organization.slug == "ISP")
         )
         if result.scalar_one_or_none():
             return
 
-        self.logger.info("Creating platform organization: Codevertex Africa Limited")
+        self.logger.info("Creating platform organization: ISP Billing Platform Limited")
         org = Organization(
-            name="Codevertex Africa Limited",
-            slug="codevertex",
+            name="ISP Billing Platform Limited",
+            slug="ISP",
             organization_type=OrganizationType.HOTSPOT,
             status=OrganizationStatus.ACTIVE,
-            email="info@codevertexafrica.com",
+            email="info@ispbilling.example.com",
             phone="+254792548766",
             address="OGINGA STREET, BANK ST., PIONEER HSE",
             city="KISUMU",
@@ -772,7 +772,7 @@ class MasterSeeder:
             print("\n[DATA] PRODUCTION DATA SEEDED:")
             print("  * RBAC roles and permissions")
             print("  * Platform superuser (credentials from env vars)")
-            print("  * Platform organization (Codevertex Africa Limited)")
+            print("  * Platform organization (ISP Billing Platform Limited)")
             print("  * Platform settings")
             print("  * Subscription tiers (Hotspot Starter, PPPoE Starter)")
             print("  * Package categories and templates")
@@ -786,8 +786,8 @@ class MasterSeeder:
             print("  2. Access API docs: http://localhost:8000/docs")
             print("  3. Login with credentials:")
             print("     * Platform Owner: platformadmin / admin123")
-            print("     * ISP Admin (Codevertex): codevertexadmin / admin123")
-            print("     * ISP Technician: codevertextech1 / tech123")
+            print("     * ISP Admin (ISP): ISPadmin / admin123")
+            print("     * ISP Technician: ISPtech1 / tech123")
             print("     * Customer: [customer username] / customer123")
             print("  4. Explore the seeded data through the API endpoints")
 
@@ -798,7 +798,7 @@ class MasterSeeder:
             print("  * ISP admins and technicians")
             print("  * Customer users")
             print("  * Realistic ISP service plans and pricing")
-            print("  * CodeVertex licences with payment history")
+            print("  * ISP licences with payment history")
             print("  * Customer subscriptions with billing data")
             print("  * Package templates and categories")
             print("  * Notification templates (including SMS templates)")

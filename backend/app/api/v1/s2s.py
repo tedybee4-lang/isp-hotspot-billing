@@ -2,7 +2,7 @@
 
 Internal, trusted callers only — authenticated via the shared
 ``INTERNAL_SERVICE_KEY`` (header ``X-API-Key``), not a user JWT. These routes
-exist for other Codevertex backends (e.g. subscriptions-api's billing engine)
+exist for other ISP backends (e.g. subscriptions-api's billing engine)
 to read aggregate, tenant-scoped facts from isp-billing.
 
 Mounted under the global ``/api/v1`` prefix with router prefix ``/s2s``, so the

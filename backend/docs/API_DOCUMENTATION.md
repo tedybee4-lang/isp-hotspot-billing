@@ -111,7 +111,7 @@ Authorization: Bearer <token>
 **Response:**
 ```json
 {
-  "command": "/tool fetch mode=https url=\"https://yourdomain.com/api/v1/provisioning/bootstrap/script?identity=MikroTik1&api_port=8728&interface=ether2\" dst-path=codevertex.rsc; delay 2s; import codevertex.rsc;",
+  "command": "/tool fetch mode=https url=\"https://yourdomain.com/api/v1/provisioning/bootstrap/script?identity=MikroTik1&api_port=8728&interface=ether2\" dst-path=ISP.rsc; delay 2s; import ISP.rsc;",
   "script_url": "https://yourdomain.com/api/v1/provisioning/bootstrap/script?identity=MikroTik1&api_port=8728&interface=ether2",
   "notes": [
     "If device mode is not allowed, run: /system/device-mode update mode=advanced"

@@ -243,12 +243,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
         """
         Resolve organization from subdomain.
 
-        Expected format: org-slug.ispbilling.com
+        Expected format: org-slug.ispbilling.example.com
         """
         from app.core.config import settings
 
         host = request.headers.get("Host", "")
-        base_domain = getattr(settings, "portal_base_domain", "ispbilling.com")
+        base_domain = getattr(settings, "portal_base_domain", "ispbilling.example.com")
 
         if not host or base_domain not in host:
             return None

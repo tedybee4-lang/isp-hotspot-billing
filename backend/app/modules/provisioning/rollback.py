@@ -1,4 +1,4 @@
-"""Rollback helpers for Codevertex MikroTik provisioning."""
+"""Rollback helpers for ISP MikroTik provisioning."""
 
 from __future__ import annotations
 

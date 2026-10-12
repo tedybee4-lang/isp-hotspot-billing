@@ -554,7 +554,7 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
         """Parse a CLI-style command into resource_path, method, and params.
 
         Handles commands like:
-            /interface/bridge/add name=codevertex-bridge
+            /interface/bridge/add name=ISP-bridge
             /ip/address/add address=192.168.1.1/24 interface=ether1
             /system/identity/set name=MyRouter
             /ip/service/set telnet disabled=yes  (item identifier without =)
@@ -1105,7 +1105,7 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
                 port=router.port,
             )
 
-            # Get file list and find codevertex.rsc
+            # Get file list and find ISP.rsc
             files = await self.execute_command(
                 connection=connection,
                 resource_path="/file",
@@ -1114,7 +1114,7 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
 
             script_file = None
             for f in files:
-                if f.get("name") == "codevertex.rsc":
+                if f.get("name") == "ISP.rsc":
                     script_file = f
                     break
 
@@ -1172,13 +1172,13 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
         """Clean up provisioning artifacts from the router.
 
         This should be called before deleting a router to remove:
-        - codevertex.rsc script file
-        - Optionally: hotspot, pppoe, bridge configurations created by Codevertex
+        - ISP.rsc script file
+        - Optionally: hotspot, pppoe, bridge configurations created by ISP
 
         Args:
             router: Router model instance.
-            remove_script: Whether to remove codevertex.rsc file.
-            remove_configurations: Whether to remove Codevertex-created configurations.
+            remove_script: Whether to remove ISP.rsc file.
+            remove_configurations: Whether to remove ISP-created configurations.
 
         Returns:
             Dict with cleanup results.
@@ -1201,14 +1201,14 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
             # Remove bootstrap script
             if remove_script:
                 try:
-                    # Find and remove codevertex.rsc
+                    # Find and remove ISP.rsc
                     files = await self.execute_command(
                         connection=connection,
                         resource_path="/file",
                         method="get",
                     )
                     for f in files:
-                        if f.get("name") == "codevertex.rsc":
+                        if f.get("name") == "ISP.rsc":
                             await self.execute_command(
                                 connection=connection,
                                 resource_path="/file",
@@ -1216,23 +1216,23 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
                                 id=f.get("id") or f.get(".id"),
                             )
                             results["script_removed"] = True
-                            logger.info(f"Removed codevertex.rsc from router {router.name}")
+                            logger.info(f"Removed ISP.rsc from router {router.name}")
                             break
                 except Exception as e:
                     results["errors"].append(f"Failed to remove script: {e}")
                     logger.warning(f"Failed to remove script from {router.name}: {e}")
 
-            # Remove Codevertex configurations
+            # Remove ISP configurations
             if remove_configurations:
                 try:
-                    # Remove hotspot with codevertex prefix
+                    # Remove hotspot with ISP prefix
                     hotspots = await self.execute_command(
                         connection=connection,
                         resource_path="/ip/hotspot",
                         method="get",
                     )
                     for hs in hotspots:
-                        if hs.get("name", "").startswith("codevertex"):
+                        if hs.get("name", "").startswith("ISP"):
                             await self.execute_command(
                                 connection=connection,
                                 resource_path="/ip/hotspot",
@@ -1240,14 +1240,14 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
                                 id=hs.get("id") or hs.get(".id"),
                             )
 
-                    # Remove PPPoE server with codevertex prefix
+                    # Remove PPPoE server with ISP prefix
                     pppoe_servers = await self.execute_command(
                         connection=connection,
                         resource_path="/interface/pppoe-server/server",
                         method="get",
                     )
                     for srv in pppoe_servers:
-                        if srv.get("service-name", "").startswith("codevertex"):
+                        if srv.get("service-name", "").startswith("ISP"):
                             await self.execute_command(
                                 connection=connection,
                                 resource_path="/interface/pppoe-server/server",
@@ -1255,14 +1255,14 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
                                 id=srv.get("id") or srv.get(".id"),
                             )
 
-                    # Remove bridge with codevertex prefix
+                    # Remove bridge with ISP prefix
                     bridges = await self.execute_command(
                         connection=connection,
                         resource_path="/interface/bridge",
                         method="get",
                     )
                     for br in bridges:
-                        if br.get("name", "").startswith("codevertex"):
+                        if br.get("name", "").startswith("ISP"):
                             await self.execute_command(
                                 connection=connection,
                                 resource_path="/interface/bridge",
@@ -1270,14 +1270,14 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
                                 id=br.get("id") or br.get(".id"),
                             )
 
-                    # Remove IP pool with codevertex prefix
+                    # Remove IP pool with ISP prefix
                     pools = await self.execute_command(
                         connection=connection,
                         resource_path="/ip/pool",
                         method="get",
                     )
                     for pool in pools:
-                        if pool.get("name", "").startswith("codevertex"):
+                        if pool.get("name", "").startswith("ISP"):
                             await self.execute_command(
                                 connection=connection,
                                 resource_path="/ip/pool",
@@ -1286,7 +1286,7 @@ class MikroTikClient(BaseIntegrationClient[routeros_api.RouterOsApiPool]):
                             )
 
                     results["configurations_removed"] = True
-                    logger.info(f"Removed Codevertex configurations from router {router.name}")
+                    logger.info(f"Removed ISP configurations from router {router.name}")
                 except Exception as e:
                     results["errors"].append(f"Failed to remove configurations: {e}")
                     logger.warning(f"Failed to remove configurations from {router.name}: {e}")

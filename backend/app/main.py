@@ -152,12 +152,12 @@ def custom_openapi():
         "**Demo Admin Account:**\n"
         "- Username: `demo`\n"
         "- Password: `demo123`\n"
-        "- Email: `demo@codevertexafrica.com`\n"
+        "- Email: `demo@ispbilling.example.com`\n"
         "- Role: Admin (ISP Provider)\n\n"
         "**Superuser Account:**\n"
         "- Username: `superuser`\n"
         "- Password: `superuser123`\n"
-        "- Email: `superuser@codevertexafrica.com`\n"
+        "- Email: `superuser@ispbilling.example.com`\n"
         "- Role: Superuser (Full System Access)\n\n"
         "**Note**: You can use either username OR email in the username field."
     )
@@ -222,7 +222,7 @@ def custom_openapi():
                     "summary": "Demo Admin (using email)",
                     "description": "Login using email instead of username",
                     "value": {
-                        "username": "demo@codevertexafrica.com",
+                        "username": "demo@ispbilling.example.com",
                         "password": "demo123"
                     }
                 },
@@ -261,8 +261,8 @@ def custom_openapi():
     # Add custom info for better API documentation
     openapi_schema["info"]["contact"] = {
         "name": "ISP Billing System Support",
-        "email": "support@ispbilling.com",
-        "url": "https://github.com/Bengo-Hub/isp-billing-backend"
+        "email": "support@ispbilling.example.com",
+        "url": "https://github.com/tedybee4-lang/isp-hotspot-billing"
     }
     
     openapi_schema["info"]["license"] = {
@@ -281,7 +281,7 @@ def custom_openapi():
             "description": "Network Development server"
         },
         {
-            "url": "https://ispbillingapi.codevertexafrica.com",
+            "url": "https://ispbilling.example.com",
             "description": "Production server"
         }
     ]

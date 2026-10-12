@@ -279,7 +279,7 @@ code .env
 #### Step 3: Configure Required Variables
 ```ini
 # Application Settings
-APP_NAME="Codevertex ISP Billing"
+APP_NAME="ISP ISP Billing"
 APP_ENV=development
 DEBUG=true
 API_VERSION=v1
@@ -318,7 +318,7 @@ SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-email@gmail.com
 SMTP_PASSWORD=your-app-specific-password
-SMTP_FROM=noreply@codevertexafrica.com
+SMTP_FROM=noreply@ispbilling.example.com
 
 # M-Pesa Configuration (Optional - for payments)
 MPESA_ENVIRONMENT=sandbox
@@ -332,7 +332,7 @@ MPESA_CALLBACK_URL=https://yourdomain.com/api/v1/mpesa/callback
 SMS_PROVIDER=africastalking
 SMS_API_KEY=your-api-key
 SMS_USERNAME=your-username
-SMS_SENDER_ID=CODEVERTEX
+SMS_SENDER_ID=ISP
 
 # MikroTik Configuration
 MIKROTIK_DEFAULT_PORT=8728
@@ -436,7 +436,7 @@ NEXT_PUBLIC_API_BASE_URL=http://localhost:8000/api/v1
 NEXT_PUBLIC_WS_URL=ws://localhost:8000
 
 # Application Settings
-NEXT_PUBLIC_APP_NAME="Codevertex ISP Billing"
+NEXT_PUBLIC_APP_NAME="ISP ISP Billing"
 NEXT_PUBLIC_APP_VERSION=1.0.0
 
 # Feature Flags
@@ -663,7 +663,7 @@ Expected response:
   "user": {
     "id": 1,
     "username": "demo",
-    "email": "demo@codevertexafrica.com",
+    "email": "demo@ispbilling.example.com",
     "role": "admin"
   }
 }
@@ -971,7 +971,7 @@ After successful setup:
 
 For issues, questions, or contributions:
 
-- **Email**: support@codevertexafrica.com
+- **Email**: support@ispbilling.example.com
 - **Documentation**: See `/docs` folder
 - **GitHub Issues**: Create an issue in the repository
 
@@ -979,5 +979,5 @@ For issues, questions, or contributions:
 
 **Last Updated**: October 21, 2025
 **Version**: 1.0.0
-**Author**: Codevertex Africa Limited
+**Author**: ISP Billing Platform Limited
 

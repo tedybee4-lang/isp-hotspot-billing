@@ -454,7 +454,7 @@ async def verify_bootstrap_script(
     current_user: User = Depends(get_optional_current_user),
 ):
     """
-    Verify that the bootstrap script (codevertex.rsc) exists on the router
+    Verify that the bootstrap script (ISP.rsc) exists on the router
     and contains the correct router identity.
 
     This is used in Step 2 of provisioning to confirm the script was
@@ -761,14 +761,14 @@ async def get_provisioning_script(
 
     # Build the RouterOS script
     lines = [
-        "# Codevertex ISP Billing - Provisioning Script",
+        "# ISP ISP Billing - Provisioning Script",
         "# Generated for session: " + session_id,
         f"# RouterOS version: {routeros_version or 'auto-detect'}",
         "# All operations are logged to /log and displayed in terminal",
         "",
         ":put \"\"",
         ":put \"=========================================\"",
-        ":put \"Codevertex Provisioning - Starting\"",
+        ":put \"ISP Provisioning - Starting\"",
         ":put \"=========================================\"",
         "",
     ]

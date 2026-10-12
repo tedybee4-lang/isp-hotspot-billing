@@ -1,4 +1,4 @@
-# Codevertex ISP Billing System - Backend
+# ISP Billing System - Backend
 
 A comprehensive, production-ready ISP billing and management system built with FastAPI, supporting MikroTik router integration, M-PESA payments, RBAC, and multi-tenant architecture.
 
@@ -164,16 +164,15 @@ backend/
 docker-compose up -d
 ```
 
-### Production Deployment (GitOps)
+### Production Deployment (independent pipeline)
 
-Pushes to `main`/`master` trigger `.github/workflows/deploy-backend.yml`, which
-runs `build.sh` (from the `backend/` working directory): it builds
-`docker.io/codevertex/isp-billing-backend:<short-sha>` (the 8-char commit/merge
-SHA), pushes it, bumps the image `tag` in the devops-k8s
-`apps/isp-billing-backend/values.yaml`, and **ArgoCD auto-syncs** the
-`isp-billing` namespace. Deployment secrets are synced on-demand from the
-`Bengo-Hub/devops-k8s` repo (`GH_PAT` must exist in this repo). DB migrations run
-idempotently on container start.
+Pushes to `main` trigger `.github/workflows/deploy-backend.yml`, which
+builds `ghcr.io/tedybee4-lang/isp-billing-backend:<short-sha>` from
+`backend/docker/Dockerfile` (repo-root build context) and deploys it to the
+VPS with Docker Compose (`/opt/isp-billing`). No K8s / external
+GitOps repo is used or required. Deployment uses the repo secrets
+`VPS_DEPLOY_KEY`, `VPS_HOST` (default `87.76.137.72`) and `VPS_USER`
+(default `root`). DB migrations run idempotently on container start.
 
 ## API Documentation
 
@@ -211,7 +210,7 @@ pytest tests/ --cov=app --cov-report=html
 - **[Provisioning Overview](./docs/PROVISIONING_GUIDE.md)** - Conceptual overview of the hotspot/captive-portal flow
 - **[Connectivity & Billing Audit (2026-06)](./docs/AUDIT-AND-REMEDIATION-2026-06.md)** - Authoritative "how prod is wired" + shipped fixes
 - **[RouterOS v6 vs v7 Comparison](./docs/mikrotikv6-v7-comparison.md)** - Command-syntax reference for provisioning scripts
-- **[Reset / Cleanup Script](./docs/reset-router-provision.md)** - Manual wipe of codevertex config before reprovisioning
+- **[Reset / Cleanup Script](./docs/reset-router-provision.md)** - Manual wipe of legacy configuration before reprovisioning
 - **[Auth Mapping Guide](./docs/AUTH_MAPPING.md)** - Frontend to backend authentication mapping
 - **[Swagger Authentication Guide](./docs/swagger_authentication_guide.md)** - API authentication setup
 
@@ -274,7 +273,7 @@ See [IMPLEMENTATION_GUIDE.md](./docs/IMPLEMENTATION_GUIDE.md) for complete schem
 ## 📧 Support
 
 For issues, questions, or contributions:
-- **Email**: support@codevertexafrica.com
+- **Email**: support@ispbilling.example.com
 - **Documentation**: See `/docs` folder
 - **GitHub Issues**: Create an issue in the repository
 
@@ -282,9 +281,9 @@ For issues, questions, or contributions:
 
 MIT License - See LICENSE file for details
 
-## 🏢 About Codevertex Africa Limited
+## 🏢 About ISP Billing
 
-Codevertex Africa Limited specializes in ISP management software, network automation, and billing systems.
+ISP Billing is an open-source system for ISP management and billing, supporting MikroTik router integration, M-PESA payments, RBAC, and multi-tenant architecture. This project is licensed under the MIT License.
 
 ---
 

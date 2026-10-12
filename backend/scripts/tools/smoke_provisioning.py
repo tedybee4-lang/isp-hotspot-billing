@@ -21,7 +21,7 @@ import asyncio
 
 import httpx
 
-SEED_EMAIL = "superuser@codevertexafrica.com"
+SEED_EMAIL = "superuser@ispbilling.example.com"
 SEED_PASSWORD = "superuser123"
 
 

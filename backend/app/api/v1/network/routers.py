@@ -449,7 +449,7 @@ async def get_router_action_script(
         # NAT-safe reboot: the agent imports this .rsc which schedules a reboot a
         # few seconds out so the import (and its result report) completes first.
         return (
-            ":log info \"CVACTION: reboot requested by CodeVertex\"\n"
+            ":log info \"CVACTION: reboot requested by ISP\"\n"
             ":delay 3s\n"
             "/system/reboot\n"
         )
@@ -474,7 +474,7 @@ async def get_router_action_script(
             bname_expr = f"\"{name}\""
         else:
             bname_expr = (
-                "(\"codevertex-\" . [:pick [/system/clock/get date] 0 11] . \"-\" "
+                "(\"ISP-\" . [:pick [/system/clock/get date] 0 11] . \"-\" "
                 ". [:pick [/system/clock/get time] 0 5])"
             )
         return (
@@ -1432,7 +1432,7 @@ async def create_router_backup(
     # back to this exact backup via its id (embedded in the action-script URL).
     backup = RouterBackup(
         router_id=router_id,
-        name=f"codevertex-{datetime.utcnow().strftime('%Y-%m-%d-%H%M')}",
+        name=f"ISP-{datetime.utcnow().strftime('%Y-%m-%d-%H%M')}",
         status="pending",
         backup_type="binary",
         requested_by=current_user.id,
@@ -1549,7 +1549,7 @@ async def get_winbox_url(
 
     Returns both the remote VPN-based URL and the local direct URL.
     The remote URL uses the organization's VPN domain and the router's
-    assigned Winbox port (e.g., vpn.codevertex.com:51255).
+    assigned Winbox port (e.g., vpn.ispbilling.example.com:51255).
     """
     service = RouterService(db, organization_id=_get_org_id(current_user))
     router_obj = await service.get_by_id(router_id)

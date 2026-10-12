@@ -42,10 +42,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
-    # ── SSO (Phase 1b: central auth-api / Codevertex SSO) ──
+# ── SSO (decommissioned; Supabase JWT is the single identity path) ──
     # ADDITIVE: accepted alongside the existing local HS256 JWT. The local
     # login path is unchanged; these only configure RS256 SSO acceptance.
-    sso_issuer: str = "https://sso.codevertexafrica.com"
+    sso_issuer: Optional[str] = None
     # When empty, the JWKS URL is derived as <issuer>/.well-known/jwks.json.
     sso_jwks_url: Optional[str] = None
     # Audience this service expects in SSO tokens (the isp-billing client id).
@@ -88,25 +88,23 @@ class Settings(BaseSettings):
     treasury_api_url: Optional[str] = None
     # Browser-reachable shared pay page base (treasury-ui). The customer is
     # redirected here to choose a gateway and pay. e.g.
-    # https://books.codevertexafrica.com
-    treasury_pay_page_url: str = "https://books.codevertexafrica.com"
+    # (shared pay page base, configurable; off by default)
+    treasury_pay_page_url: Optional[str] = None
     # Request timeout (seconds) for S2S treasury calls.
     treasury_request_timeout: float = 20.0
     # PUBLIC, browser-reachable host the captive (unauthenticated) device polls for
     # payment-status confirmation (the treasury/books public API). This host MUST be
     # whitelisted in the MikroTik captive walled-garden, otherwise a pre-auth device
     # cannot poll payment status and the purchase only "confirms" at the client-side
-    # countdown. Hostname only (no scheme/path) — it is added both by-host and
-    # IP-pinned (SNI HTTPS won't pass unauth by host alone). e.g.
-    # booksapi.codevertexafrica.com
-    treasury_status_host: str = "booksapi.codevertexafrica.com"
+    # (payment-status host, configurable; off by default)
+    treasury_status_host: Optional[str] = None
+    # (payment-status host, configurable; off by default)
+    # the platform-owned payment rail ("ISP Billing Platform") is enabled in
     # Treasury "platform operating tenant" identifier — the tenant under which
-    # the PLATFORM-owned payment rail ("Codevertex Africa Limited") is enabled in
+    # the platform-owned payment rail ("ISP Billing Platform") is enabled in
     # treasury. Captive customers pay this platform rail, so when an ISP tenant has
-    # NO gateways selected in treasury we fall back to this tenant's gateways
-    # (HYBRID sourcing). In treasury this tenant is addressed by the slug
-    # ``codevertex`` (NOT an Organization.uuid). Override via PLATFORM_TREASURY_TENANT.
-    platform_treasury_tenant: str = "codevertex"
+    # the platform tenant slug ``isp-billing`` (NOT an Organization.uuid). Override via PLATFORM_TREASURY_TENANT.
+    platform_treasury_tenant: str = "isp-billing"
 
     # ── Central subscriptions-api (Phase 3, ADDITIVE) ──
     # Internal (S2S) base URL for subscriptions-api — used to read an ISP
@@ -125,7 +123,7 @@ class Settings(BaseSettings):
     # Internal (S2S) base URL for the central notifications-api, which owns ALL
     # notification DELIVERY (SMS / WhatsApp / email). isp-billing no longer has
     # local SMS/WhatsApp/email providers. Authenticated with internal_service_key
-    # (X-API-Key). e.g. http://notifications-api.bengobox.svc.cluster.local:4000
+    # (X-API-Key). e.g. http://notifications-api.notifications.svc.cluster.local:4000
     #
     # IMPORTANT: this is DELIVERY only. All SMS-credit and WhatsApp-subscription
     # BILLING / top-up / usage logic stays local in isp-billing.
@@ -166,8 +164,7 @@ class Settings(BaseSettings):
     master_password: Optional[str] = None
     encryption_salt: Optional[str] = None
 
-    # Platform Admin (picked from env / git secrets)
-    global_admin_email: str = "admin@codevertexafrica.com"
+    global_admin_email: str = "admin@ispbilling.example.com"
     global_admin_password: str = "Vertex2020!"  # MUST be changed via env variable in production
     
     @model_validator(mode="after")
@@ -282,7 +279,7 @@ class Settings(BaseSettings):
     mikrotik_default_ip: str = "192.168.88.1"  # Default router IP for provisioning/ping
     mikrotik_default_subnet: str = "192.168.88.0/24"  # Default subnet for provisioning
     # API user credentials (created during bootstrap for secure API access)
-    mikrotik_api_username: str = "codevertex_api"
+    mikrotik_api_username: str = "isp_api"
     mikrotik_api_password: str = "Vertex2020!"  # MUST be changed via env variable
 
     # Router Agent (polling agent installed on MikroTik routers)
@@ -294,7 +291,7 @@ class Settings(BaseSettings):
 
     # VPN overlay (remote Winbox / management). Per-org overrides live in
     # OrganizationSettings.vpn_domain; this is the platform-wide default.
-    vpn_domain: str = "vpn.codevertexafrica.com"
+    vpn_domain: Optional[str] = None
 
     # ── WireGuard VPN overlay (router management tunnel) ──
     # The WG server runs in k8s ns `vpn`; routers dial it outbound (NAT-safe).
@@ -305,7 +302,7 @@ class Settings(BaseSettings):
     # bootstrap script then skips the WireGuard block and routers stay on the
     # polling-agent fallback).
     wg_server_public_key: str = ""  # base64 server pubkey (from wg-server-keys Secret)
-    wg_endpoint: str = "vpn.codevertexafrica.com:51820"  # host:port routers dial
+    wg_endpoint: Optional[str] = None
     wg_subnet: str = "10.8.0.0/16"  # tunnel subnet; server is .1, routers .2+
     # Shared bearer token authenticating the WG server's reconcile loop when it
     # pulls the authoritative peer list (GET /api/v1/vpn/peers). Stored in the

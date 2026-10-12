@@ -87,8 +87,8 @@ class TestBootstrapCommandGeneration:
         assert "command" in data
         assert "script_url" in data
         assert "/tool fetch mode=https url=" in data["command"]
-        assert "codevertex.rsc" in data["command"]
-        assert "import codevertex.rsc" in data["command"]
+        assert "ISP.rsc" in data["command"]
+        assert "import ISP.rsc" in data["command"]
         
     def test_bootstrap_script_generation(self):
         """Test bootstrap script generation."""

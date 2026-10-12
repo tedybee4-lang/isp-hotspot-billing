@@ -1,4 +1,4 @@
-"""Command generation and helpers for Codevertex MikroTik provisioning.
+"""Command generation and helpers for ISP MikroTik provisioning.
 
 These helpers are imported by ProvisioningService to keep the service file
 small and focused on orchestration. Functions here are stateless and accept
@@ -71,13 +71,13 @@ def load_command_templates() -> Dict[str, Dict[str, Any]]:
             # Admins should manually configure restrictive firewall rules after provisioning.
             "create_firewall_rules": [
                 # Allow established connections (safe, always needed)
-                "/ip/firewall/filter/add chain=input action=accept connection-state=established,related comment=codevertex-allow-established",
+                "/ip/firewall/filter/add chain=input action=accept connection-state=established,related comment=ISP-allow-established",
                 # Allow ICMP for ping/diagnostics
-                "/ip/firewall/filter/add chain=input action=accept protocol=icmp comment=codevertex-allow-icmp",
+                "/ip/firewall/filter/add chain=input action=accept protocol=icmp comment=ISP-allow-icmp",
                 # Allow API access (8728) from management network
-                "/ip/firewall/filter/add chain=input action=accept dst-port=8728 protocol=tcp src-address={management_ip} comment=codevertex-allow-api",
+                "/ip/firewall/filter/add chain=input action=accept dst-port=8728 protocol=tcp src-address={management_ip} comment=ISP-allow-api",
                 # Allow WinBox (8291) for emergency access
-                "/ip/firewall/filter/add chain=input action=accept dst-port=8291 protocol=tcp comment=codevertex-allow-winbox",
+                "/ip/firewall/filter/add chain=input action=accept dst-port=8291 protocol=tcp comment=ISP-allow-winbox",
                 # NOTE: No DROP rule - admin should add restrictive rules manually
             ],
         },
@@ -193,8 +193,8 @@ def generate_configuration_commands(
     gateway = config.get("gateway", net_config["gateway"])
     pool_start = config.get("ip_pool_start", net_config["pool_start"])
     pool_end = config.get("ip_pool_end", net_config["pool_end"])
-    pool_name = config.get("pool_name", "codevertex-pool")
-    bridge_name = config.get("bridge_name", "codevertex-bridge")
+    pool_name = config.get("pool_name", "ISP-pool")
+    bridge_name = config.get("bridge_name", "ISP-bridge")
 
     # Get WAN interface - critical for safeguard
     wan_interface = config.get("wan_interface", "ether1")
@@ -264,13 +264,13 @@ def generate_configuration_commands(
         )
 
     # =========================================================================
-    # CLEAN SLATE — remove any prior codevertex-* config (idempotent reprovision)
+    # CLEAN SLATE — remove any prior ISP-* config (idempotent reprovision)
     # =========================================================================
     # Clear the PREVIOUS run's service objects first so re-adds never hit
     # "already exists" and a reprovision (e.g. to add ether2) starts from a known
     # state. Every removal is on-error-guarded (a missing object is a no-op) and
-    # scoped to codevertex service objects by name/comment. The management-allow
-    # firewall rules (comment "codevertex-allow-*") are deliberately NOT removed
+    # scoped to ISP service objects by name/comment. The management-allow
+    # firewall rules (comment "ISP-allow-*") are deliberately NOT removed
     # so management access is never even briefly weakened. Default bridge, WAN
     # and the management IP are never touched. Order: dependents before deps.
     _cleanup_commands = [
@@ -284,36 +284,36 @@ def generate_configuration_commands(
         ("Clearing tracked hotspot hosts", ':do { /ip/hotspot/host/remove [find] } on-error={}'),
         # Match by interface, not name: the hotspot server name varies (e.g.
         # "ISP-Hotspot" from service-config enrichment), but it is always bound to
-        # codevertex-bridge. Removing it first also frees the bridge so it can be
+        # ISP-bridge. Removing it first also frees the bridge so it can be
         # removed + re-added below without an "interface in use" error.
-        ("Clearing previous hotspot server", ':do { /ip/hotspot/remove [find interface=codevertex-bridge] } on-error={}'),
-        ("Clearing previous hotspot profile", ":do { /ip/hotspot/profile/remove [find name=codevertex-hsprof] } on-error={}"),
-        ("Clearing previous hotspot ip-binding", ':do { /ip/hotspot/ip-binding/remove [find comment~"codevertex-gateway-bypass"] } on-error={}'),
+        ("Clearing previous hotspot server", ':do { /ip/hotspot/remove [find interface=ISP-bridge] } on-error={}'),
+        ("Clearing previous hotspot profile", ":do { /ip/hotspot/profile/remove [find name=ISP-hsprof] } on-error={}"),
+        ("Clearing previous hotspot ip-binding", ':do { /ip/hotspot/ip-binding/remove [find comment~"ISP-gateway-bypass"] } on-error={}'),
         # PPPoE (service_type=both): remove the server + profile + secrets BEFORE
         # the pool/bridge they depend on, so a re-run does not abort the whole
         # import with "already have ... pppoe" / "in use" on the critical re-adds.
-        ("Clearing previous PPPoE server", ':do { /interface/pppoe-server/server/remove [find service-name~"codevertex"] } on-error={}'),
-        ("Clearing previous PPP profile", ':do { /ppp/profile/remove [find name~"codevertex"] } on-error={}'),
-        ("Clearing previous PPP secrets", ':do { /ppp/secret/remove [find comment~"codevertex"] } on-error={}'),
-        ("Clearing previous walled-garden hosts", ':do { /ip/hotspot/walled-garden/remove [find comment~"codevertex-portal"] } on-error={}'),
-        ("Clearing previous walled-garden IPs", ':do { /ip/hotspot/walled-garden/ip/remove [find comment~"codevertex-portal"] } on-error={}'),
+        ("Clearing previous PPPoE server", ':do { /interface/pppoe-server/server/remove [find service-name~"ISP"] } on-error={}'),
+        ("Clearing previous PPP profile", ':do { /ppp/profile/remove [find name~"ISP"] } on-error={}'),
+        ("Clearing previous PPP secrets", ':do { /ppp/secret/remove [find comment~"ISP"] } on-error={}'),
+        ("Clearing previous walled-garden hosts", ':do { /ip/hotspot/walled-garden/remove [find comment~"ISP-portal"] } on-error={}'),
+        ("Clearing previous walled-garden IPs", ':do { /ip/hotspot/walled-garden/ip/remove [find comment~"ISP-portal"] } on-error={}'),
         # Remove the previously-uploaded captive-portal template FILES so a stale
         # page (e.g. an old tenant slug like /buy/demo-isp) can never survive a
         # reprovision — even if the fresh /tool/fetch of login.html below fails,
         # the hotspot then falls back to the built-in page, never the wrong slug.
         ("Clearing previous captive login.html", ':do { /file/remove [find name="hotspot/login.html"] } on-error={}'),
         ("Clearing previous captive alogin.html", ':do { /file/remove [find name="hotspot/alogin.html"] } on-error={}'),
-        ("Clearing previous DHCP server", ":do { /ip/dhcp-server/remove [find name=codevertex-dhcp] } on-error={}"),
-        ("Clearing previous DHCP network", ':do { /ip/dhcp-server/network/remove [find comment~"codevertex-dhcp-network"] } on-error={}'),
-        ("Clearing previous IP pool", ":do { /ip/pool/remove [find name=codevertex-pool] } on-error={}"),
-        ("Clearing previous captive DNS entries", ':do { /ip/dns/static/remove [find comment~"codevertex-captive-portal-detection"] } on-error={}'),
-        ("Clearing previous DNS-redirect NAT", ':do { /ip/firewall/nat/remove [find comment~"codevertex-dns-redirect"] } on-error={}'),
-        ("Clearing previous masquerade NAT", ':do { /ip/firewall/nat/remove [find comment~"codevertex-masquerade"] } on-error={}'),
-        ("Clearing previous DoH-block filter", ':do { /ip/firewall/filter/remove [find comment~"codevertex-block-doh"] } on-error={}'),
-        ("Clearing previous anti-sharing rules", ':do { /ip/firewall/mangle/remove [find comment~"codevertex-anti-sharing"] } on-error={}'),
-        ("Clearing previous anti-sharing drop", ':do { /ip/firewall/filter/remove [find comment~"codevertex-anti-sharing"] } on-error={}'),
-        ("Clearing previous bridge IP", ":do { /ip/address/remove [find interface=codevertex-bridge] } on-error={}"),
-        ("Clearing previous bridge", ":do { /interface/bridge/remove [find name=codevertex-bridge] } on-error={}"),
+        ("Clearing previous DHCP server", ":do { /ip/dhcp-server/remove [find name=ISP-dhcp] } on-error={}"),
+        ("Clearing previous DHCP network", ':do { /ip/dhcp-server/network/remove [find comment~"ISP-dhcp-network"] } on-error={}'),
+        ("Clearing previous IP pool", ":do { /ip/pool/remove [find name=ISP-pool] } on-error={}"),
+        ("Clearing previous captive DNS entries", ':do { /ip/dns/static/remove [find comment~"ISP-captive-portal-detection"] } on-error={}'),
+        ("Clearing previous DNS-redirect NAT", ':do { /ip/firewall/nat/remove [find comment~"ISP-dns-redirect"] } on-error={}'),
+        ("Clearing previous masquerade NAT", ':do { /ip/firewall/nat/remove [find comment~"ISP-masquerade"] } on-error={}'),
+        ("Clearing previous DoH-block filter", ':do { /ip/firewall/filter/remove [find comment~"ISP-block-doh"] } on-error={}'),
+        ("Clearing previous anti-sharing rules", ':do { /ip/firewall/mangle/remove [find comment~"ISP-anti-sharing"] } on-error={}'),
+        ("Clearing previous anti-sharing drop", ':do { /ip/firewall/filter/remove [find comment~"ISP-anti-sharing"] } on-error={}'),
+        ("Clearing previous bridge IP", ":do { /ip/address/remove [find interface=ISP-bridge] } on-error={}"),
+        ("Clearing previous bridge", ":do { /interface/bridge/remove [find name=ISP-bridge] } on-error={}"),
     ]
     for _desc, _cmd in _cleanup_commands:
         commands.append({
@@ -330,7 +330,7 @@ def generate_configuration_commands(
     # management IP and WiFi live on the default bridge, so disabling it (or
     # yanking all its ports) would lock the operator out. A port can only live
     # in one bridge, so we instead move ONLY the selected customer ports into
-    # codevertex-bridge individually (each port is removed from whatever bridge
+    # ISP-bridge individually (each port is removed from whatever bridge
     # it currently sits in, just before it's added below). Management ports are
     # never touched.
 
@@ -417,7 +417,7 @@ def generate_configuration_commands(
     )
 
     # DHCP Server configuration
-    dhcp_server_name = config.get("dhcp_server_name", "codevertex-dhcp")
+    dhcp_server_name = config.get("dhcp_server_name", "ISP-dhcp")
     commands.append(
         {
             "type": "api_call",
@@ -436,7 +436,7 @@ def generate_configuration_commands(
     commands.append(
         {
             "type": "api_call",
-            "command": f"/ip/dhcp-server/network/add address={subnet_address}/{cidr} gateway={gateway} dns-server={gateway} comment=codevertex-dhcp-network",
+            "command": f"/ip/dhcp-server/network/add address={subnet_address}/{cidr} gateway={gateway} dns-server={gateway} comment=ISP-dhcp-network",
             "description": "Configuring DHCP network parameters",
             "critical": True,
         }
@@ -447,7 +447,7 @@ def generate_configuration_commands(
     commands.append(
         {
             "type": "api_call",
-            "command": f"/ip/firewall/nat/add chain=srcnat action=masquerade out-interface={wan_interface} comment=codevertex-masquerade",
+            "command": f"/ip/firewall/nat/add chain=srcnat action=masquerade out-interface={wan_interface} comment=ISP-masquerade",
             "description": f"Enabling NAT masquerade on {wan_interface}",
             "critical": True,
         }
@@ -471,10 +471,10 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     5. User gets internet access
     """
     commands: List[Dict[str, Any]] = []
-    hotspot_name = config.get("hotspot_name", "codevertex-hotspot")
+    hotspot_name = config.get("hotspot_name", "ISP-hotspot")
     # Use bridge interface for hotspot (not single port)
-    bridge_name = config.get("bridge_name", "codevertex-bridge")
-    pool_name = config.get("pool_name", "codevertex-pool")
+    bridge_name = config.get("bridge_name", "ISP-bridge")
+    pool_name = config.get("pool_name", "ISP-pool")
 
     # Calculate gateway from config
     subnet_address = config.get("subnet_address", "172.31.0.0")
@@ -483,7 +483,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     gateway = config.get("gateway", net_config["gateway"])
 
     # Hotspot profile settings
-    profile_name = config.get("hotspot_profile", "codevertex-hsprof")
+    profile_name = config.get("hotspot_profile", "ISP-hsprof")
     dns_name = config.get("hotspot_dns_name", "hotspot.local")
 
     # External captive portal URL - this is where users are redirected
@@ -527,12 +527,12 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     # still works via legacy HTTP interception + DNS static entries.
     # =========================================================================
     # Step 1: Create a self-signed CA certificate (needed to sign server cert)
-    ca_cert_name = config.get("hotspot_ca_cert_name", "codevertex-ca")
-    cert_name = config.get("hotspot_cert_name", "codevertex-hotspot-cert")
+    ca_cert_name = config.get("hotspot_ca_cert_name", "ISP-ca")
+    cert_name = config.get("hotspot_cert_name", "ISP-hotspot-cert")
     commands.append(
         {
             "type": "api_call",
-            "command": f"/certificate/add name={ca_cert_name} common-name=codevertex-ca key-usage=key-cert-sign,crl-sign key-size=2048 days-valid=3650",
+            "command": f"/certificate/add name={ca_cert_name} common-name=ISP-ca key-usage=key-cert-sign,crl-sign key-size=2048 days-valid=3650",
             "description": "Creating CA certificate for hotspot SSL",
             "critical": False,
         }
@@ -685,7 +685,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     commands.append(
         {
             "type": "api_call",
-            "command": f"/ip/hotspot/ip-binding/add address={gateway} type=bypassed comment=codevertex-gateway-bypass",
+            "command": f"/ip/hotspot/ip-binding/add address={gateway} type=bypassed comment=ISP-gateway-bypass",
             "description": f"Bypassing gateway {gateway} from hotspot authentication",
             "critical": False,
         }
@@ -749,7 +749,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     #   * the treasury/books PUBLIC status host — the device polls it for payment
     #     confirmation; without it the purchase only "confirms" at the client-side
     #     countdown (issue 4). Host is configurable (config override → settings
-    #     default `booksapi.codevertexafrica.com`).
+    #     default `booksapi.ispbilling.example.com`).
     #   * the treasury-UI host — serves the embedded checkout iframe.
     #   * `api.qrserver.com` — renders the M-Pesa/merchant QR + logo on the pay
     #     page; without it the QR/logo never loads (issue 3).
@@ -759,8 +759,8 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     # All are NON-wildcard HTTPS hosts, so (like the billing/api host) they must
     # ALSO be IP-pinned in cloud_hosts below — MikroTik's by-host (SNI) walled-
     # garden does not reliably pass unauthenticated HTTPS.
-    _default_treasury_host = "booksapi.codevertexafrica.com"
-    _default_treasury_ui_host = "books.codevertexafrica.com"
+    _default_treasury_host = "booksapi.ispbilling.example.com"
+    _default_treasury_ui_host = "books.ispbilling.example.com"
     try:
         from app.core.config import settings as _settings
         _default_treasury_host = _settings.treasury_status_host or _default_treasury_host
@@ -908,7 +908,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     commands.append(
         {
             "type": "api_call",
-            "command": f"/ip/firewall/nat/add chain=dstnat action=redirect to-ports=53 protocol=udp dst-port=53 in-interface={bridge_name} comment=codevertex-dns-redirect",
+            "command": f"/ip/firewall/nat/add chain=dstnat action=redirect to-ports=53 protocol=udp dst-port=53 in-interface={bridge_name} comment=ISP-dns-redirect",
             "description": "DNS redirect NAT rule (UDP) to force DNS through router",
             "critical": False,
         }
@@ -916,7 +916,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     commands.append(
         {
             "type": "api_call",
-            "command": f"/ip/firewall/nat/add chain=dstnat action=redirect to-ports=53 protocol=tcp dst-port=53 in-interface={bridge_name} comment=codevertex-dns-redirect",
+            "command": f"/ip/firewall/nat/add chain=dstnat action=redirect to-ports=53 protocol=tcp dst-port=53 in-interface={bridge_name} comment=ISP-dns-redirect",
             "description": "DNS redirect NAT rule (TCP) to force DNS through router",
             "critical": False,
         }
@@ -952,7 +952,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
         commands.append(
             {
                 "type": "api_call",
-                "command": f"/ip/firewall/address-list/add list=codevertex-doh-providers address={ip} comment={comment}",
+                "command": f"/ip/firewall/address-list/add list=ISP-doh-providers address={ip} comment={comment}",
                 "description": f"Adding DoH provider {ip} ({comment}) to address list",
                 "critical": False,
             }
@@ -965,7 +965,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     commands.append(
         {
             "type": "api_call",
-            "command": f"/ip/firewall/filter/add chain=forward action=reject reject-with=icmp-network-unreachable dst-address-list=codevertex-doh-providers protocol=tcp dst-port=443 in-interface={bridge_name} comment=codevertex-block-doh",
+            "command": f"/ip/firewall/filter/add chain=forward action=reject reject-with=icmp-network-unreachable dst-address-list=ISP-doh-providers protocol=tcp dst-port=443 in-interface={bridge_name} comment=ISP-block-doh",
             "description": "Blocking DNS-over-HTTPS to prevent captive portal bypass",
             "critical": False,
         }
@@ -977,7 +977,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
         commands.append(
             {
                 "type": "api_call",
-                "command": f'/ip/hotspot/walled-garden/add dst-host="{host}" action=allow comment=codevertex-portal',
+                "command": f'/ip/hotspot/walled-garden/add dst-host="{host}" action=allow comment=ISP-portal',
                 "description": f"Allow unauthenticated access to {host}",
                 "critical": False,
             }
@@ -997,7 +997,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
         commands.append(
             {
                 "type": "api_call",
-                "command": f"/ip/hotspot/walled-garden/ip/add dst-address={ip} action=accept comment=codevertex-portal",
+                "command": f"/ip/hotspot/walled-garden/ip/add dst-address={ip} action=accept comment=ISP-portal",
                 "description": f"Allow unauthenticated access to IP {ip}",
                 "critical": False,
             }
@@ -1012,7 +1012,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     # not an internal/cluster IP the backend pod might see) and accepting that IP
     # lets the HTTPS pass straight through to the real server (which presents its own
     # valid cert). on-error guarded: if DNS fails at provision time the by-host entry
-    # still serves HTTP. comment=codevertex-portal-ip so clean-slate can re-pin it.
+    # still serves HTTP. comment=ISP-portal-ip so clean-slate can re-pin it.
     for _host in cloud_hosts:
         commands.append(
             {
@@ -1020,7 +1020,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
                 "command": (
                     f':do {{ /ip/hotspot/walled-garden/ip/add '
                     f'dst-address=[:resolve "{_host}"] action=accept '
-                    f'comment=codevertex-portal-ip }} on-error={{}}'
+                    f'comment=ISP-portal-ip }} on-error={{}}'
                 ),
                 "description": f"Pin cloud host {_host} to walled-garden by resolved IP (unauth HTTPS passthrough)",
                 "critical": False,
@@ -1050,7 +1050,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
         commands.append(
             {
                 "type": "api_call",
-                "command": "/ip/firewall/mangle/add chain=forward action=change-ttl new-ttl=set:64 passthrough=yes ttl=equal:65 protocol=tcp dst-port=80,443,53 comment=codevertex-anti-sharing",
+                "command": "/ip/firewall/mangle/add chain=forward action=change-ttl new-ttl=set:64 passthrough=yes ttl=equal:65 protocol=tcp dst-port=80,443,53 comment=ISP-anti-sharing",
                 "description": "Anti-sharing TTL rule for TCP (HTTP/HTTPS/DNS)",
                 "critical": False,
             }
@@ -1058,7 +1058,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
         commands.append(
             {
                 "type": "api_call",
-                "command": "/ip/firewall/mangle/add chain=forward action=change-ttl new-ttl=set:64 passthrough=yes ttl=equal:65 protocol=udp dst-port=53,67,68 comment=codevertex-anti-sharing",
+                "command": "/ip/firewall/mangle/add chain=forward action=change-ttl new-ttl=set:64 passthrough=yes ttl=equal:65 protocol=udp dst-port=53,67,68 comment=ISP-anti-sharing",
                 "description": "Anti-sharing TTL rule for UDP (DNS/DHCP)",
                 "critical": False,
             }
@@ -1067,7 +1067,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
         commands.append(
             {
                 "type": "api_call",
-                "command": "/ip/firewall/filter/add chain=forward action=drop ttl=equal:1 comment=codevertex-anti-sharing",
+                "command": "/ip/firewall/filter/add chain=forward action=drop ttl=equal:1 comment=ISP-anti-sharing",
                 "description": "Block suspicious low-TTL packets",
                 "critical": False,
             }
@@ -1082,11 +1082,11 @@ def generate_pppoe_commands(config: Dict[str, Any], routeros_version: Optional[s
     Creates PPPoE server on the bridge interface with proper profile settings.
     """
     commands: List[Dict[str, Any]] = []
-    service_name = config.get("service_name", "codevertex-pppoe")
+    service_name = config.get("service_name", "ISP-pppoe")
     # Use bridge interface for PPPoE (not single port)
-    bridge_name = config.get("bridge_name", "codevertex-bridge")
-    profile_name = config.get("ppp_profile_name", "codevertex-pppoe-profile")
-    pool_name = config.get("pool_name", "codevertex-pool")
+    bridge_name = config.get("bridge_name", "ISP-bridge")
+    profile_name = config.get("ppp_profile_name", "ISP-pppoe-profile")
+    pool_name = config.get("pool_name", "ISP-pool")
 
     # Calculate gateway from config
     subnet_address = config.get("subnet_address", "172.31.0.0")
@@ -1340,15 +1340,15 @@ async def execute_command_with_retry(
 
 
 async def cleanup_existing_provisioning(client, connection, logger, session_id: Optional[str] = None) -> None:
-    """Clean up any existing codevertex provisioning artifacts before fresh provisioning.
+    """Clean up any existing ISP provisioning artifacts before fresh provisioning.
 
     This makes reprovisioning safe by removing:
-    - Codevertex bridge and bridge ports
-    - Codevertex IP pools
-    - Codevertex DHCP servers
-    - Codevertex firewall rules
-    - Codevertex hotspot configs
-    - Codevertex PPPoE configs
+    - ISP bridge and bridge ports
+    - ISP IP pools
+    - ISP DHCP servers
+    - ISP firewall rules
+    - ISP hotspot configs
+    - ISP PPPoE configs
 
     IMPORTANT: This does NOT remove NAT masquerade or affect WAN connectivity.
 
@@ -1397,71 +1397,71 @@ async def cleanup_existing_provisioning(client, connection, logger, session_id: 
     # Cleanup in order of dependencies (remove dependents first)
 
     # 0a. DNS static entries for captive portal detection (independent, clean early)
-    if await remove_by_filter('/ip/dns/static', 'comment', 'codevertex', 'DNS static entries'):
+    if await remove_by_filter('/ip/dns/static', 'comment', 'ISP', 'DNS static entries'):
         cleaned_items.append('DNS static entries')
 
     # 0b. NAT redirect rules for DNS forcing (by comment)
-    if await remove_by_filter('/ip/firewall/nat', 'comment', 'codevertex', 'NAT rules'):
+    if await remove_by_filter('/ip/firewall/nat', 'comment', 'ISP', 'NAT rules'):
         cleaned_items.append('NAT rules')
 
     # 0c. Walled garden entries (must be removed before hotspot)
-    if await remove_by_filter('/ip/hotspot/walled-garden', 'comment', 'codevertex', 'walled garden'):
+    if await remove_by_filter('/ip/hotspot/walled-garden', 'comment', 'ISP', 'walled garden'):
         cleaned_items.append('walled garden entries')
 
     # 0d. Walled garden IP entries
-    if await remove_by_filter('/ip/hotspot/walled-garden/ip', 'comment', 'codevertex', 'walled garden IP'):
+    if await remove_by_filter('/ip/hotspot/walled-garden/ip', 'comment', 'ISP', 'walled garden IP'):
         cleaned_items.append('walled garden IP entries')
 
     # 1. Firewall rules (by comment)
-    if await remove_by_filter('/ip/firewall/filter', 'comment', 'codevertex', 'firewall rules'):
+    if await remove_by_filter('/ip/firewall/filter', 'comment', 'ISP', 'firewall rules'):
         cleaned_items.append('firewall rules')
 
     # 2. Mangle rules (by comment)
-    if await remove_by_filter('/ip/firewall/mangle', 'comment', 'codevertex', 'mangle rules'):
+    if await remove_by_filter('/ip/firewall/mangle', 'comment', 'ISP', 'mangle rules'):
         cleaned_items.append('mangle rules')
 
     # 3. Hotspot (by name) - must come before DHCP/pool
-    if await remove_by_filter('/ip/hotspot', 'name', 'codevertex', 'hotspot'):
+    if await remove_by_filter('/ip/hotspot', 'name', 'ISP', 'hotspot'):
         cleaned_items.append('hotspot')
 
     # 4. Hotspot profile (by name)
-    if await remove_by_filter('/ip/hotspot/profile', 'name', 'codevertex', 'hotspot profile'):
+    if await remove_by_filter('/ip/hotspot/profile', 'name', 'ISP', 'hotspot profile'):
         cleaned_items.append('hotspot profile')
 
     # 4b. SSL certificates (clean up after hotspot profile that references them)
-    if await remove_by_filter('/certificate', 'name', 'codevertex', 'SSL certificates'):
+    if await remove_by_filter('/certificate', 'name', 'ISP', 'SSL certificates'):
         cleaned_items.append('SSL certificates')
 
     # 5. PPPoE server (by service-name)
-    if await remove_by_filter('/interface/pppoe-server/server', 'service-name', 'codevertex', 'PPPoE server'):
+    if await remove_by_filter('/interface/pppoe-server/server', 'service-name', 'ISP', 'PPPoE server'):
         cleaned_items.append('PPPoE server')
 
     # 6. PPP profile (by name)
-    if await remove_by_filter('/ppp/profile', 'name', 'codevertex', 'PPP profile'):
+    if await remove_by_filter('/ppp/profile', 'name', 'ISP', 'PPP profile'):
         cleaned_items.append('PPP profile')
 
     # 7. DHCP server (by name) - must come before IP pool
-    if await remove_by_filter('/ip/dhcp-server', 'name', 'codevertex', 'DHCP server'):
+    if await remove_by_filter('/ip/dhcp-server', 'name', 'ISP', 'DHCP server'):
         cleaned_items.append('DHCP server')
 
     # 8. DHCP network (by comment or gateway)
-    if await remove_by_filter('/ip/dhcp-server/network', 'comment', 'codevertex', 'DHCP network'):
+    if await remove_by_filter('/ip/dhcp-server/network', 'comment', 'ISP', 'DHCP network'):
         cleaned_items.append('DHCP network')
 
     # 9. IP pool (by name)
-    if await remove_by_filter('/ip/pool', 'name', 'codevertex', 'IP pool'):
+    if await remove_by_filter('/ip/pool', 'name', 'ISP', 'IP pool'):
         cleaned_items.append('IP pool')
 
     # 10. Bridge ports (by bridge name) - BEFORE removing bridge
-    if await remove_by_filter('/interface/bridge/port', 'bridge', 'codevertex', 'bridge ports'):
+    if await remove_by_filter('/interface/bridge/port', 'bridge', 'ISP', 'bridge ports'):
         cleaned_items.append('bridge ports')
 
     # 11. IP addresses on bridge (by interface name)
-    if await remove_by_filter('/ip/address', 'interface', 'codevertex', 'bridge IP'):
+    if await remove_by_filter('/ip/address', 'interface', 'ISP', 'bridge IP'):
         cleaned_items.append('bridge IP')
 
     # 12. Bridge itself (by name) - LAST
-    if await remove_by_filter('/interface/bridge', 'name', 'codevertex', 'bridge'):
+    if await remove_by_filter('/interface/bridge', 'name', 'ISP', 'bridge'):
         cleaned_items.append('bridge')
 
     if cleaned_items and session_id:
@@ -1560,7 +1560,7 @@ async def apply_security_configuration(client, connection, config: Dict[str, Any
 
     IMPORTANT: This function is designed to be SAFE and avoid management lockout.
     - No DROP-ALL rules are applied automatically
-    - Existing codevertex rules are removed first to prevent duplicates
+    - Existing ISP rules are removed first to prevent duplicates
     - All rules have comments for identification
     - WinBox access is preserved for emergency recovery
     """
@@ -1573,12 +1573,12 @@ async def apply_security_configuration(client, connection, config: Dict[str, Any
                 "info"
             )
 
-        # Step 1: Clean up any existing codevertex firewall rules to prevent duplicates
+        # Step 1: Clean up any existing ISP firewall rules to prevent duplicates
         # This makes reprovisioning safe and idempotent
         try:
-            cleanup_cmd = '/ip/firewall/filter/remove [find where comment~"codevertex"]'
+            cleanup_cmd = '/ip/firewall/filter/remove [find where comment~"ISP"]'
             await client.execute_command(connection, cleanup_cmd)
-            logger.info("Cleaned up existing codevertex firewall rules")
+            logger.info("Cleaned up existing ISP firewall rules")
         except Exception as cleanup_error:
             # Ignore cleanup errors - rules might not exist
             logger.debug(f"Firewall cleanup (expected if no existing rules): {cleanup_error}")

@@ -1,9 +1,17 @@
 # =============================================================================
-#  ISPFlow — VPS deployment (Docker Compose)
+# ISP Billing Backend — independent Docker Compose deployment
+# (VPS Docker Compose only; no K8s / legacy GitOps repo).
 #
-#  Option A: host the SPA only, pointing at Supabase Cloud (recommended).
-#  Option B: also run self-hosted Supabase for full data sovereignty.
-#           See deploy/supabase/README.md
+# Profiles:
+#   web      -> frontend SPA (hosted on Vercel in practice; kept for local runs)
+#   backend  -> FastAPI engine + its data services on the VPS:
+#                 docker compose --profile backend up -d --build
+# The engine's entrypoint runs Alembic migrations, then uvicorn.
+#
+# The public API origin is ONE configurable value: BACKEND_URL
+# (placeholder default https://ispbilling.example.com — replace with the
+# operator's own domain; no working domain is assumed). The Vercel rewrites
+# in ./vercel.json proxy /api/* and /health to the same origin.
 # =============================================================================
 
 services:
@@ -20,7 +28,7 @@ services:
         VITE_APP_NAME: ${VITE_APP_NAME:-ISPFlow}
         VITE_APP_URL: ${VITE_APP_URL:-}
         VITE_API_URL: ${VITE_API_URL:-}
-        VITE_WS_URL: ${VITE_WS_URL:-wss://ispbillingapi.codevertexafrica.com}
+        VITE_WS_URL: ${VITE_WS_URL:-wss://ispbilling.example.com}
         VITE_SUPER_ADMIN_EMAILS: ${VITE_SUPER_ADMIN_EMAILS:-}
     image: ispflow-web:latest
     restart: unless-stopped
@@ -94,11 +102,11 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  isp-billing-backend:
     build:
       context: ./backend
       dockerfile: docker/Dockerfile
-    image: ispflow-provision-engine:latest
+    image: ghcr.io/${GHCR_NAMESPACE:-tedybee4-lang}/isp-billing-backend:latest
     restart: unless-stopped
     profiles: ["backend"]
     depends_on:
@@ -119,7 +127,7 @@ services:
       GLOBAL_ADMIN_EMAIL: ${GLOBAL_ADMIN_EMAIL:-}
       GLOBAL_ADMIN_PASSWORD: ${GLOBAL_ADMIN_PASSWORD:-}
       FRONTEND_URL: ${VITE_APP_URL:?set VITE_APP_URL to the Vercel production origin}
-      BACKEND_URL: ${BACKEND_URL:?set BACKEND_URL to the public HTTPS VPS API origin}
+      BACKEND_URL: ${BACKEND_URL:-https://ispbilling.example.com}
       CORS_ORIGINS: '["${VITE_APP_URL:?set VITE_APP_URL to the Vercel production origin}"]'
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"

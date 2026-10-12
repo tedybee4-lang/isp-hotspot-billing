@@ -242,9 +242,9 @@ class RouterService:
             override = (getattr(org_settings, "vpn_domain", None) or "").strip() if org_settings else ""
             # The WG gateway is platform-wide (one host for every router's tunnel + winbox
             # DNAT), so the per-org value should equal the platform default. Ignore the
-            # legacy-bad "vpn.codevertex.com" default (a typo missing "itsolutions" that
+            # legacy-bad "vpn.ISP.com" default lineage (a typo missing "itsolutions" that
             # caused WinBox "Host not found"); only honour a genuinely-customised override.
-            if override and override != "vpn.codevertex.com":
+            if override and override != "vpn.ispbilling.example.com":
                 vpn_domain = override
         return vpn_domain
 
@@ -563,7 +563,7 @@ class RouterService:
         Args:
             router_id: The ID of the router to delete
             cleanup_device: If True, attempt to remove provisioning artifacts
-                           (codevertex.rsc script) from the MikroTik device before deletion
+                           (ISP.rsc script) from the MikroTik device before deletion
         """
         try:
             if not isinstance(router_id, int) or router_id <= 0:

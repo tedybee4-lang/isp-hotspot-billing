@@ -1,4 +1,4 @@
-"""Status formatting helpers for Codevertex provisioning sessions."""
+"""Status formatting helpers for ISP provisioning sessions."""
 
 from __future__ import annotations
 

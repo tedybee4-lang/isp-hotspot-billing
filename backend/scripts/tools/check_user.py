@@ -10,7 +10,7 @@ from app.models.user import User
 
 async def main():
     # Get username from command line args or use default
-    username = sys.argv[1] if len(sys.argv) > 1 else "codevertexadmin"
+    username = sys.argv[1] if len(sys.argv) > 1 else "ISPadmin"
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(User).where(User.username == username))

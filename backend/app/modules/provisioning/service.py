@@ -5,7 +5,7 @@ This service implements a comprehensive 3-step provisioning workflow:
 2. Configuration - Apply basic router configuration and security
 3. Service Setup - Configure PPPoE/Hotspot services and user management
 
-Based on Codevertex provisioning process with production-ready features:
+Based on ISP provisioning process with production-ready features:
 - Atomic operations with rollback capability
 - Progress tracking and real-time updates
 - Template-based configuration
@@ -568,7 +568,7 @@ class ProvisioningService:
                 "port": router.port
             }
 
-            # Clean up any existing codevertex configuration (makes reprovisioning safe)
+            # Clean up any existing ISP configuration (makes reprovisioning safe)
             await self._update_step_progress(step_log, 5.0, "Cleaning up existing configuration...", session)
             await cleanup_existing_provisioning(client, connection, self.logger, session.session_id)
 
@@ -690,7 +690,7 @@ class ProvisioningService:
                 try:
                     await self._upload_hotspot_templates(router, config, session)
                     # Templates uploaded — point hotspot profile to custom templates
-                    profile_name = config.get("hotspot_profile", "codevertex-hsprof")
+                    profile_name = config.get("hotspot_profile", "ISP-hsprof")
                     try:
                         await client.execute_command(
                             connection,

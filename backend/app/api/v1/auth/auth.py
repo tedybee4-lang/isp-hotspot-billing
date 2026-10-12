@@ -21,7 +21,7 @@ from app.schemas.user import (
 )
 from app.modules.auth import AuthService, UserService
 
-# NOTE: Admin authentication is migrated to the central Codevertex SSO. This
+# NOTE: Admin authentication is migrated to the central ISP SSO. This
 # router keeps only: /login + /refresh (local break-glass for the seeded
 # superuser if SSO is ever unreachable), /logout (stateless), and /me + /sso-me
 # (unified local-or-SSO identity). All other legacy local-auth endpoints
@@ -379,4 +379,4 @@ async def get_sso_current_user_info(
 
 # Legacy local-auth endpoints (email/phone verification, password reset/change,
 # and session management) were removed — these are owned by the central SSO
-# (auth-api) and the user-profile UI in accounts.codevertexafrica.com.
+# (auth-api) and the user-profile UI in accounts.ispbilling.example.com.
