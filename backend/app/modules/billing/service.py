@@ -22,7 +22,6 @@ from app.models.billing import (
 from app.models.subscription import Subscription, SubscriptionStatus
 from app.models.user import User
 from app.models.payment_gateway import PaymentTransaction
-from app.modules.billing.mpesa import MpesaService
 from app.api.deps import PaginationParams
 from app.core.logging import get_logger
 from app.core.exceptions import BillingError, PaymentError, ValidationError
@@ -45,7 +44,6 @@ class BillingService:
     def __init__(self, db: AsyncSession, organization_id: Optional[int] = None):
         self.db = db
         self.organization_id = organization_id or get_current_organization_id()
-        self.mpesa_service = MpesaService(db)
         self.logger = get_logger(__name__)
         self._max_retries = 3
         self._retry_delay = 1  # seconds
@@ -463,101 +461,6 @@ class BillingService:
             await self.db.refresh(payment)
 
         return payment
-
-    async def process_mpesa_payment(
-        self,
-        user_id: int,
-        phone_number: str,
-        amount: int,
-        invoice_number: str,
-        description: str = "Payment for internet service",
-    ) -> Dict[str, Any]:
-        """Process MPESA STK Push payment."""
-        try:
-            # Initiate MPESA payment
-            result = await self.mpesa_service.initiate_payment(
-                phone_number=phone_number,
-                amount=amount,
-                invoice_number=invoice_number,
-                description=description
-            )
-
-            if result.get("success"):
-                # Create payment record
-                payment = await self.create_payment(
-                    user_id=user_id,
-                    amount=Decimal(str(amount)),
-                    payment_method=PaymentMethod.MPESA,
-                    transaction_id=result.get("merchant_request_id"),
-                    reference_number=result.get("checkout_request_id"),
-                    notes=f"MPESA STK Push for invoice {invoice_number}",
-                )
-
-                return {
-                    "success": True,
-                    "payment_id": payment.id,
-                    "payment_number": payment.payment_number,
-                    "merchant_request_id": result.get("merchant_request_id"),
-                    "checkout_request_id": result.get("checkout_request_id"),
-                    "customer_message": result.get("customer_message"),
-                }
-            else:
-                return {
-                    "success": False,
-                    "error": result.get("error", "Payment initiation failed"),
-                }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-            }
-
-    async def handle_mpesa_callback(self, callback_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle MPESA payment callback."""
-        try:
-            result = await self.mpesa_service.handle_payment_callback(callback_data)
-
-            if result.get("success") and result.get("payment_successful"):
-                # Find payment by checkout request ID
-                checkout_request_id = result.get("checkout_request_id")
-                if checkout_request_id:
-                    payment = await self.db.execute(
-                        select(Payment).where(Payment.reference_number == checkout_request_id)
-                    )
-                    payment = payment.scalar_one_or_none()
-
-                    if payment:
-                        # Update payment status
-                        payment.status = PaymentStatus.COMPLETED
-                        payment.mpesa_receipt_number = result.get("mpesa_receipt_number")
-                        payment.mpesa_phone_number = result.get("phone_number")
-                        payment.mpesa_transaction_date = datetime.utcnow()
-                        payment.payment_date = datetime.utcnow()
-                        payment.processed_date = datetime.utcnow()
-
-                        await self.db.commit()
-
-                        # Update invoice if linked
-                        if payment.invoice_id:
-                            await self._apply_payment_to_invoice(payment.invoice_id, payment.amount)
-
-                        return {
-                            "success": True,
-                            "payment_id": payment.id,
-                            "message": "Payment processed successfully",
-                        }
-
-            return {
-                "success": False,
-                "error": "Payment processing failed",
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-            }
 
     # ==================== PAYSTACK PAYMENT METHODS ====================
 

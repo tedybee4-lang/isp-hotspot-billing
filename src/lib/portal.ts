@@ -137,7 +137,7 @@ export async function redeemPortalVoucher(
  * which is what keeps one ISP's portal from prompting another ISP's Till.
  *
  * The response is one of two shapes depending on how that ISP collects money:
- *  - `mode: 'stk'`        an M-Pesa prompt was sent; poll for settlement.
+ *  - `mode: 'stk'`        a payment prompt was sent; poll for settlement.
  *  - `mode: 'manual_till'` nothing was prompted; the customer pays the Till and
  *                         staff confirm it. `instructions` says what to do.
  */

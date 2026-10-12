@@ -4,7 +4,7 @@
 
 This document explains the clear separation between **Platform-level settings** and **Tenant-specific settings** in the ISP Billing system. This separation ensures proper access control, data isolation, and maintainability.
 
-**Payment gateways: same gateway, two config levels.** Paystack and M-Pesa are not "platform gateways" vs "tenant gateways" as separate records — they are **one gateway type** with **platform-level config** (API keys, webhook URL, Daraja consumer key/secret/passkey) and **tenant-level config** (payout recipient, schedule, M-Pesa short code where tenant-specific). Platform holds technical credentials; tenants configure only business-facing settings (payout destination, threshold, cycle). Treasury service follows this same pattern; see treasury-api `docs/paystack-and-platform-admin.md`.
+**Payment gateways: same gateway, two config levels.** Paystack and PayHero are not "platform gateways" vs "tenant gateways" as separate records — they are **one gateway type** with **platform-level config** (API keys, webhook URL, PayHero merchant ID/api key/callback) and **tenant-level config** (payout recipient, schedule). Platform holds technical credentials; tenants configure only business-facing settings (payout destination, threshold, cycle). Treasury service follows this same pattern; see treasury-api `docs/paystack-and-platform-admin.md`.
 
 ---
 
@@ -39,11 +39,10 @@ This document explains the clear separation between **Platform-level settings** 
 - ✅ API domain
 
 #### **Integrations Tab** ⭐ **NEW**
-- ✅ **M-Pesa Daraja API Configuration**
-  - Consumer Key
-  - Consumer Secret
-  - Passkey
-  - Shortcode
+- ✅ **PayHero Payment Gateway Configuration**
+  - Merchant ID
+  - API Key
+  - Callback URL
   - Environment (sandbox/production)
 - ✅ **SMS Gateway Configuration**
   - Provider selection (Africa's Talking, Twilio, Custom)
@@ -51,7 +50,7 @@ This document explains the clear separation between **Platform-level settings** 
   - Username/Account SID
   - Sender ID
 - ✅ **Webhook & Callback URLs**
-  - M-Pesa validation, confirmation, callback URLs
+  - PayHero callback URL
   - Paystack webhook URLs
   - Auto-configured endpoints for all integrations
 
@@ -91,7 +90,7 @@ This document explains the clear separation between **Platform-level settings** 
   - Payout day/time
   - Minimum payout amount
   - Recipient account details (bank or mobile money)
-- ❌ **REMOVED**: M-Pesa API credentials (moved to Platform)
+- ❌ **REMOVED**: PayHero API credentials (moved to Platform)
 - ❌ **REMOVED**: Integration webhook URLs (moved to Platform)
 
 #### PPPoE Tab
@@ -137,7 +136,7 @@ This document explains the clear separation between **Platform-level settings** 
 │      (Platform Admins Only)             │
 │                                         │
 │  Integrations Tab:                      │
-│  • M-Pesa Daraja API ✅                │
+│  • PayHero Payment Gateway ✅          │
 │  • SMS Gateway (Twilio/AT) ✅          │
 │  • Webhook URLs ✅                     │
 └─────────────────────────────────────────┘
@@ -170,7 +169,7 @@ Tenant Dashboard → Uses Platform-Configured Gateway
                               ▼
               ┌───────────────────────────────┐
               │   Platform Integration        │
-              │   (M-Pesa/Paystack)          │
+              │   (PayHero/Paystack)          │
               │   Credentials: Platform-level │
               └───────────────────────────────┘
                               │
@@ -209,7 +208,7 @@ Tenant Dashboard → Uses Platform-Configured Gateway
 
 #### Frontend Changes
 1. **Created** new "Integrations" tab in `/platform/settings/page.tsx`
-2. **Moved** M-Pesa configuration from tenant to platform settings
+2. **Moved** PayHero configuration from tenant to platform settings
 3. **Moved** Integration URLs from tenant to platform settings
 4. **Simplified** `/dashboard/settings` (tenant) to remove platform configs
 5. **Added** informational notice in tenant settings directing to platform admin
@@ -218,14 +217,14 @@ Tenant Dashboard → Uses Platform-Configured Gateway
 - ✅ Can configure payout bank details
 - ✅ Can see payment information section
 - ✅ Notice that gateway credentials are managed by platform
-- ❌ Cannot see M-Pesa API credentials
+- ❌ Cannot see PayHero API credentials
 - ❌ Cannot see integration webhook URLs
 
 #### What Platform Admins Now See
 - ✅ Dedicated "Integrations" tab with all gateway configurations
-- ✅ M-Pesa Daraja API credentials form
+- ✅ PayHero Payment Gateway credentials form
 - ✅ SMS Gateway provider selection and configuration
-- ✅ Copy-to-clipboard webhook URLs for M-Pesa and Paystack
+- ✅ Copy-to-clipboard webhook URLs for PayHero and Paystack
 - ✅ Test connection buttons for each integration
 
 ---
@@ -236,9 +235,9 @@ Tenant Dashboard → Uses Platform-Configured Gateway
 ```
 GET    /api/v1/platform/settings               # Platform-wide settings
 PUT    /api/v1/platform/settings/{key}         # Update platform setting
-GET    /api/v1/integrations/mpesa/config       # M-Pesa configuration
-PUT    /api/v1/integrations/mpesa/config       # Update M-Pesa config
-POST   /api/v1/integrations/mpesa/test         # Test M-Pesa connection
+GET    /api/v1/integrations/payhero/config     # PayHero configuration
+PUT    /api/v1/integrations/payhero/config     # Update PayHero config
+POST   /api/v1/integrations/payhero/test       # Test PayHero connection
 GET    /api/v1/integrations/urls               # Get all integration URLs
 ```
 
@@ -281,14 +280,14 @@ PUT    /api/v1/tenant/payout-config            # Update payout config
 ### Platform Settings
 - [ ] Navigate to `/platform/settings` as platform admin
 - [ ] Verify "Integrations" tab is visible
-- [ ] Configure M-Pesa credentials and test connection
+- [ ] Configure PayHero credentials and test connection
 - [ ] Configure SMS gateway and send test SMS
 - [ ] Copy webhook URLs and verify format
 
 ### Tenant Settings
 - [ ] Navigate to `/dashboard/settings` as tenant admin
 - [ ] Verify Payments tab shows payment info and payout config
-- [ ] Verify M-Pesa credentials section is REMOVED
+- [ ] Verify PayHero credentials section is REMOVED
 - [ ] Verify integration URLs section is REMOVED
 - [ ] Verify informational notice about platform-managed gateways is present
 - [ ] Configure payout settings and save successfully
@@ -303,13 +302,13 @@ PUT    /api/v1/tenant/payout-config            # Update payout config
 ## Troubleshooting
 
 ### Tenant Can't See Payment Options
-**Solution**: Payment gateways are configured at platform level. Contact platform administrator to enable M-Pesa/Paystack integration.
+**Solution**: Payment gateways are configured at platform level. Contact platform administrator to enable PayHero/Paystack integration.
 
 ### Webhook URLs Not Working
 **Solution**: Ensure webhook URLs are registered in the payment provider's dashboard exactly as shown in Platform Settings → Integrations tab.
 
-### M-Pesa Test Connection Fails
-**Solution**: Verify all credentials (Consumer Key, Secret, Passkey, Shortcode) are correct in Platform Settings → Integrations tab. Check environment is set correctly (sandbox vs production).
+### PayHero Test Connection Fails
+**Solution**: Verify all credentials (Merchant ID, API Key, Callback URL) are correct in Platform Settings → Integrations tab. Check environment is set correctly (sandbox vs production).
 
 ---
 

@@ -74,7 +74,7 @@ export default function HotspotPortal({
 
     setLoading(true);
     setTimeout(() => {
-      const targetMethodName = 'M-Pesa (0724167975)';
+      const targetMethodName = 'Payment (0724167975)';
       
       const codeGenerated = onPurchaseVoucher(activePlanDetails, targetMethodName);
       setRecentGeneratedCode(codeGenerated);
@@ -287,14 +287,14 @@ export default function HotspotPortal({
             {/* Step 2: Payment */}
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2.5">
-                Step 2: Send Payment via M-Pesa
+                Step 2: Send Payment
               </label>
 
               {/* Payment Number Highlight Box */}
               <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center gap-2 text-emerald-800">
                   <Smartphone className="w-5 h-5 text-emerald-600" />
-                  <span className="font-bold text-sm">M-Pesa Payment</span>
+                  <span className="font-bold text-sm">Payment</span>
                 </div>
 
                 <div className="bg-white rounded-xl p-3 border border-emerald-200 text-center">
@@ -313,16 +313,16 @@ export default function HotspotPortal({
                 <div className="bg-emerald-100/60 rounded-xl p-3 border border-emerald-200 space-y-1.5">
                   <p className="text-xs text-emerald-800 font-semibold">📋 How to Pay:</p>
                   <ol className="text-[11px] text-emerald-700 space-y-1 list-decimal list-inside leading-relaxed">
-                    <li>Go to <strong>M-Pesa</strong> → <strong>Send Money</strong></li>
+                    <li>Open your payment app and send money</li>
                     <li>Enter number: <strong className="font-mono">0724167975</strong></li>
                     <li>Enter the amount for your selected package</li>
-                    <li>Enter your M-Pesa PIN and confirm</li>
+                    <li>Confirm the payment</li>
                     <li>You will receive your voucher code via SMS</li>
                   </ol>
                 </div>
 
                 <div>
-                  <label className="block text-xs text-slate-500 font-medium mb-1">Your M-Pesa Phone Number (for confirmation):</label>
+                  <label className="block text-xs text-slate-500 font-medium mb-1">Your Phone Number (for confirmation):</label>
                   <input
                     type="tel"
                     value={phoneNumber}

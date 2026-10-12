@@ -16,7 +16,6 @@ from app.core.exceptions import ValidationError, ExternalServiceError, Configura
 from app.models.configuration import Configuration, ConfigType
 from app.modules.system import ConfigurationService
 from app.modules.notifications import NotificationService
-from app.modules.billing.mpesa import MpesaService
 
 logger = get_logger(__name__)
 
@@ -59,16 +58,7 @@ class GatewayManagementService:
         # NOTE (Phase C1): SMS + EMAIL gateways removed — SMS / email / WhatsApp
         # delivery is centralized on notifications-api now. Only the PAYMENT
         # (M-PESA) gateway tester remains (and M-PESA itself routes via treasury-api).
-        self.gateway_configs = {
-            GatewayType.PAYMENT: {
-                "mpesa": {
-                    "name": "MPESA Daraja",
-                    "test_endpoint": "https://sandbox.safaricom.co.ke/oauth/v1/generate",
-                    "required_fields": ["consumer_key", "consumer_secret", "passkey", "shortcode"],
-                    "test_method": self._test_mpesa_gateway
-                }
-            }
-        }
+        self.gateway_configs = {}
 
     async def test_gateway(
         self, 
@@ -150,20 +140,6 @@ class GatewayManagementService:
     # SES) gateway testers were removed — those channels are owned by
     # notifications-api now.
 
-    async def _test_mpesa_gateway(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Test MPESA payment gateway.
-
-        The local M-PESA gateway integration was retired (Phase 2/3) — payment
-        processing and connectivity are owned by treasury-api. The local tester
-        therefore reports the gateway as handled externally.
-        """
-        return {
-            "status": GatewayStatus.OFFLINE,
-            "success": False,
-            "message": "M-PESA processing is handled by treasury-api in this deployment.",
-            "provider_response": "Local M-PESA gateway retired.",
-        }
-
     async def _load_gateway_config(self, gateway_type: str, provider: str) -> Dict[str, Any]:
         """Load gateway configuration from database."""
         config_key = f"{gateway_type}_{provider}"
@@ -171,18 +147,6 @@ class GatewayManagementService:
         # Load from configuration service
         config = await self.config_service.get_config(config_key, organization_id=None)
 
-        if not config:
-            # Fall back to environment variables.
-            # NOTE (Phase C1): SMS/EMAIL env fallbacks removed (settings dropped) —
-            # those channels are owned by notifications-api now.
-            if gateway_type == GatewayType.PAYMENT and provider == "mpesa":
-                return {
-                    "consumer_key": settings.mpesa_consumer_key,
-                    "consumer_secret": settings.mpesa_consumer_secret,
-                    "passkey": settings.mpesa_passkey,
-                    "shortcode": settings.mpesa_shortcode
-                }
-        
         return config.get_value() if config else {}
 
     async def get_gateway_status(self, gateway_type: str, provider: str) -> Dict[str, Any]:
@@ -541,7 +505,6 @@ class GatewayManagementService:
         capabilities = {
             # NOTE (Phase C1): SMS/EMAIL capabilities removed (channels owned by
             # notifications-api).
-            (GatewayType.PAYMENT, "mpesa"): ["stk_push", "c2b", "b2c", "reversal", "status_query"]
         }
         
         return capabilities.get((gateway_type, provider), [])

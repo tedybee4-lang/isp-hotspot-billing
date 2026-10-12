@@ -84,7 +84,7 @@ return (
         />
         <StatTile
           label="Revenue (30d)" value={`KES ${money(totals.revenue)}`} icon={<TrendingUp className="w-5 h-5" />}
-          tone="emerald" hint="Successful M-Pesa payments"
+          tone="emerald" hint="Successful payments"
         />
         <StatTile
           label="Outstanding" value={`KES ${money(totals.outstanding)}`} icon={<Wallet className="w-5 h-5" />}

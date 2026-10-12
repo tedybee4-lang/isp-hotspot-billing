@@ -384,9 +384,6 @@ export function generateMikrotikScript(
     const hosts = new Set<string>([
       hotspotDomain,
       portalHost,
-      '*.safaricom.co.ke',
-      '*.mpesa.co.ke',
-      '*.mpesa.in',
       '*.payhero.co.ke',
       '*.supabase.co',
     ].filter(Boolean));

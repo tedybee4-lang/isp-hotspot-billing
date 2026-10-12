@@ -15,8 +15,7 @@ Issue 2 — a 2-layer ACTIVE gate. A gateway is returned as ACTIVE only when BOT
              caller passes the already-resolved enabled flag), AND
     Layer 2  ALL essential configs it requires are actually present at the
              tenant level (``gateway_essential_configs_complete``). A gateway
-             with ``is_active=True`` but missing e.g. the M-Pesa short code /
-             passkey is NOT active and is filtered out — selecting it would fail.
+             with ``is_active=True`` but missing essential config is NOT active and is filtered out — selecting it would fail.
 
 Both gates apply to EVERY tenant (platform-owner tenants included) — every
 tenant's configs are checked as the layer-2 gate.
@@ -69,7 +68,7 @@ def is_cash_like_gateway(gateway_type: Optional[str]) -> bool:
         return False
     if gt in CASH_LIKE_GATEWAY_TYPES:
         return True
-    # Substring guard catches values like "cash_pickup", "mpesa_cod", etc.
+    # Substring guard catches values like "cash_pickup", etc.
     return "cash" in gt or gt == "cod" or gt.endswith("_cod") or "_cod_" in gt
 
 
@@ -82,28 +81,14 @@ def is_cash_like_gateway(gateway_type: Optional[str]) -> bool:
 # any one is missing/blank the gateway is treated as NOT active and is hidden.
 #
 # Keys are matched case-insensitively and several common aliases are accepted
-# per logical field (e.g. ``shortcode`` ~ ``paybill`` ~ ``till_number``) so this
-# stays robust to naming differences between the various config stores.
+# per logical field so this stays robust to naming differences between the
+# various config stores.
 GATEWAY_REQUIRED_CONFIGS: Dict[str, List[List[str]]] = {
-    # M-Pesa STK Push (Daraja): needs the business short code (paybill/till),
-    # the API consumer key + secret, and the STK passkey.
-    "mpesa": [
-        ["shortcode", "short_code", "paybill", "paybill_number", "till", "till_number", "public_shortcode"],
-        ["consumer_key"],
-        ["consumer_secret"],
-        ["passkey", "pass_key"],
-    ],
-    "mpesa_paybill": [
-        ["shortcode", "short_code", "paybill", "paybill_number", "public_shortcode"],
-        ["consumer_key"],
-        ["consumer_secret"],
-        ["passkey", "pass_key"],
-    ],
-    "mpesa_till": [
-        ["shortcode", "short_code", "till", "till_number", "public_shortcode"],
-        ["consumer_key"],
-        ["consumer_secret"],
-        ["passkey", "pass_key"],
+    # PayHero STK Push: needs the merchant ID, API key, and callback URL
+    "payhero": [
+        ["merchant_id"],
+        ["api_key"],
+        ["callback_url"],
     ],
     # Paystack: needs at minimum the secret key (public key strongly recommended
     # for inline/checkout). Require the secret key; accept either name for it.
@@ -149,7 +134,7 @@ def gateway_essential_configs_complete(
     """Return True when ALL essential configs for ``gateway`` are present.
 
     ``gateway`` must carry a ``gateway_type`` (or ``type``) key. ``tenant_config``
-    is the tenant-level config bag for that gateway (e.g. the M-Pesa creds /
+    is the tenant-level config bag for that gateway (e.g. the PayHero creds /
     Paystack keys). When the gateway type has no declared required-config set we
     treat it as complete (nothing essential to be missing).
     """

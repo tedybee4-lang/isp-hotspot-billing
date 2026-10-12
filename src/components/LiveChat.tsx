@@ -10,11 +10,11 @@ interface Message {
 const BOT_RESPONSES: Record<string, string> = {
   'default': "Thank you for reaching out! I'm the Ultrafaiba support assistant. I can help with billing questions, connection issues, and plan upgrades. How can I assist you today?",
   'speed': "If you're experiencing slowdowns, try: 1) Restart your router 2) Run a speed test from our portal 3) If issues persist, I'll escalate to our NOC team right away.",
-  'billing': "For billing inquiries, you can view all your invoices from the Subscriber Billing tab. To pay, send money via M-Pesa to 0724167975 (Ultrafaiba Internet). Your account activates automatically!",
-  'plan': "We offer: Home Fiber Starter (1,000 BOB/mo), Standard (1,500 BOB/mo), Premium (2,000 BOB/mo), and Ultra (2,500 BOB/mo). All plans include truly unlimited data. Pay via M-Pesa to 0724167975!",
-  'voucher': "Hotspot vouchers: Ultra Lite (2 Hours - 15 BOB, 1 device), Daily Super (10 Hours - 30 BOB, 1 device), Daily Max (24 Hours - 40 BOB, 1 device), Weekpass (7 Days - 245 BOB, 3 devices). Send payment to 0724167975 via M-Pesa!",
+  'billing': "For billing inquiries, you can view all your invoices from the Subscriber Billing tab. To pay, send money to 0724167975 (Ultrafaiba Internet). Your account activates automatically!",
+  'plan': "We offer: Home Fiber Starter (1,000 BOB/mo), Standard (1,500 BOB/mo), Premium (2,000 BOB/mo), and Ultra (2,500 BOB/mo). All plans include truly unlimited data. Pay to 0724167975!",
+  'voucher': "Hotspot vouchers: Ultra Lite (2 Hours - 15 BOB, 1 device), Daily Super (10 Hours - 30 BOB, 1 device), Daily Max (24 Hours - 40 BOB, 1 device), Weekpass (7 Days - 245 BOB, 3 devices). Send payment to 0724167975!",
   'down': "I'm sorry to hear about connectivity issues. Our automated monitoring shows most nodes are operational. Try power-cycling your router (unplug for 30 seconds). If the issue continues, call us at 0724167975.",
-  'price': "Our pricing: Hotspot from 15 BOB (2 hours) and home fiber from 1,000 BOB/month. All plans include unlimited data and 24/7 support. Pay via M-Pesa to 0724167975!",
+  'price': "Our pricing: Hotspot from 15 BOB (2 hours) and home fiber from 1,000 BOB/month. All plans include unlimited data and 24/7 support. Pay to 0724167975!",
 };
 
 function getBotResponse(userMessage: string): string {

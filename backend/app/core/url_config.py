@@ -26,13 +26,6 @@ class URLConfigService:
 
     # Default paths for various integrations
     DEFAULT_PATHS = {
-        "mpesa": {
-            "stk_callback": "/api/v1/integrations/mpesa/stk-callback/",
-            "b2c_result": "/api/v1/integrations/mpesa/b2c-result/",
-            "b2c_timeout": "/api/v1/integrations/mpesa/b2c-timeout/",
-            "validation": "/api/v1/integrations/mpesa/validation/",
-            "confirmation": "/api/v1/integrations/mpesa/confirmation/",
-        },
         "paystack": {
             "webhook": "/api/v1/integrations/paystack/webhook/",
             "callback": "/api/v1/integrations/paystack/callback/",
@@ -48,6 +41,9 @@ class URLConfigService:
             "ipn": "/api/v1/integrations/pesapal/ipn/",
             "callback": "/api/v1/integrations/pesapal/callback/",
             "redirect": "/payments/verify",  # Frontend redirect
+        },
+        "payhero": {
+            "callback": "/functions/v1/payhero-callback",
         },
     }
 

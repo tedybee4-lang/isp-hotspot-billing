@@ -76,41 +76,6 @@ class TestBillingEndpoints:
         assert response.status_code == 404
         assert "Invoice not found" in response.json()["detail"]
 
-    async def test_initiate_mpesa_stk(
-        self, 
-        client: AsyncClient, 
-        auth_headers: dict
-    ):
-        """Test initiating MPESA STK Push."""
-        response = await client.post(
-            "/api/v1/billing/payments/mpesa/stk",
-            headers=auth_headers
-        )
-        
-        assert response.status_code == 200
-        assert "MPESA STK Push not implemented yet" in response.json()["message"]
-
-    async def test_mpesa_callback(self, client: AsyncClient):
-        """Test MPESA callback webhook."""
-        callback_data = {
-            "Body": {
-                "stkCallback": {
-                    "MerchantRequestID": "test_merchant_id",
-                    "CheckoutRequestID": "test_checkout_id",
-                    "ResultCode": 0,
-                    "ResultDesc": "Success"
-                }
-            }
-        }
-        
-        response = await client.post(
-            "/api/v1/billing/payments/mpesa/callback",
-            json=callback_data
-        )
-        
-        assert response.status_code == 200
-        assert "MPESA callback not implemented yet" in response.json()["message"]
-
     async def test_get_payment_history(
         self, 
         client: AsyncClient, 

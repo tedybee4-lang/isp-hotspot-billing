@@ -270,7 +270,7 @@ describe('manual Till payment settlement', () => {
 
     const pay = loadDb().payments.find((p) => p.invoice_id === inv.id && p.status === 'success')
     expect(pay).toBeDefined()
-    expect(pay!.method).toBe('mpesa')
+    expect(pay!.method).toBe('payhero')
     expect(pay!.mpesa_receipt).toBeTruthy()
   })
 

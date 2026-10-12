@@ -130,6 +130,7 @@ export interface Payment {
   method: string
   status: 'pending' | 'success' | 'failed' | 'reversed'
   checkout_request_id: string | null
+  /** @deprecated Legacy field kept for historical data compatibility. Use provider_receipt instead. */
   mpesa_receipt: string | null
   created_at: string
   /**
@@ -142,9 +143,9 @@ export interface Payment {
   payment_provider?: string | null
   /** Our own opaque reference. The only thing a callback can be matched on. */
   provider_reference?: string | null
-  /** The reference PayHero itself issued. Not an M-Pesa receipt. */
+  /** The reference PayHero itself issued. */
   provider_transaction_id?: string | null
-  /** The M-Pesa receipt code, as a customer would quote it. */
+  /** The provider receipt code, as a customer would quote it. */
   provider_receipt?: string | null
   /**
    * The PayHero channel that took this payment. An identifier PayHero reported,

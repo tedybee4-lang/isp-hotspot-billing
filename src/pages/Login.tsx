@@ -74,13 +74,13 @@ return (
           <p className="text-sm text-slate-400 leading-relaxed">
             Provision tenants, activate or suspend them, set limits, and watch
             revenue across the whole platform — while each ISP manages its own
-            MikroTik network, vouchers and M-Pesa billing in isolation.
+            MikroTik network, vouchers and payment billing in isolation.
           </p>
           <ul className="space-y-3 text-xs text-slate-300">
             {[
               ['Super admin dashboard', 'Full tenant lifecycle control'],
               ['Row-level security', 'Postgres-enforced tenant isolation'],
-              ['M-Pesa STK Push', 'Server-side HashBack integration'],
+              ['Payment STK Push', 'Server-side PayHero integration'],
             ].map(([t, d]) => (
               <li key={t} className="flex gap-3">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-px" />

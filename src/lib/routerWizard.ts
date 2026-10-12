@@ -220,11 +220,9 @@ const TEMPLATE_PART_2 = `# -----------------------------------------------------
 /ip hotspot add name=hs-{{HOTSPOT_INTERFACE}} interface={{HOTSPOT_INTERFACE}} address-pool=ispflow-hs-pool profile=ispflow-hs-profile disabled=no
 
 # ------------------------------------------------------------------------------
-# 6. WALLED GARDEN BYPASSES (M-Pesa, PayHero, GiftedPay, Supabase API)
+# 6. WALLED GARDEN BYPASSES (PayHero, GiftedPay, Supabase API)
 # ------------------------------------------------------------------------------
 /ip hotspot walled-garden
-add dst-host="*.safaricom.co.ke" comment="M-Pesa Daraja API"
-add dst-host="*.mpesa.co.ke" comment="M-Pesa Web"
 add dst-host="*.payhero.co.ke" comment="PayHero Gateway"
 add dst-host="*.giftedpay.com" comment="GiftedPay Gateway"
 add dst-host="{{SUPABASE_API_HOST}}" comment="ISPFlow Backend API"

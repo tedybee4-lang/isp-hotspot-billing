@@ -92,7 +92,7 @@ const makeVoucherCode = (prefix: string) =>
 
 const TICKETS: Array<[string, string, Ticket['priority']]> = [
   ['Speed drops in the evening', 'Speed Issue', 'high'],
-  ['M-Pesa payment not reflecting', 'Payment Failed', 'urgent'],
+  ['Payment not reflecting', 'Payment Failed', 'urgent'],
   ['Fiber link down since morning', 'Router Offline', 'urgent'],
   ['Voucher code rejected', 'Voucher Code Error', 'medium'],
   ['Requesting a plan upgrade', 'Upgrade Request', 'low'],
@@ -177,7 +177,7 @@ const clients: Client[] = Array.from({ length: input.clients }, (_, i) => {
       if (paid) {
         payments.push({
           id: uid('pay'), isp_id: ispId, client_id: c.id, invoice_id: invId,
-          phone: c.phone, amount: plan?.price ?? 40, method: 'mpesa', status: 'success',
+          phone: c.phone, amount: plan?.price ?? 40, method: 'payhero', status: 'success',
           checkout_request_id: `demo_${Math.random().toString(36).slice(2, 12)}`,
           mpesa_receipt: String(100000 + Math.floor(Math.random() * 899999)),
           created_at: daysAgo(m * 30),
@@ -437,7 +437,7 @@ db.renewals.push(...mine.slice(0, 25).map((c) => ({
       id: uid('trx'), isp_id: ispId, client_id: p.client_id,
       kind: 'payment' as const, direction: 'credit' as const,
       amount: Number(p.amount), reference: p.mpesa_receipt,
-      memo: 'M-Pesa payment', payment_id: p.id, created_at: p.created_at,
+      memo: 'Payment', payment_id: p.id, created_at: p.created_at,
     })),
     ...Array.from({ length: 8 }, () => ({
       id: uid('trx'), isp_id: ispId, client_id: null,
@@ -828,7 +828,7 @@ export function demoPayInvoice(invoiceId: string, phone?: string) {
   inv.paid_at = new Date().toISOString()
   db.payments.unshift({
     id: uid('pay'), isp_id: inv.isp_id, client_id: inv.client_id, invoice_id: inv.id,
-    phone: phone ?? null, amount: Number(inv.amount), method: 'mpesa', status: 'success',
+    phone: phone ?? null, amount: Number(inv.amount), method: 'payhero', status: 'success',
     checkout_request_id: `demo_${Math.random().toString(36).slice(2, 12)}`,
     mpesa_receipt: String(100000 + Math.floor(Math.random() * 899999)),
     created_at: new Date().toISOString(),

@@ -179,7 +179,7 @@ export default function PlatformHashBack() {
           HashBack <span className="text-sm text-slate-400">(legacy)</span>
         </h1>
         <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-          The former M-Pesa collection account, kept so historical payments can be
+          The former payment collection account, kept so historical payments can be
           reconciled. PayHero is the active provider.
         </p>
       </div>

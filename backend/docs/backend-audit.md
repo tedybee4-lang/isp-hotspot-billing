@@ -284,17 +284,15 @@ def _generate_forecast_data(
 | System resource monitoring | ✅ |
 | Firmware update | ⚠️ Placeholder |
 
-### 4.2 M-PESA Daraja API ✅ PRODUCTION-READY
+### 4.2 PayHero Payment Gateway ✅ PRODUCTION-READY
 
 | Feature | Status |
 |---------|--------|
-| OAuth token management | ✅ |
-| STK Push (Lipa na M-Pesa) | ✅ |
+| Merchant registration | ✅ |
+| STK Push (M-Pesa via PayHero) | ✅ |
 | Callback signature verification | ✅ |
 | Transaction status query | ✅ |
-| Payment reversal | ✅ |
-| C2B URL registration | ✅ |
-| Account balance query | ✅ |
+| Payment reconciliation | ✅ |
 | Sandbox/Production support | ✅ |
 | Credential validation | ✅ |
 

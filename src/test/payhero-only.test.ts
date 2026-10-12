@@ -26,13 +26,13 @@ const UI = [
 ]
 
 /**
- * HashBack is the only M-Pesa provider.
+ * PayHero is the only payment provider.
  *
  * These stop a second payment system creeping back in. Each fails if a Daraja
  * route, credential field, fallback or fake-success helper reappears on a path
  * a customer can reach.
  */
-describe('HashBack is the only M-Pesa provider', () => {
+describe('PayHero is the only payment provider', () => {
   it('offers no Daraja payment mode to the browser', () => {
     const src = code('src', 'lib', 'data.ts')
     expect(src).not.toMatch(/platform_daraja/)
@@ -59,7 +59,7 @@ describe('HashBack is the only M-Pesa provider', () => {
       const src = code(f)
       expect(src, `${f} still has a consumer-key input`).not.toMatch(/consumer_key/)
       expect(src, `${f} still has a consumer-secret input`).not.toMatch(/consumer_secret/)
-      // A prose mention is fine (the screen points at HashBack); an INPUT or
+      // A prose mention is fine (the screen points at PayHero); an INPUT or
       // a save payload carrying one is not.
       expect(src, `${f} still sends a passkey to the server`)
         .not.toMatch(/mpesa_passkey|setPasskey|passkey\s*[:=]/)
@@ -76,7 +76,7 @@ describe('HashBack is the only M-Pesa provider', () => {
   it('answers 410 from stk-push and implements nothing else', () => {
     const src = code('supabase', 'functions', 'stk-push', 'index.ts')
     expect(src).toMatch(/410/)
-    expect(src).toMatch(/hashback-stk/)
+    expect(src).toMatch(/payhero-stk/)
     // No OAuth, no STK request, no credential read: the implementation is gone,
     // not merely unreachable behind a guard.
     expect(src).not.toMatch(/oauth\/v1\/generate/)
@@ -111,8 +111,8 @@ describe('HashBack is the only M-Pesa provider', () => {
   })
 
   it('never exposes a payment secret to the browser', () => {
-    for (const f of ['src/lib/payments.ts', 'src/pages/admin/PlatformHashBack.tsx',
-      'src/pages/isp/settings/HashBackPayments.tsx']) {
+    for (const f of ['src/lib/payments.ts', 'src/pages/admin/PlatformPayments.tsx',
+      'src/pages/isp/settings/Payment.tsx']) {
       const src = code(f)
       // Status is booleans and status strings only.
       expect(src, `${f} exposes a raw api key`).not.toMatch(/api_key_encrypted/)
@@ -128,12 +128,11 @@ describe('HashBack is the only M-Pesa provider', () => {
     expect(src).not.toMatch(/fetchMyPaymentChannel\s*\(\s*ispId/)
   })
 
-  it('does not invent a HashBack endpoint', () => {
+  it('does not invent a PayHero endpoint', () => {
     // The adapter's endpoint table is asserted against the researched API in
     // its own test; this guards the application from calling anything outside it.
-    const adapter = read('supabase', 'functions', '_shared', 'hashback.ts')
-    for (const path of ['initiatestk', 'transactionstatus', 'pullapi',
-      'linkaccount', 'registerwebhook']) {
+    const adapter = read('supabase', 'functions', '_shared', 'payhero.ts')
+    for (const path of ['initiateStk', 'transactionStatus', 'paymentChannels']) {
       expect(adapter, `adapter is missing ${path}`).toContain(path)
     }
   })
@@ -151,9 +150,9 @@ describe('HashBack is the only M-Pesa provider', () => {
     expect(has('supabase', 'functions', 'stk-callback')).toBe(false)
   })
 
-  it('routes the customer payment flow through hashback-stk', () => {
+  it('routes the customer payment flow through payhero-stk', () => {
     const src = code('src', 'lib', 'data.ts')
-    expect(src).toMatch(/functionsUrl\('hashback-stk'\)/)
+    expect(src).toMatch(/functionsUrl\('payhero-stk'\)/)
     expect(src).not.toMatch(/functionsUrl\('stk-push'\)/)
   })
 })

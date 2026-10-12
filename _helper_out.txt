@@ -1,0 +1,240 @@
+--- deleted files (expect all False) ---
+True  backend\app\api\v1\integrations\mpesa.py
+True  backend\app\modules\billing\mpesa.py
+True  backend\app\schemas\mpesa.py
+True  backend\tests\test_mpesa_api.py
+True  backend\tests\test_mpesa_integration.py
+True  backend\tests\test_mpesa_schemas.py
+True  backend\tests\test_mpesa_service.py
+True  backend\tests\MPESA_TEST_SUMMARY.md
+--- syntax check ---
+OK   backend\app\api\v1\__init__.py
+OK   backend\app\api\v1\integrations\__init__.py
+OK   backend\app\api\v1\business\billing.py
+OK   backend\app\api\v1\payments\gateways.py
+OK   backend\app\modules\billing\__init__.py
+OK   backend\app\modules\billing\service.py
+OK   backend\app\modules\gateways\service.py
+OK   backend\app\modules\__init__.py
+OK   backend\app\core\config.py
+--- remaining mpesa/Mpesa refs in backend/app (excl. venv) ---
+backend\app\api\v1\integrations\mpesa.py:1: """MPESA API endpoints for payment processing.
+backend\app\api\v1\integrations\mpesa.py:3: This module provides REST API endpoints for MPESA payment operations
+backend\app\api\v1\integrations\mpesa.py:4: following the official Safaricom Daraja API documentation.
+backend\app\api\v1\integrations\mpesa.py:15: from app.modules.billing import MpesaService
+backend\app\api\v1\integrations\mpesa.py:17: from app.schemas.mpesa import (
+backend\app\api\v1\integrations\mpesa.py:18: MpesaPaymentRequest,
+backend\app\api\v1\integrations\mpesa.py:19: MpesaPaymentResponse,
+backend\app\api\v1\integrations\mpesa.py:20: MpesaStatusResponse,
+backend\app\api\v1\integrations\mpesa.py:21: MpesaCallbackResponse,
+backend\app\api\v1\integrations\mpesa.py:22: MpesaReversalRequest,
+backend\app\api\v1\integrations\mpesa.py:23: MpesaReversalResponse,
+backend\app\api\v1\integrations\mpesa.py:24: MpesaStatisticsResponse
+backend\app\api\v1\integrations\mpesa.py:30: @router.post("/initiate-payment", response_model=MpesaPaymentResponse)
+backend\app\api\v1\integrations\mpesa.py:32: payment_request: MpesaPaymentRequest,
+backend\app\api\v1\integrations\mpesa.py:35: ) -> MpesaPaymentResponse:
+backend\app\api\v1\integrations\mpesa.py:36: """Initiate MPESA STK Push payment.
+backend\app\api\v1\integrations\mpesa.py:44: mpesa_service = MpesaService(db)
+backend\app\api\v1\integrations\mpesa.py:46: result = await mpesa_service.initiate_payment(
+backend\app\api\v1\integrations\mpesa.py:53: return MpesaPaymentResponse(**result)
+backend\app\api\v1\integrations\mpesa.py:63: detail=f"MPESA service error: {str(e)}"
+backend\app\api\v1\integrations\mpesa.py:77: @router.get("/payment-status/{checkout_request_id}", response_model=MpesaStatusResponse)
+backend\app\api\v1\integrations\mpesa.py:82: ) -> MpesaStatusResponse:
+backend\app\api\v1\integrations\mpesa.py:91: mpesa_service = MpesaService(db)
+backend\app\api\v1\integrations\mpesa.py:93: result = await mpesa_service.query_payment_status(checkout_request_id)
+backend\app\api\v1\integrations\mpesa.py:95: return MpesaStatusResponse(**result)
+backend\app\api\v1\integrations\mpesa.py:105: detail=f"MPESA service error: {str(e)}"
+backend\app\api\v1\integrations\mpesa.py:119: @router.post("/callback", response_model=MpesaCallbackResponse)
+backend\app\api\v1\integrations\mpesa.py:123: ) -> MpesaCallbackResponse:
+backend\app\api\v1\integrations\mpesa.py:124: """Process MPESA callback with signature verification.
+backend\app\api\v1\integrations\mpesa.py:126: This endpoint receives callbacks from MPESA for payment status updates.
+backend\app\api\v1\integrations\mpesa.py:127: The signature is verified using the official MPESA public key.
+backend\app\api\v1\integrations\mpesa.py:135: mpesa_service = MpesaService(db)
+backend\app\api\v1\integrations\mpesa.py:137: result = await mpesa_service.process_callback(callback_data)
+backend\app\api\v1\integrations\mpesa.py:139: return MpesaCallbackResponse(**result)
+backend\app\api\v1\integrations\mpesa.py:149: detail=f"MPESA service error: {str(e)}"
+backend\app\api\v1\integrations\mpesa.py:169: """Get transaction status from MPESA.
+backend\app\api\v1\integrations\mpesa.py:172: using the MPESA Transaction Status Query API.
+backend\app\api\v1\integrations\mpesa.py:177: mpesa_service = MpesaService(db)
+backend\app\api\v1\integrations\mpesa.py:179: result = await mpesa_service.get_transaction_status(transaction_id)
+backend\app\api\v1\integrations\mpesa.py:191: detail=f"MPESA service error: {str(e)}"
+backend\app\api\v1\integrations\mpesa.py:205: @router.post("/reverse-payment", response_model=MpesaReversalResponse)
+backend\app\api\v1\integrations\mpesa.py:207: reversal_request: MpesaReversalRequest,
+backend\app\api\v1\integrations\mpesa.py:210: ) -> MpesaReversalResponse:
+backend\app\api\v1\integrations\mpesa.py:213: This endpoint initiates a payment reversal using the MPESA
+backend\app\api\v1\integrations\mpesa.py:219: mpesa_service = MpesaService(db)
+backend\app\api\v1\integrations\mpesa.py:221: result = await mpesa_service.reverse_payment(
+backend\app\api\v1\integrations\mpesa.py:226: return MpesaReversalResponse(**result)
+backend\app\api\v1\integrations\mpesa.py:236: detail=f"MPESA service error: {str(e)}"
+backend\app\api\v1\integrations\mpesa.py:250: @router.get("/statistics", response_model=MpesaStatisticsResponse)
+backend\app\api\v1\integrations\mpesa.py:254: ) -> MpesaStatisticsResponse:
+backend\app\api\v1\integrations\mpesa.py:255: """Get MPESA payment statistics.
+backend\app\api\v1\integrations\mpesa.py:258: MPESA payments processed through the system.
+backend\app\api\v1\integrations\mpesa.py:261: mpesa_service = MpesaService(db)
+backend\app\api\v1\integrations\mpesa.py:263: result = await mpesa_service.get_payment_statistics()
+backend\app\api\v1\integrations\mpesa.py:265: return MpesaStatisticsResponse(**result)
+backend\app\api\v1\integrations\urls.py:87: - mpesa: M-PESA payment gateway
+backend\app\api\v1\payments\gateways.py:78: credentials are owned by isp-billing (``settings.mpesa_*``). We surface them
+backend\app\api\v1\payments\gateways.py:173: # PayHero is the SOLE active payment provider. M-Pesa / Daraja was removed
+backend\app\api\v1\payments\gateways.py:174: # entirely - drop any mpesa-style gateway treasury may still return so it can
+backend\app\api\v1\payments\gateways.py:176: _REMOVED_MPESA_TYPES = {"mpesa", "mpesa_paybill", "mpesa_till", "daraja"}
+backend\app\api\v1\payments\gateways.py:180: not in _REMOVED_MPESA_TYPES
+backend\app\api\v1\portal\hotspot.py:89: payment_method: Optional[str] = Field("mpesa", description="Payment method: mpesa or payst
+backend\app\core\config.py:363: @field_validator("mpesa_environment")
+backend\app\core\config.py:365: def validate_mpesa_environment(cls, v: str) -> str:
+backend\app\core\config.py:366: """Validate MPESA environment setting."""
+backend\app\core\config.py:368: raise ValueError("MPESA environment must be sandbox or production")
+backend\app\core\errors.py:74: EXT_MPESA_REQUEST_FAILED = "EXT_4010"
+backend\app\core\errors.py:75: EXT_MPESA_TIMEOUT = "EXT_4011"
+backend\app\core\errors.py:76: EXT_MPESA_CALLBACK_FAILED = "EXT_4012"
+backend\app\core\errors.py:77: EXT_MPESA_INSUFFICIENT_FUNDS = "EXT_4013"
+backend\app\core\errors.py:158: ErrorCode.EXT_MPESA_REQUEST_FAILED: 502,
+backend\app\core\errors.py:159: ErrorCode.EXT_MPESA_TIMEOUT: 504,
+backend\app\core\errors.py:160: ErrorCode.EXT_MPESA_CALLBACK_FAILED: 502,
+backend\app\core\errors.py:161: ErrorCode.EXT_MPESA_INSUFFICIENT_FUNDS: 402,
+backend\app\core\url_config.py:29: "mpesa": {
+backend\app\core\url_config.py:30: "stk_callback": "/api/v1/integrations/mpesa/stk-callback/",
+backend\app\core\url_config.py:31: "b2c_result": "/api/v1/integrations/mpesa/b2c-result/",
+backend\app\core\url_config.py:32: "b2c_timeout": "/api/v1/integrations/mpesa/b2c-timeout/",
+backend\app\core\url_config.py:33: "validation": "/api/v1/integrations/mpesa/validation/",
+backend\app\core\url_config.py:34: "confirmation": "/api/v1/integrations/mpesa/confirmation/",
+backend\app\core\url_config.py:147: integration: Integration name (e.g., 'mpesa', 'paystack').
+backend\app\models\billing.py:50: MPESA = "mpesa"
+backend\app\models\billing.py:182: # MPESA specific fields
+backend\app\models\billing.py:183: mpesa_receipt_number = Column(String(50), nullable=True)
+backend\app\models\billing.py:184: mpesa_phone_number = Column(String(20), nullable=True)
+backend\app\models\billing.py:185: mpesa_transaction_date = Column(DateTime, nullable=True)
+backend\app\models\customer_portal.py:323: payment_method = Column(String(50), nullable=False)  # mpesa, card, voucher
+backend\app\models\payment_gateway.py:119: mpesa_code = Column(String(20), nullable=True, index=True)  # M-PESA transaction code
+backend\app\models\payment_gateway.py:143: return f"<ManualPaymentRecord(id={self.id}, mpesa_code={self.mpesa_code}, matched={self.is
+backend\app\models\platform_billing.py:93: mpesa_amount = Column(Numeric(14, 2), default=0, nullable=False)
+backend\app\modules\__init__.py:14: - billing: Invoices, payments, and MPESA
+backend\app\modules\billing\mpesa.py:1: """MPESA Service for ISP Billing System.
+backend\app\modules\billing\mpesa.py:3: This service provides a high-level interface for MPESA operations,
+backend\app\modules\billing\mpesa.py:26: # MpesaService is retained importable for back-compat; its gateway-backed methods now
+backend\app\modules\billing\mpesa.py:32: class MPesaValidationError(Exception):
+backend\app\modules\billing\mpesa.py:42: def _get_mpesa_config() -> Dict[str, Any]:
+backend\app\modules\billing\mpesa.py:46: "consumer_key": getattr(settings, "mpesa_consumer_key", ""),
+backend\app\modules\billing\mpesa.py:47: "consumer_secret": getattr(settings, "mpesa_consumer_secret", ""),
+backend\app\modules\billing\mpesa.py:48: "passkey": getattr(settings, "mpesa_passkey", ""),
+backend\app\modules\billing\mpesa.py:49: "shortcode": getattr(settings, "mpesa_shortcode", ""),
+backend\app\modules\billing\mpesa.py:50: "environment": getattr(settings, "mpesa_environment", "sandbox"),
+backend\app\modules\billing\mpesa.py:51: "initiator_name": getattr(settings, "mpesa_initiator_name", ""),
+backend\app\modules\billing\mpesa.py:52: "security_credential": getattr(settings, "mpesa_security_credential", ""),
+backend\app\modules\billing\mpesa.py:54: "callback_url": getattr(settings, "mpesa_callback_url", ""),
+backend\app\modules\billing\mpesa.py:55: "timeout_url": getattr(settings, "mpesa_timeout_url", ""),
+backend\app\modules\billing\mpesa.py:56: "result_url": getattr(settings, "mpesa_result_url", ""),
+backend\app\modules\billing\mpesa.py:60: def _is_mpesa_configured() -> bool:
+backend\app\modules\billing\mpesa.py:62: required_fields = ["mpesa_consumer_key", "mpesa_consumer_secret", "mpesa_passkey", "mpesa_
+backend\app\modules\billing\mpesa.py:63: placeholder_patterns = ["your-mpesa-", "placeholder", "change-me", "example"]
+backend\app\modules\billing\mpesa.py:74: class MpesaService:
+backend\app\modules\billing\mpesa.py:75: """High-level MPESA service for billing operations."""
+backend\app\modules\billing\mpesa.py:78: """Initialize MPESA service with database session."""
+backend\app\modules\billing\mpesa.py:90: """Check if MPESA service is properly configured."""
+backend\app\modules\billing\mpesa.py:97: self.logger.warning("MPESA service not configured. Payment initiation skipped.")
+backend\app\modules\billing\mpesa.py:100: "error": "MPESA service not configured",
+backend\app\modules\billing\mpesa.py:107: raise ValidationError("User phone number is required for MPESA payment")
+backend\app\modules\billing\mpesa.py:122: callback_url = getattr(settings, "mpesa_callback_url", "")
+backend\app\modules\billing\mpesa.py:141: payment_method=PaymentMethod.MPESA,
+backend\app\modules\billing\mpesa.py:157: self.logger.info(f"MPESA payment initiated for user {user.id}: {amount} KES")
+backend\app\modules\billing\mpesa.py:172: except MPesaValidationError as e:
+backend\app\modules\billing\mpesa.py:175: self.logger.error(f"Unexpected error initiating MPESA payment: {e}")
+backend\app\modules\billing\mpesa.py:181: self.logger.warning("MPESA service not configured. Status query skipped.")
+backend\app\modules\billing\mpesa.py:184: "error": "MPESA service not configured",
+backend\app\modules\billing\mpesa.py:192: # Query MPESA API using gateway
+backend\app\modules\billing\mpesa.py:204: # Update payment status based on MPESA response.
+backend\app\modules\billing\mpesa.py:213: "mpesa_status_response": result.raw_response,
+backend\app\modules\billing\mpesa.py:220: "mpesa_status_response": result.raw_response,
+backend\app\modules\billing\mpesa.py:228: "mpesa_status_response": result.raw_response,
+backend\app\modules\billing\mpesa.py:242: "mpesa_response": result.raw_response
+backend\app\modules\billing\mpesa.py:254: """Process MPESA callback with signature verification."""
+backend\app\modules\billing\mpesa.py:256: self.logger.warning("MPESA service not configured. Callback processing skipped.")
+backend\app\modules\billing\mpesa.py:259: "error": "MPESA service not configured",
+backend\app\modules\billing\mpesa.py:266: self.logger.warning("Invalid MPESA callback signature - continuing with basic validation")
+backend\app\modules\billing\mpesa.py:295: "mpesa_callback": parsed_data,
+backend\app\modules\billing\mpesa.py:303: "mpesa_callback": parsed_data,
+backend\app\modules\billing\mpesa.py:321: self.logger.error(f"Unexpected error processing MPESA callback: {e}")
+backend\app\modules\billing\mpesa.py:325: """Get transaction status from MPESA."""
+backend\app\modules\billing\mpesa.py:327: self.logger.warning("MPESA service not configured. Transaction status query skipped.")
+backend\app\modules\billing\mpesa.py:330: "error": "MPESA service not configured",
+backend\app\modules\billing\mpesa.py:362: self.logger.warning("MPESA service not configured. Payment reversal skipped.")
+backend\app\modules\billing\mpesa.py:365: "error": "MPESA service not configured",
+backend\app\modules\billing\mpesa.py:432: """Get MPESA payment statistics."""
+backend\app\modules\billing\mpesa.py:434: # Get total MPESA payments
+backend\app\modules\billing\mpesa.py:436: select(Payment).where(Payment.payment_method == PaymentMethod.MPESA)
+backend\app\modules\billing\payments.py:387: search_fields = ["payment_number", "reference_number", "mpesa_receipt_number", "notes"]
+backend\app\modules\billing\service.py:974: mpesa_payments_result = await self.db.execute(
+backend\app\modules\billing\service.py:976: and_(Payment.payment_method == PaymentMethod.MPESA, Payment.status == PaymentStatus.COMPLE
+backend\app\modules\billing\service.py:979: mpesa_payments = mpesa_payments_result.scalar() or 0
+backend\app\modules\billing\service.py:1037: "mpesa_payments": mpesa_payments,
+backend\app\modules\notifications\templates.py:396: 'receipt_number': payment_data.get('mpesa_receipt_number', ''),
+backend\app\modules\notifications\templates.py:466: "payment_method": "mpesa",
+backend\app\modules\notifications\templates.py:468: "mpesa_receipt_number": "QGH7XYZ123",
+backend\app\modules\payments\gateway_filter.py:72: # Substring guard catches values like "cash_pickup", "mpesa_cod", etc.
+backend\app\modules\payments\gateway_filter.py:88: # M-Pesa STK Push (Daraja): needs the business short code (paybill/till),
+backend\app\modules\payments\gateway_filter.py:90: "mpesa": [
+backend\app\modules\payments\gateway_filter.py:96: "mpesa_paybill": [
+backend\app\modules\payments\gateway_filter.py:102: "mpesa_till": [
+backend\app\modules\provisioning\commands.py:741: "*.mpesa.in",
+backend\app\modules\system\configuration.py:407: # MPESA settings
+backend\app\modules\system\configuration.py:409: "key": "mpesa_consumer_key",
+backend\app\modules\system\configuration.py:412: "description": "MPESA consumer key",
+backend\app\modules\system\configuration.py:418: "key": "mpesa_consumer_secret",
+backend\app\modules\system\configuration.py:421: "description": "MPESA consumer secret",
+backend\app\modules\system\configuration.py:427: "key": "mpesa_shortcode",
+backend\app\modules\system\configuration.py:430: "description": "MPESA business shortcode",
+backend\app\modules\system\configuration.py:435: "key": "mpesa_passkey",
+backend\app\modules\system\configuration.py:438: "description": "MPESA passkey",
+backend\app\schemas\billing.py:184: mpesa_receipt_number: Optional[str] = None
+backend\app\schemas\billing.py:185: mpesa_phone_number: Optional[str] = None
+backend\app\schemas\billing.py:186: mpesa_transaction_date: Optional[datetime] = None
+backend\app\schemas\billing.py:220: class MpesaPaymentRequest(BaseModel):
+backend\app\schemas\billing.py:221: """Schema for MPESA payment request."""
+backend\app\schemas\billing.py:224: amount: int = Field(..., gt=0, le=70000)  # MPESA limit
+backend\app\schemas\billing.py:240: class MpesaPaymentResponse(BaseModel):
+backend\app\schemas\billing.py:241: """Schema for MPESA payment response."""
+backend\app\schemas\billing.py:252: class MpesaCallbackRequest(BaseModel):
+backend\app\schemas\billing.py:253: """Schema for MPESA callback request."""
+backend\app\schemas\billing.py:258: class MpesaCallbackResponse(BaseModel):
+backend\app\schemas\billing.py:259: """Schema for MPESA callback response."""
+backend\app\schemas\billing.py:287: mpesa_payments: int
+backend\app\schemas\mpesa.py:1: """Pydantic schemas for MPESA operations.
+backend\app\schemas\mpesa.py:3: This module defines the data models for MPESA API requests and responses
+backend\app\schemas\mpesa.py:4: following the official Safaricom Daraja API documentation.
+backend\app\schemas\mpesa.py:13: class MpesaPaymentRequest(BaseModel):
+backend\app\schemas\mpesa.py:14: """Request schema for initiating MPESA payment."""
+backend\app\schemas\mpesa.py:40: class MpesaPaymentResponse(BaseModel):
+backend\app\schemas\mpesa.py:41: """Response schema for MPESA payment initiation."""
+backend\app\schemas\mpesa.py:44: checkout_request_id: str = Field(..., description="MPESA checkout request ID")
+backend\app\schemas\mpesa.py:50: class MpesaStatusResponse(BaseModel):
+backend\app\schemas\mpesa.py:56: mpesa_response: Dict[str, Any] = Field(..., description="Raw MPESA API response")
+backend\app\schemas\mpesa.py:59: class MpesaCallbackResponse(BaseModel):
+backend\app\schemas\mpesa.py:60: """Response schema for MPESA callback processing."""
+backend\app\schemas\mpesa.py:64: result_code: int = Field(..., description="MPESA result code")
+backend\app\schemas\mpesa.py:67: class MpesaReversalRequest(BaseModel):
+backend\app\schemas\mpesa.py:73: class MpesaReversalResponse(BaseModel):
+backend\app\schemas\mpesa.py:77: reversal_data: Dict[str, Any] = Field(..., description="MPESA reversal response data")
+backend\app\schemas\mpesa.py:80: class MpesaStatisticsResponse(BaseModel):
+backend\app\schemas\mpesa.py:86: class MpesaTransactionStatusRequest(BaseModel):
+backend\app\schemas\mpesa.py:88: transaction_id: str = Field(..., min_length=1, description="MPESA transaction ID")
+backend\app\schemas\mpesa.py:91: class MpesaTransactionStatusResponse(BaseModel):
+backend\app\schemas\mpesa.py:95: status_data: Dict[str, Any] = Field(..., description="Transaction status data from MPESA")
+backend\app\schemas\mpesa.py:98: class MpesaErrorResponse(BaseModel):
+backend\app\schemas\mpesa.py:99: """Error response schema for MPESA operations."""
+backend\app\schemas\mpesa.py:106: class MpesaCallbackData(BaseModel):
+backend\app\schemas\mpesa.py:107: """Schema for MPESA callback data structure."""
+backend\app\schemas\mpesa.py:113: extra = "allow"  # Allow additional fields from MPESA
+backend\app\schemas\mpesa.py:116: class MpesaStkCallbackData(BaseModel):
+backend\app\schemas\mpesa.py:120: ResultCode: int = Field(..., description="Result code from MPESA")
+backend\app\schemas\mpesa.py:125: extra = "allow"  # Allow additional fields from MPESA
+backend\app\schemas\mpesa.py:128: class MpesaCallbackMetadata(BaseModel):
+backend\app\schemas\mpesa.py:133: extra = "allow"  # Allow additional fields from MPESA
+backend\app\schemas\mpesa.py:136: class MpesaMetadataItem(BaseModel):
+backend\app\schemas\mpesa.py:142: extra = "allow"  # Allow additional fields from MPESA
+backend\app\schemas\__init__.py:26: PaymentInDB, PaymentList, PaymentFilter, MpesaPaymentRequest, MpesaPaymentResponse,
+backend\app\schemas\__init__.py:27: MpesaCallbackRequest, MpesaCallbackResponse, BillingStats, PaymentStats,
+backend\app\schemas\__init__.py:126: "MpesaPaymentRequest",
+backend\app\schemas\__init__.py:127: "MpesaPaymentResponse",
+backend\app\schemas\__init__.py:128: "MpesaCallbackRequest",
+backend\app\schemas\__init__.py:129: "MpesaCallbackResponse",
+backend\app\services\hotspot_dashboard_bridge.py:224: pm = PaymentMethod.MPESA if (method or "").lower() == "mpesa" else PaymentMethod.OTHER

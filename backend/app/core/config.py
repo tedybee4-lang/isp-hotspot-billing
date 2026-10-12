@@ -262,23 +262,6 @@ class Settings(BaseSettings):
             return v
         raise ValueError(v)
 
-    # MPESA
-    # These are FALLBACK credentials only. The active payment provider is
-    # PayHero, implemented in the Supabase Edge Functions with per-tenant
-    # credentials in the `isp_payment_configs` table; the FastAPI backend
-    # itself does not process payments. These M-Pesa fields belong to a
-    # legacy/fallback rail and are OPTIONAL: they default to empty so the
-    # backend can boot without any Daraja env vars. Requiring them here
-    # previously crashed startup before PayHero (or any tenant config) could
-    # take effect. When blank, treat M-Pesa as unconfigured; the deprecated
-    # billing.mpesa._is_mpesa_configured() helper already returns False for
-    # empty/placeholder values.
-    mpesa_environment: str = "sandbox"
-    mpesa_consumer_key: str = ""
-    mpesa_consumer_secret: str = ""
-    mpesa_passkey: str = ""
-    mpesa_shortcode: str = ""
-    mpesa_callback_url: str = ""
 
     # NOTE (Phase C1): SMS / Email provider settings (AfricasTalking, Twilio,
     # SMTP, SendGrid, AWS SES) were removed — SMS / email / WhatsApp DELIVERY is
@@ -375,14 +358,6 @@ class Settings(BaseSettings):
         """Validate environment setting."""
         if v not in ["development", "staging", "production"]:
             raise ValueError("Environment must be development, staging, or production")
-        return v
-
-    @field_validator("mpesa_environment")
-    @classmethod
-    def validate_mpesa_environment(cls, v: str) -> str:
-        """Validate MPESA environment setting."""
-        if v not in ["sandbox", "production"]:
-            raise ValueError("MPESA environment must be sandbox or production")
         return v
 
     @model_validator(mode="after")

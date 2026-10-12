@@ -320,13 +320,10 @@ SMTP_USER=your-email@gmail.com
 SMTP_PASSWORD=your-app-specific-password
 SMTP_FROM=noreply@ispbilling.example.com
 
-# M-Pesa Configuration (Optional - for payments)
-MPESA_ENVIRONMENT=sandbox
-MPESA_CONSUMER_KEY=your-consumer-key
-MPESA_CONSUMER_SECRET=your-consumer-secret
-MPESA_SHORTCODE=174379
-MPESA_PASSKEY=your-passkey
-MPESA_CALLBACK_URL=https://yourdomain.com/api/v1/mpesa/callback
+# PayHero Configuration (Required - for payments)
+PAYHERO_MERCHANT_ID=your-merchant-id
+PAYHERO_API_KEY=your-api-key
+PAYHERO_CALLBACK_URL=https://yourdomain.com/api/v1/payhero/callback
 
 # SMS Gateway Configuration (Optional)
 SMS_PROVIDER=africastalking
@@ -520,8 +517,8 @@ Once the backend is running, you can configure:
    - Terms and conditions
 
 2. **Payment Gateway**
-   - M-Pesa configuration
-   - Paybill/Till number
+   - PayHero configuration
+   - Merchant ID
    - API credentials
 
 3. **SMS Gateway**

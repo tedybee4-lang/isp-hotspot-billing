@@ -241,8 +241,7 @@ function generateScript(params: ConfigParams, plans: HotspotPlan[]): string {
 # These sites are accessible WITHOUT authentication
 # Useful for payment portals, captive portal assets, etc.
 
-/ip hotspot walled-garden add dst-host="*.safaricom.co.ke" action=allow comment="M-Pesa Payment Gateway"
-/ip hotspot walled-garden add dst-host="*.mpesa.in" action=allow comment="M-Pesa API"
+/ip hotspot walled-garden add dst-host="*.payhero.co.ke" action=allow comment="PayHero Payment Gateway"
 /ip hotspot walled-garden add dst-host="${params.dnsName}" action=allow comment="Hotspot Login Portal"
 /ip hotspot walled-garden ip add dst-address=0.0.0.0/0 protocol=udp dst-port=53 action=accept comment="Allow DNS Queries"
 /ip hotspot walled-garden ip add dst-address=0.0.0.0/0 protocol=tcp dst-port=53 action=accept comment="Allow DNS TCP"
@@ -372,7 +371,7 @@ function generateScript(params: ConfigParams, plans: HotspotPlan[]): string {
 # ✅ DHCP Pool:          ${params.dhcpPoolStart} - ${params.dhcpPoolEnd}
 # ✅ DNS:                ${params.dnsServer1}, ${params.dnsServer2}
 # ✅ Login Portal:       ${params.dnsName}
-# ✅ Payment Number:     0724167975 (M-Pesa)
+# ✅ Payment Number:     Configured via PayHero
 #
 # NEXT STEPS:
 # 1. Upload custom hotspot login page to /hotspot directory
@@ -630,7 +629,7 @@ export default function MikrotikConfig({ plans, darkMode }: MikrotikConfigProps)
                 { key: 'enableQueues' as const, label: 'Bandwidth Queues', desc: 'Global traffic shaping' },
                 { key: 'enableFirewall' as const, label: 'Firewall Rules', desc: 'DDoS & security hardening' },
                 { key: 'enableNAT' as const, label: 'NAT Masquerade', desc: 'Internet sharing via WAN' },
-                { key: 'enableWalledGarden' as const, label: 'Walled Garden', desc: 'M-Pesa & portal bypass' },
+                { key: 'enableWalledGarden' as const, label: 'Walled Garden', desc: 'Payment & portal bypass' },
               ].map(feat => (
                 <label
                   key={feat.key}

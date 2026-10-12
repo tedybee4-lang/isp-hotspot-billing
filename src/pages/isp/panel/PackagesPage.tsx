@@ -13,7 +13,7 @@
  *  1. THE DATABASE IS THE SOURCE OF TRUTH. The form sends the plan id and the
  *     fields the ISP changed. It never sends a price that the backend then
  *     believes, because `portal_create_payment` re-reads the plan row itself
- *     and derives the M-Pesa amount from it. Editing a price here changes what
+ *     and derives the payment amount from it. Editing a price here changes what
  *     the NEXT customer is charged, not what an in-flight one was charged.
  *
  *  2. ACTIVE, VISIBLE AND DELETED ARE THREE DIFFERENT THINGS.

@@ -203,7 +203,7 @@ function PayHeroChannelCard({
     <Card>
       <CardHeader
         title="PayHero payment channel"
-        subtitle="Automatic M-Pesa collection. Enter your Till above, then set up the channel."
+        subtitle="Automatic payment collection. Enter your Till above, then set up the channel."
         icon={<CreditCard className="w-4 h-4" />}
       />
       <div className="p-5 space-y-4">
@@ -319,7 +319,7 @@ function ProviderStatusCard() {
         {automated ? (
           <p className="text-xs text-slate-500 dark:text-slate-400">
             {connected
-              ? 'Customers pay by M-Pesa prompt. Your package activates once the payment is confirmed.'
+              ? 'Customers pay by payment prompt. Your package activates once the payment is confirmed.'
               : 'The platform has not assigned a working payment channel to you yet. Customers cannot pay online until it does.'}
           </p>
         ) : (

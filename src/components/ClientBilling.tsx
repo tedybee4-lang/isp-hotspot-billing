@@ -35,7 +35,7 @@ export default function ClientBilling({
   // Plan upgrading state
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
-  // M-Pesa autopay state
+  // Payment autopay state
   const [autopayPhone, setAutopayPhone] = useState('');
   const [autopayOpen, setAutopayOpen] = useState(false);
   const [autopayStage, setAutopayStage] = useState<'idle' | 'sending' | 'awaiting-pin' | 'success'>('idle');
@@ -373,21 +373,21 @@ export default function ClientBilling({
             </table>
           </div>
 
-          {/* M-Pesa Payment Info */}
+          {/* Payment Info */}
           <div className="mt-6 bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-2xl p-5">
             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
               <div className="flex-1 space-y-2">
                 <h4 className="font-bold text-emerald-900 text-sm flex items-center gap-2">
-                  📱 Pay via M-Pesa
+                  📱 Pay via Payment
                 </h4>
                 <p className="text-xs text-emerald-700 leading-relaxed">
-                  Send your monthly subscription payment directly to our M-Pesa line. Your account will be activated automatically once payment is confirmed.
+                  Send your monthly subscription payment directly to our payment line. Your account will be activated automatically once payment is confirmed.
                 </p>
                 <ol className="text-[11px] text-emerald-700 space-y-0.5 list-decimal list-inside">
-                  <li>Open M-Pesa → <strong>Send Money</strong></li>
+                  <li>Open your payment app and send money</li>
                   <li>Enter number: <strong className="font-mono">0724167975</strong></li>
                   <li>Enter your invoice amount</li>
-                  <li>Confirm with your M-Pesa PIN</li>
+                  <li>Confirm the payment</li>
                 </ol>
               </div>
               <div className="bg-white rounded-xl p-4 border border-emerald-200 text-center min-w-[160px] shadow-sm">
@@ -411,7 +411,7 @@ export default function ClientBilling({
               <div className="space-y-2 flex-1">
                 <h4 className={`font-bold text-sm flex items-center gap-2 ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                   <Smartphone className="w-4 h-4 text-emerald-500" />
-                  AutoPay via M-Pesa STK Push
+                  AutoPay via STK Push
                 </h4>
                 <p className={`text-xs leading-relaxed ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                   Type the customer's phone number and Ultrafaiba will trigger an STK push for the subscribed amount automatically.
@@ -631,7 +631,7 @@ export default function ClientBilling({
           <div className={`w-full max-w-md rounded-3xl border p-6 shadow-2xl ${darkMode ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'}`}>
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>M-Pesa STK Push</h3>
+                <h3 className={`text-lg font-black ${darkMode ? 'text-white' : 'text-slate-900'}`}>STK Push</h3>
                 <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                   Approve the payment on the customer's phone
                 </p>
@@ -681,14 +681,14 @@ export default function ClientBilling({
               {autopayStage === 'sending' && (
                 <div className="flex items-center gap-3 text-sm">
                   <Loader2 className="w-5 h-5 animate-spin text-emerald-500" />
-                  <span className={darkMode ? 'text-slate-300' : 'text-slate-700'}>Sending the M-Pesa payment request via HashBack...</span>
+                  <span className={darkMode ? 'text-slate-300' : 'text-slate-700'}>Sending the payment request...</span>
                 </div>
               )}
               {autopayStage === 'awaiting-pin' && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-3 text-sm">
                     <CheckCircle className="w-5 h-5 text-emerald-500" />
-                    <span className={darkMode ? 'text-slate-300' : 'text-slate-700'}>STK push sent! Check the customer's phone for the M-Pesa PIN prompt.</span>
+                    <span className={darkMode ? 'text-slate-300' : 'text-slate-700'}>STK push sent! Check the customer's phone for the payment prompt.</span>
                   </div>
                   <div className="text-xs text-slate-500">
                     Waiting for customer to enter PIN and confirm...

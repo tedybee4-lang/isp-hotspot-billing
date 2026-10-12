@@ -45,7 +45,6 @@ _module_mapping = {
     # Billing
     "BillingService": ("app.modules.billing", "BillingService"),
     "PaymentManagementService": ("app.modules.billing", "PaymentManagementService"),
-    "MpesaService": ("app.modules.billing", "MpesaService"),
     # Subscriptions
     "SubscriptionService": ("app.modules.subscriptions", "SubscriptionService"),
     # Support

@@ -656,7 +656,7 @@ function PackageCard({
 }
 
 /**
- * The M-Pesa sheet.
+ * The payment sheet.
  *
  * The amount shown is the one this portal rendered from the package it loaded.
  * It is shown to confirm, not to authorise: the server resolves the chargeable
@@ -703,7 +703,7 @@ function BuySheet({
 
         <form onSubmit={onSubmit} className="mt-4 space-y-3">
           <Input
-            label="M-Pesa phone number"
+            label="Phone number"
             value={phone}
             onChange={setPhone}
             placeholder="07XXXXXXXX"
@@ -712,7 +712,7 @@ function BuySheet({
           />
           {error && <OutcomeNote outcome={{ ok: false, message: error }} />}
           <BigButton brand={brand} loading={busy} type="submit">
-            Pay with M-Pesa
+            Pay with Payment
           </BigButton>
           <button type="button" onClick={onClose} className="w-full py-2 text-xs font-bold text-slate-500">
             Cancel
@@ -740,7 +740,7 @@ function ManualTillPanel({ payment, currency }: { payment: PortalPaymentStart; c
   return (
     <Panel>
       <SectionTitle id="till-heading" icon={<Smartphone className="h-4 w-4" />}>
-        Pay with M-Pesa
+        Pay with Payment
       </SectionTitle>
       <div className="space-y-3 p-4 pt-0">
         <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
@@ -792,7 +792,7 @@ function ManualTillPanel({ payment, currency }: { payment: PortalPaymentStart; c
 
         <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
           Your package activates as soon as we confirm the payment on the Till. Keep your
-          M-Pesa confirmation message.
+          payment confirmation message.
         </p>
       </div>
     </Panel>
@@ -800,7 +800,7 @@ function ManualTillPanel({ payment, currency }: { payment: PortalPaymentStart; c
 }
 
 /**
- * The automated-payment screen: one component for every M-Pesa provider.
+ * The automated-payment screen: one component for every payment provider.
  *
  * It exists instead of a per-provider screen because the FLOW is identical
  * whichever provider is behind it — prompt, wait, verify, settle — and the provider
@@ -838,7 +838,7 @@ function PaymentWaiting({
   const stopped = useRef(false)
   const attempts = useRef(0)
 
-  // Two minutes is well past any real M-Pesa confirmation and short enough that a
+  // Two minutes is well past any real payment confirmation and short enough that a
   // customer is still looking at the page when they are told to check elsewhere.
   const MAX_POLLS = 30
   const POLL_MS = 4000
@@ -1197,7 +1197,7 @@ function demoSettings(isp: Isp): PortalSettings {
   return {
     is_enabled: true,
     portal_name: isp.name,
-    welcome_message: 'Choose a package below and pay with M-Pesa to get online.',
+    welcome_message: 'Choose a package below and pay to get online.',
     terms_conditions: null,
     support_email: isp.contact_email,
     support_phone: isp.contact_phone,

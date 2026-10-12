@@ -153,7 +153,7 @@ export const INITIAL_TICKETS: SupportTicket[] = [
   },
   {
     id: 'TCK-511',
-    subject: 'M-Pesa / Credit Card renewal automation confirmation',
+    subject: 'Payment / Credit Card renewal automation confirmation',
     category: 'Payment Failed',
     status: 'Resolved',
     date: '2026-02-03 08:10',

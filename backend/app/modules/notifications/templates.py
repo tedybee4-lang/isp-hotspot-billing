@@ -393,7 +393,7 @@ class NotificationTemplateService:
                 'payment_amount': payment_data.get('amount', ''),
                 'payment_method': payment_data.get('payment_method', ''),
                 'payment_date': payment_data.get('payment_date', ''),
-                'receipt_number': payment_data.get('mpesa_receipt_number', ''),
+                'receipt_number': payment_data.get('receipt_number', ''),
                 'transaction_id': payment_data.get('transaction_id', ''),
                 'payment_status': payment_data.get('status', ''),
                 'invoice_number': payment_data.get('invoice_number', '')

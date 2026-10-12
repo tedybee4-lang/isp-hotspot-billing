@@ -17,9 +17,9 @@ Two payment-gateway bugs are fixed here via the centralized filter in
   Issue 2 — A 2-layer ACTIVE gate. A gateway is returned ACTIVE only when it is
             BOTH (Layer 1) enabled (platform-owner and/or tenant enabled, as
             resolved by treasury) AND (Layer 2) has ALL its essential tenant
-            configs present (e.g. M-Pesa needs short code/paybill + consumer
-            key/secret + passkey). A gateway flagged active but missing essential
-            config is filtered out — selecting it would otherwise fail.
+            configs present (e.g. PayHero needs merchant ID + API key + callback
+            URL). A gateway flagged active but missing essential config is
+            filtered out — selecting it would otherwise fail.
 
 The response field contract is unchanged (the frontend reads ``gateway_type`` /
 ``is_active`` / ``is_primary`` / ``name`` / ``display_name`` / ...).
@@ -62,9 +62,10 @@ class AvailableGatewayResponse(BaseModel):
     is_active: bool
     is_primary: bool
     environment: str = "production"
-    # M-PESA specific (optional; present when treasury exposes them)
-    paybill_number: Optional[str] = None
-    till_number: Optional[str] = None
+    # PayHero specific (optional; present when treasury exposes them)
+    merchant_id: Optional[str] = None
+    api_key: Optional[str] = None
+    callback_url: Optional[str] = None
 
 
 # =========================================================================
@@ -74,11 +75,10 @@ class AvailableGatewayResponse(BaseModel):
 def _build_tenant_configs(*, platform_rail: bool = False) -> Dict[str, Dict[str, Any]]:
     """Build the Layer-2 tenant-config bag keyed by normalised gateway type.
 
-    Customer payments route through the PLATFORM M-Pesa rail, whose essential
-    credentials are owned by isp-billing (``settings.mpesa_*``). We surface them
-    here so the essential-config gate hides M-Pesa when any required field
-    (short code / consumer key / consumer secret / passkey) is unset — which is
-    exactly the "M-Pesa shows active but isn't configured" bug.
+    Customer payments route through the PLATFORM PayHero rail, whose essential
+    credentials are owned by isp-billing (``settings.payhero_*``). We surface them
+    here so the essential-config gate hides PayHero when any required field
+    (merchant ID / API key / callback URL) is unset.
 
     Paystack / card run on platform-managed keys held BY TREASURY (isp-billing
     never sees them). For those rails treasury is the credential authority, so the
@@ -87,19 +87,9 @@ def _build_tenant_configs(*, platform_rail: bool = False) -> Dict[str, Dict[str,
     supply a sentinel "treasury-managed" config bag for paystack/card so the
     Layer-2 gate trusts treasury's Layer-1 enable state instead of hiding them for
     a key isp-billing structurally cannot hold. The cash/COD exclusion and the
-    M-Pesa local-config gate still apply.
+    PayHero local-config gate still apply.
     """
-    mpesa_cfg: Dict[str, Any] = {
-        "shortcode": settings.mpesa_shortcode,
-        "consumer_key": settings.mpesa_consumer_key,
-        "consumer_secret": settings.mpesa_consumer_secret,
-        "passkey": settings.mpesa_passkey,
-    }
-    configs: Dict[str, Dict[str, Any]] = {
-        "mpesa": mpesa_cfg,
-        "mpesa_paybill": mpesa_cfg,
-        "mpesa_till": mpesa_cfg,
-    }
+    configs: Dict[str, Dict[str, Any]] = {}
     if platform_rail:
         # Treasury holds these keys; satisfy the local gate so treasury's enable
         # state (Layer 1) is authoritative for the platform rail.
@@ -115,9 +105,7 @@ def _display_name(gateway_type: str, name: Optional[str]) -> str:
         return name
     gt = normalize_gateway_type(gateway_type)
     return {
-        "mpesa": "M-Pesa",
-        "mpesa_paybill": "M-Pesa",
-        "mpesa_till": "M-Pesa",
+        "payhero": "PayHero (M-Pesa)",
         "paystack": "Card / Mobile Money",
         "card": "Card",
     }.get(gt, gateway_type or "Payment")
@@ -183,6 +171,16 @@ async def get_available_payment_gateways(
         raw_gateways, tenant_configs=tenant_configs
     )
 
+    # PayHero is the SOLE active payment provider. M-Pesa / Daraja was removed
+    # entirely - drop any mpesa-style gateway treasury may still return so it can
+    # never surface as a selectable option in the captive flow.
+    _REMOVED_MPESA_TYPES = {"mpesa", "mpesa_paybill", "mpesa_till", "daraja"}
+    filtered = [
+        g for g in filtered
+        if normalize_gateway_type(g.get("gateway_type") or g.get("type"))
+        not in _REMOVED_MPESA_TYPES
+    ]
+
     # Map to the stable frontend contract. ``id`` is best-effort (treasury ids
     # are UUIDs; the frontend only uses it as a React key) — emit a stable int.
     available: List[AvailableGatewayResponse] = []
@@ -198,8 +196,9 @@ async def get_available_payment_gateways(
                 is_active=bool(gw.get("is_active", True)),
                 is_primary=bool(gw.get("is_primary", False)),
                 environment=str(gw.get("environment") or "production"),
-                paybill_number=gw.get("paybill_number") or gw.get("paybill"),
-                till_number=gw.get("till_number") or gw.get("till"),
+                merchant_id=gw.get("merchant_id"),
+                api_key=gw.get("api_key"),
+                callback_url=gw.get("callback_url"),
             )
         )
 

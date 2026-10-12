@@ -170,7 +170,7 @@ export function BillingView() {
                 : 'text-slate-500 dark:text-slate-400 hover:text-slate-800'
             }`}
           >
-            Online (M-Pesa)
+            Online (Payment)
           </button>
           <button
             onClick={() => setMode('manual_till')}
@@ -263,11 +263,11 @@ return (
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
                 The customer pays your Till by hand and staff confirm it. Use this for
-                cash and offline payments; online M-Pesa is the default above.
+                cash and offline payments; online payment is the default above.
               </p>
             </div>
             <Button size="sm" variant="secondary" onClick={() => setMode('stk')}>
-              Use online M-Pesa
+              Use online payment
             </Button>
           </div>
 

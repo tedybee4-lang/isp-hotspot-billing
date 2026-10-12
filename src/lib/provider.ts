@@ -1,5 +1,5 @@
 // =============================================================================
-//  Provider — the single source of truth for which M-Pesa provider is active.
+//  Provider — the single source of truth for which payment provider is active.
 //
 //  WHY THIS FILE EXISTS
 //  --------------------
@@ -37,8 +37,8 @@ export type CollectionMode = 'stk' | 'manual_till'
 /**
  * What each provider is called in the UI, and whether it is automated.
  *
- * `automated` is what the screens branch on: an automated provider prompts M-Pesa
- * and settles from a verified result, a manual one hands back instructions and
+ * `automated` is what the screens branch on: an automated provider prompts the
+ * customer and settles from a verified result, a manual one hands back instructions and
  * waits for a human.
  */
 const PROVIDER_INFO: Record<PaymentProvider, { label: string; automated: boolean }> = {
@@ -70,7 +70,7 @@ export function providerLabel(value: string | null | undefined): string {
 }
 
 /**
- * True when this provider sends an M-Pesa prompt on its own.
+ * True when this provider sends a payment prompt on its own.
  *
  * The payment screens use this to decide between a live STK flow and the manual
  * instruction sheet. It is a property of the provider, not a per-screen decision,
@@ -193,11 +193,11 @@ export function phaseMessage(phase: PaymentPhase): string {
     case 'idle':
       return 'Choose a package to get started.'
     case 'initiating':
-      return 'Sending the M-Pesa prompt…'
+      return 'Sending the payment prompt…'
     case 'stk_sent':
-      return 'Check your phone for the M-Pesa prompt.'
+      return 'Check your phone for the payment prompt.'
     case 'awaiting':
-      return 'Enter your M-Pesa PIN on your phone to complete the payment.'
+      return 'Enter your PIN on your phone to complete the payment.'
     case 'verifying':
       return 'Confirming your payment…'
     case 'success':

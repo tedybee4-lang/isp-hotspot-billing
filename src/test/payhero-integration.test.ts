@@ -214,7 +214,7 @@ describe('PayHero endpoint security posture', () => {
 
     expect(fn).toMatch(/body\.response/)
     expect(fn).toMatch(/nested\?\.ExternalReference/)
-    // The M-Pesa receipt and CheckoutRequestID are the identifiers PayHero indexes,
+    // The provider receipt and CheckoutRequestID are the identifiers PayHero indexes,
     // so they must reach the verification call.
     expect(fn).toMatch(/MpesaReceiptNumber/)
     expect(fn).toMatch(/CheckoutRequestID/)
@@ -259,7 +259,7 @@ describe('active customer UI uses PayHero, not HashBack', () => {
 describe('admin and ISP surfaces name PayHero as the active provider', () => {
   it('leads the platform payments page with PayHero', () => {
     const page = code('src/pages/admin/PlatformPayments.tsx')
-    expect(page).toMatch(/PayHero is the active M-Pesa payment provider/)
+    expect(page).toMatch(/PayHero is the active payment provider/)
     expect(page).toMatch(/to="\/admin\/payment-gateway\/payhero"/)
   })
 
@@ -283,8 +283,8 @@ describe('admin and ISP surfaces name PayHero as the active provider', () => {
 
   it('labels the billing toggle so manual is not mistaken for the active path', () => {
     const page = code('src/pages/isp/views.tsx')
-    // Online M-Pesa is the default; manual is labelled as an administrative act.
-    expect(page).toMatch(/Online \(M-Pesa\)/)
+    // Online payment is the default; manual is labelled as an administrative act.
+    expect(page).toMatch(/Online \(Payment\)/)
     expect(page).toMatch(/Manual \/ admin/)
     expect(page).toMatch(/useState<'stk' \| 'manual_till'>\('stk'\)/)
   })

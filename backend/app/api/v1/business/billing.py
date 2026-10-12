@@ -16,8 +16,8 @@ from app.models.billing import InvoiceStatus, PaymentStatus, PaymentMethod
 from app.schemas.billing import (
     Invoice, InvoiceCreate, InvoiceUpdate, InvoiceList, InvoiceFilter,
     InvoiceItem, InvoiceItemCreate, InvoiceItemUpdate, Payment, PaymentCreate,
-    PaymentUpdate, PaymentList, PaymentFilter, MpesaPaymentRequest, MpesaPaymentResponse,
-    MpesaCallbackRequest, MpesaCallbackResponse, BillingStats, PaymentStats,
+    PaymentUpdate, PaymentList, PaymentFilter,
+    BillingStats, PaymentStats,
     InvoiceGenerationRequest, BulkInvoiceGenerationRequest
 )
 from app.modules.billing import BillingService
@@ -411,37 +411,6 @@ async def get_payment_history(
     service = BillingService(db)
     payments = await service.get_user_payment_history(current_user.id, limit)
     return payments
-
-
-# MPESA endpoints
-@router.post("/payments/mpesa/stk", response_model=MpesaPaymentResponse)
-async def initiate_mpesa_stk(
-    payment_request: MpesaPaymentRequest,
-    org_id: int = Depends(get_org_id_for_query),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> MpesaPaymentResponse:
-    """Initiate MPESA STK Push payment."""
-    service = BillingService(db)
-    result = await service.process_mpesa_payment(
-        user_id=current_user.id,
-        phone_number=payment_request.phone_number,
-        amount=payment_request.amount,
-        invoice_number=payment_request.invoice_number,
-        description=payment_request.description,
-    )
-    return MpesaPaymentResponse(**result)
-
-
-@router.post("/payments/mpesa/callback", response_model=MpesaCallbackResponse)
-async def mpesa_callback(
-    callback_data: MpesaCallbackRequest,
-    db: AsyncSession = Depends(get_db),
-) -> MpesaCallbackResponse:
-    """MPESA payment callback webhook."""
-    service = BillingService(db)
-    result = await service.handle_mpesa_callback(callback_data.Body)
-    return MpesaCallbackResponse(**result)
 
 
 # Statistics endpoints

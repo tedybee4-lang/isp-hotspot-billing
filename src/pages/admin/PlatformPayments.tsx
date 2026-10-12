@@ -3,7 +3,7 @@
  *
  * This page used to hold the shared Safaricom Daraja credentials (consumer key,
  * consumer secret and passkey) and the list of payment modes an ISP could pick.
- * None of that is here any more. Automated M-Pesa runs through PayHero, and the
+ * None of that is here any more. Automated payments run through PayHero, and the
  * platform credential lives on the PayHero screen, encrypted at rest and never
  * returned to the browser.
  *
@@ -29,7 +29,7 @@ export default function PlatformPayments() {
           Platform Payments
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          PayHero is the active M-Pesa payment provider.
+          PayHero is the active payment provider.
         </p>
       </div>
 
@@ -44,7 +44,7 @@ export default function PlatformPayments() {
             <span className="flex items-start gap-2">
               <Info className="w-4 h-4 shrink-0 mt-px" />
               <span>
-                Automated M-Pesa now runs through PayHero. Its Basic API token is
+                Automated payments now run through PayHero. Its Basic API token is
                 encrypted at rest, never returned to this browser, and is only read by
                 the Edge Functions that need it. Payment channels are discovered from
                 PayHero and assigned to an ISP there.

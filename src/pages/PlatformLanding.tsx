@@ -10,7 +10,7 @@ import { Button } from '../components/ui'
 const FEATURES = [
   [Building2, 'Tenant management', 'Provision, tier, suspend or remove any ISP from one panel.'],
   [Database, 'Row-level security', 'Postgres-enforced isolation between tenants.'],
-  [CreditCard, 'M-Pesa billing', 'STK Push through HashBack, settled by webhook.'],
+  [CreditCard, 'Payment billing', 'STK Push through PayHero, settled by webhook.'],
   [Radio, 'MikroTik operations', 'Voucher engine, sessions and RouterOS scripts.'],
   [Users, 'Per-ISP teams', 'Owners, admins and agents with scoped permissions.'],
   [Lock, 'Full audit trail', 'Every privileged action recorded with actor and tenant.'],
@@ -27,7 +27,7 @@ const ROLES: Array<[string, string, string[]]> = [
   ['ISP owner / admin', 'Runs their network', [
     'Branded captive portal at /portal/<their-slug>',
     'Voucher generation, sessions and node control',
-    'Customer records, invoices and M-Pesa collection',
+    'Customer records, invoices and payment collection',
     'Analytics, RouterOS generator, legal pages',
     'Scoped to their own tenant by RLS',
   ]],
@@ -66,7 +66,7 @@ export default function PlatformLanding() {
             </span>
           </h1>
           <p className="mt-6 text-base text-slate-600 dark:text-slate-400 max-w-2xl mx-auto leading-relaxed">
-            Run hotspot billing, M-Pesa collection and MikroTik management for many ISPs —
+            Run hotspot billing, payment collection and MikroTik management for many ISPs —
             with strict tenant isolation enforced by the database, not by convention.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">

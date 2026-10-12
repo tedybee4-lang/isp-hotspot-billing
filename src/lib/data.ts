@@ -375,11 +375,11 @@ export const PAYMENT_MODES: PaymentModeInfo[] = [
   {
     value: 'manual_till',
     label: 'Manual Till / Paybill',
-    blurb: 'No Safaricom API needed. The customer pays your Till number in the M-Pesa app or *334#, then you confirm it. Works for every ISP.',
+    blurb: 'No provider API needed. The customer pays your Till number in their payment app, then you confirm it. Works for every ISP.',
   },
 ]
 
-/** Shape of a tenant's M-Pesa configuration. Secrets never leave the server. */
+/** Shape of a tenant's payment configuration. Secrets never leave the server. */
 export interface PaymentConfig {
   isp_id: string
   payment_mode: PaymentMode
@@ -1120,7 +1120,7 @@ export async function initiateStkPush(input: {
   if (IS_LIVE) {
     const sb = requireSupabase()
     const { data: sess } = await sb.auth.getSession()
-    const res = await fetch(functionsUrl('hashback-stk'), {
+    const res = await fetch(functionsUrl('payhero-stk'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1138,7 +1138,7 @@ export async function initiateStkPush(input: {
     if (!res.ok) throw new DataError(body.error ?? 'Could not start the payment')
     return {
       success: true,
-      message: body.message ?? 'Check your phone and enter your M-Pesa PIN.',
+      message: body.message ?? 'Check your phone and enter your PIN to complete the payment.',
       checkoutRequestId: body.checkoutRequestId,
     }
   }

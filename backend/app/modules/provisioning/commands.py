@@ -751,7 +751,7 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     #     countdown (issue 4). Host is configurable (config override → settings
     #     default `booksapi.ispbilling.example.com`).
     #   * the treasury-UI host — serves the embedded checkout iframe.
-    #   * `api.qrserver.com` — renders the M-Pesa/merchant QR + logo on the pay
+    #   * `api.qrserver.com` — renders the QR + logo on the pay
     #     page; without it the QR/logo never loads (issue 3).
     #   * Paystack hosted-checkout asset hosts (merchant logo on S3, country-flag
     #     Twemoji on cdnjs, pusher.min.js on S3) — added in captive_cloud_hosts
@@ -789,8 +789,8 @@ def generate_hotspot_commands(config: Dict[str, Any], routeros_version: Optional
     captive_cloud_hosts.append("api.qrserver.com")  # QR image API (logo/QR) — issue 3
 
     # Paystack HOSTED-CHECKOUT assets that load from NON-paystack hosts.
-    # Captured live (Playwright) on the Paystack M-Pesa "enter mobile money
-    # number" page; these are NOT matched by *.paystack.com / *.paystack.co /
+    # Captured live (Playwright) on the Paystack mobile money checkout page;
+    # these are NOT matched by *.paystack.com / *.paystack.co /
     # *.paystackcdn.com, so on a pre-auth captive device they render BROKEN —
     # exactly the missing merchant-logo + country-flag in the reported screenshot:
     #   * public-files-paystack-prod.s3.eu-west-1.amazonaws.com — the MERCHANT

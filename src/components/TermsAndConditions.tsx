@@ -45,7 +45,7 @@ export default function TermsAndConditions({ darkMode, activeTab, onTabChange }:
     },
     {
       title: '4. Payment Terms & Billing',
-      content: `• All payments for Ultrafaiba services are made via M-Pesa to the designated payment number: 0724167975.\n\n• Hotspot voucher payments are one-time, prepaid transactions. The voucher activates upon first use and expires after the stated duration regardless of actual usage.\n\n• Home fiber subscriptions are billed on a monthly recurring basis. Payment is due on or before the 5th of each billing month.\n\n• Late payments may result in service suspension. A reconnection fee may apply to restore suspended services.\n\n• All prices are quoted in BOB (Boliviano) and are inclusive of applicable taxes unless otherwise stated.\n\n• Ultrafaiba reserves the right to adjust pricing with 30 days written notice to subscribers. Continued use after a price change constitutes acceptance of the new pricing.\n\n• Payment confirmation is sent via SMS to the M-Pesa registered phone number. Retain your M-Pesa confirmation message as proof of payment.`
+      content: `• All payments for Ultrafaiba services are made via the designated payment number: 0724167975.\n\n• Hotspot voucher payments are one-time, prepaid transactions. The voucher activates upon first use and expires after the stated duration regardless of actual usage.\n\n• Home fiber subscriptions are billed on a monthly recurring basis. Payment is due on or before the 5th of each billing month.\n\n• Late payments may result in service suspension. A reconnection fee may apply to restore suspended services.\n\n• All prices are quoted in BOB (Boliviano) and are inclusive of applicable taxes unless otherwise stated.\n\n• Ultrafaiba reserves the right to adjust pricing with 30 days written notice to subscribers. Continued use after a price change constitutes acceptance of the new pricing.\n\n• Payment confirmation is sent via SMS to the registered phone number. Retain your payment confirmation message as proof of payment.`
     },
     {
       title: '5. Voucher Terms & Activation',
@@ -77,7 +77,7 @@ export default function TermsAndConditions({ darkMode, activeTab, onTabChange }:
     },
     {
       title: '12. Contact Information',
-      content: `For any questions, concerns, or complaints regarding these Terms of Service, please contact us:\n\n• Phone / M-Pesa: 0724167975\n• Email: support@ultrafaiba.net\n• Support Hours: 24/7/365\n\nWe aim to respond to all inquiries within 24 hours.`
+      content: `For any questions, concerns, or complaints regarding these Terms of Service, please contact us:\n\n• Phone: 0724167975\n• Email: support@ultrafaiba.net\n• Support Hours: 24/7/365\n\nWe aim to respond to all inquiries within 24 hours.`
     }
   ];
 
@@ -85,15 +85,15 @@ export default function TermsAndConditions({ darkMode, activeTab, onTabChange }:
   const privacyPolicy = [
     {
       title: '1. Information We Collect',
-      content: `Ultrafaiba collects the following categories of information:\n\n• Personal Information: Name, phone number, email address, and M-Pesa transaction details provided during registration or payment.\n\n• Device Information: MAC addresses, IP addresses, device type/model, operating system, and browser information collected automatically when you connect to our network.\n\n• Usage Data: Connection timestamps, session duration, data consumption volumes (upload/download), and authentication logs.\n\n• Payment Information: M-Pesa transaction IDs, payment amounts, and timestamps. We do NOT store M-Pesa PINs or full mobile money credentials.\n\n• Technical Data: Network performance metrics, signal strength readings, and diagnostic logs used for service improvement.`
+      content: `Ultrafaiba collects the following categories of information:\n\n• Personal Information: Name, phone number, email address, and payment transaction details provided during registration or payment.\n\n• Device Information: MAC addresses, IP addresses, device type/model, operating system, and browser information collected automatically when you connect to our network.\n\n• Usage Data: Connection timestamps, session duration, data consumption volumes (upload/download), and authentication logs.\n\n• Payment Information: Payment transaction IDs, payment amounts, and timestamps. We do NOT store PINs or full payment credentials.\n\n• Technical Data: Network performance metrics, signal strength readings, and diagnostic logs used for service improvement.`
     },
     {
       title: '2. How We Use Your Information',
-      content: `We use collected information for the following purposes:\n\n• Service Delivery: To authenticate your devices, provision bandwidth, manage voucher activations, and deliver internet connectivity.\n\n• Billing & Payments: To process M-Pesa transactions, generate invoices, track payment history, and manage account balances.\n\n• Network Management: To monitor network performance, manage bandwidth allocation, troubleshoot technical issues, and plan capacity upgrades.\n\n• Security: To detect and prevent unauthorized access, fraud, abuse, and violations of our Acceptable Use Policy.\n\n• Communication: To send service notifications, payment confirmations, maintenance alerts, and respond to support inquiries.\n\n• Service Improvement: To analyze usage patterns and improve network performance, user experience, and service reliability.`
+      content: `We use collected information for the following purposes:\n\n• Service Delivery: To authenticate your devices, provision bandwidth, manage voucher activations, and deliver internet connectivity.\n\n• Billing & Payments: To process payment transactions, generate invoices, track payment history, and manage account balances.\n\n• Network Management: To monitor network performance, manage bandwidth allocation, troubleshoot technical issues, and plan capacity upgrades.\n\n• Security: To detect and prevent unauthorized access, fraud, abuse, and violations of our Acceptable Use Policy.\n\n• Communication: To send service notifications, payment confirmations, maintenance alerts, and respond to support inquiries.\n\n• Service Improvement: To analyze usage patterns and improve network performance, user experience, and service reliability.`
     },
     {
       title: '3. Data Sharing & Disclosure',
-      content: `Ultrafaiba does NOT sell, trade, or rent your personal information to third parties. We may share your information only in the following circumstances:\n\n• Service Providers: With trusted third-party service providers who assist in payment processing (M-Pesa/Safaricom), subject to confidentiality agreements.\n\n• Legal Requirements: When required by law, regulation, legal process, or governmental request.\n\n• Protection of Rights: When necessary to protect the rights, property, or safety of Ultrafaiba, our users, or the public.\n\n• Business Transfers: In connection with any merger, acquisition, or sale of company assets, where user data may be among transferred assets.\n\n• With Your Consent: When you have given explicit consent for a specific purpose.`
+      content: `Ultrafaiba does NOT sell, trade, or rent your personal information to third parties. We may share your information only in the following circumstances:\n\n• Service Providers: With trusted third-party service providers who assist in payment processing, subject to confidentiality agreements.\n\n• Legal Requirements: When required by law, regulation, legal process, or governmental request.\n\n• Protection of Rights: When necessary to protect the rights, property, or safety of Ultrafaiba, our users, or the public.\n\n• Business Transfers: In connection with any merger, acquisition, or sale of company assets, where user data may be among transferred assets.\n\n• With Your Consent: When you have given explicit consent for a specific purpose.`
     },
     {
       title: '4. Data Retention',
@@ -141,7 +141,7 @@ export default function TermsAndConditions({ darkMode, activeTab, onTabChange }:
   const refundPolicy = [
     {
       title: '1. Hotspot Voucher Refunds',
-      content: `• Unused Vouchers: Vouchers that have NOT been activated (never used for login) are eligible for a full refund within 30 days of purchase. Contact us at 0724167975 with your M-Pesa transaction ID.\n\n• Activated Vouchers: Once a voucher has been activated (used for first login), NO refund will be issued regardless of remaining time or unused portion.\n\n• Partial Use: No pro-rated refunds are available for partially used vouchers. The full duration begins at first authentication.\n\n• Technical Issues: If you experience a confirmed service outage that affects more than 50% of your voucher's active duration, you may be eligible for a replacement voucher of equal value. Contact support with your voucher code and outage details.`
+      content: `• Unused Vouchers: Vouchers that have NOT been activated (never used for login) are eligible for a full refund within 30 days of purchase. Contact us at 0724167975 with your transaction ID.\n\n• Activated Vouchers: Once a voucher has been activated (used for first login), NO refund will be issued regardless of remaining time or unused portion.\n\n• Partial Use: No pro-rated refunds are available for partially used vouchers. The full duration begins at first authentication.\n\n• Technical Issues: If you experience a confirmed service outage that affects more than 50% of your voucher's active duration, you may be eligible for a replacement voucher of equal value. Contact support with your voucher code and outage details.`
     },
     {
       title: '2. Home Fiber Subscription Refunds',
@@ -149,11 +149,11 @@ export default function TermsAndConditions({ darkMode, activeTab, onTabChange }:
     },
     {
       title: '3. Refund Processing',
-      content: `• All eligible refunds are processed via M-Pesa reversal to the original payment number.\n\n• Refund requests must include: your name, phone number, M-Pesa transaction ID, voucher code (if applicable), and reason for refund.\n\n• Refund processing takes 3-7 business days from the date of approval.\n\n• Ultrafaiba reserves the right to deny refund requests that do not meet the criteria outlined in this policy or that appear to be fraudulent.\n\n• Refund decisions by Ultrafaiba management are final and binding.`
+      content: `• All eligible refunds are processed via reversal to the original payment method.\n\n• Refund requests must include: your name, phone number, transaction ID, voucher code (if applicable), and reason for refund.\n\n• Refund processing takes 3-7 business days from the date of approval.\n\n• Ultrafaiba reserves the right to deny refund requests that do not meet the criteria outlined in this policy or that appear to be fraudulent.\n\n• Refund decisions by Ultrafaiba management are final and binding.`
     },
     {
       title: '4. How to Request a Refund',
-      content: `To request a refund:\n\n1. Call or SMS: 0724167975\n2. Email: support@ultrafaiba.net\n3. Provide your M-Pesa transaction ID and reason for refund\n4. Our team will review your request within 48 hours\n5. If approved, refund will be processed via M-Pesa within 3-7 business days\n\nPlease retain your M-Pesa confirmation messages as proof of payment. Refund requests without valid transaction IDs may be denied.`
+      content: `To request a refund:\n\n1. Call or SMS: 0724167975\n2. Email: support@ultrafaiba.net\n3. Provide your transaction ID and reason for refund\n4. Our team will review your request within 48 hours\n5. If approved, refund will be processed within 3-7 business days\n\nPlease retain your confirmation messages as proof of payment. Refund requests without valid transaction IDs may be denied.`
     }
   ];
 
@@ -315,7 +315,7 @@ export default function TermsAndConditions({ darkMode, activeTab, onTabChange }:
             </p>
           </div>
           <div className={`text-center px-5 py-3 rounded-xl border ${darkMode ? 'bg-slate-900 border-emerald-800' : 'bg-white border-emerald-200'}`}>
-            <span className={`text-[10px] uppercase font-mono tracking-widest block ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Call / M-Pesa</span>
+            <span className={`text-[10px] uppercase font-mono tracking-widest block ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Call / Payment</span>
             <div className="flex items-center justify-center gap-2 flex-wrap">
               <span className={`text-lg font-black font-mono ${darkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>0724167975</span>
               <CopyTextButton

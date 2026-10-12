@@ -1,9 +1,9 @@
 // =============================================================================
 //  stk-push - RETIRED. Always answers 410 Gone.
 //
-//  This was the Safaricom Daraja STK Push endpoint. Daraja is no longer an M-Pesa
-//  payment provider for this platform: automated collection runs through
-//  HashBack (see the `hashback-stk` function).
+//  This was the Safaricom Daraja STK Push endpoint. Daraja is no longer a payment
+//  provider for this platform: automated collection runs through PayHero (see the
+//  `payhero-stk` function).
 //
 //  The whole Daraja implementation that used to live below - OAuth token
 //  exchange, the /mpesa/stkpush/v1/processrequest call, the per-tenant consumer
@@ -20,7 +20,7 @@
 // =============================================================================
 
 const DARAJA_CUTOVER_REFUSAL =
-  'Daraja payments are no longer accepted. Use the HashBack payment flow.'
+  'Daraja payments are no longer accepted. Use the PayHero payment flow.'
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -40,7 +40,7 @@ Deno.serve(() =>
       error: DARAJA_CUTOVER_REFUSAL,
       deprecated: true,
       removed: true,
-      use: 'hashback-stk',
+      use: 'payhero-stk',
     },
     410,
   ),

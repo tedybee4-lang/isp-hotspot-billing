@@ -182,7 +182,7 @@ test('buying a package never lets the browser choose the amount or the tenant', 
     .getByRole('dialog')
     .getByPlaceholder('07XXXXXXXX')
     .fill('0712345678')
-  await page.getByRole('button', { name: 'Pay with M-Pesa' }).click()
+  await page.getByRole('button', { name: 'Pay with Payment' }).click()
 
   // Wait for either the payment to be refused or the poll to start.
   await page.waitForTimeout(6000)

@@ -31,7 +31,6 @@ This module organizes all API routes into logical groups:
    - /ui - User interface data
 
 7. External Integrations
-   - /mpesa - M-PESA integration
 
 8. Platform Management (Platform Owner Only)
    - /platform/organizations - ISP provider management

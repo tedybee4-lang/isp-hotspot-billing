@@ -229,7 +229,7 @@ describe('the verified PayHero lifecycle is not regressed by package work', () =
   })
 
   it('package management added no second payment or provider path', () => {
-    // A package price must reach M-Pesa only through the existing route, so a
+    // A package price must reach the payment provider only through the existing route, so a
     // package change can never introduce a parallel settlement path.
     expect(read(PAGE)).not.toMatch(/stk|payhero|mpesa/i)
   })

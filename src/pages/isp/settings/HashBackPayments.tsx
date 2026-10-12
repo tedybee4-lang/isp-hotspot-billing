@@ -1,10 +1,10 @@
 /**
  * ISP payment settings — self service.
  *
- * An ISP configures its own M-Pesa collection channel here without involving the
+ * An ISP configures its own payment collection channel here without involving the
  * platform owner. What the screen deliberately does NOT contain: the platform
- * API key, the webhook secret, any Daraja credential, or any encryption key. It
- * shows the ISP's own shortcode and its own HashBack Account ID, because those
+ * API key, the webhook secret, any credential, or any encryption key. It
+ * shows the ISP's own shortcode and its own Account ID, because those
  * are its business data and they authorise nothing.
  *
  * The tenant is never named by the page. `fetchMyPaymentChannel()` takes no ISP
@@ -31,7 +31,7 @@ const CHANNEL_OPTIONS = [
   {
     value: 'CustomerBuyGoodsOnline' as const,
     label: 'Till / Buy Goods',
-    hint: 'Customers pay to a Till number using M-Pesa “Send Money”.',
+    hint: 'Customers pay to a Till number using "Send Money".',
   },
   {
     value: 'CustomerPayBillOnline' as const,
@@ -121,7 +121,7 @@ export function HashBackPaymentSettings() {
   if (config.mode !== 'live') {
     return (
       <Card>
-        <CardHeader title="M-Pesa collection" icon={<CreditCard className="h-4 w-4" />} />
+        <CardHeader title="Payment collection" icon={<CreditCard className="h-4 w-4" />} />
         <div className="p-5">
           <Alert kind="info">
             Demo mode: nothing is sent to a payment provider. Configure Supabase to
@@ -143,7 +143,7 @@ export function HashBackPaymentSettings() {
           Payment Settings
         </h1>
         <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-          Your own M-Pesa Till or PayBill. Customers pay you directly; you never
+          Your own Till or PayBill. Customers pay you directly; you never
           need to handle API keys or passwords.
         </p>
       </div>
@@ -152,10 +152,10 @@ export function HashBackPaymentSettings() {
       {notice && <Alert kind="success">{notice}</Alert>}
 
       <Card>
-        <CardHeader
-          title="M-Pesa collection"
-          icon={<CreditCard className="h-4 w-4" />}
-          action={
+<CardHeader
+        title="Payment collection"
+        icon={<CreditCard className="h-4 w-4" />}
+        action={
             <Badge
               value={STATUS_LABEL[status] ?? status.toUpperCase()}
               className={STATUS_TONE[status] ?? 'slate'}
@@ -255,9 +255,9 @@ export function HashBackPaymentSettings() {
               <div className="flex items-start gap-2">
                 <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" />
                 <span>
-                  Connected. Customers paying with M-Pesa are charged to your{' '}
+                  Connected. Customers paying are charged to your{' '}
                   {isPaybill ? 'PayBill' : 'Till'} and their account is activated
-                  automatically once HashBack confirms the payment.
+                  automatically once the provider confirms the payment.
                 </span>
               </div>
             </Alert>

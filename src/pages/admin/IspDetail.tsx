@@ -218,7 +218,7 @@ return (
         </Card>
       </div>
 
-      <MpesaCard ispId={isp.id} onSaved={() => setNotice({ kind: 'success', text: 'M-Pesa configuration saved.' })} />
+      <PaymentCollectionCard ispId={isp.id} onSaved={() => setNotice({ kind: 'success', text: 'Payment configuration saved.' })} />
 
       <Card>
         <CardHeader
@@ -295,13 +295,13 @@ return (
  * This card collects the Till / PayBill numbers a customer pays to by hand, and
  * the message shown on the payment instruction screen.
  *
- * It deliberately holds no provider credentials. Automated M-Pesa is HashBack,
+ * It deliberately holds no provider credentials. Automated payments are HashBack,
  * and each tenant links its own HashBack channel under /app/settings/payments;
  * the platform's API key and webhook secret live only in the Edge Function
- * environment and the encrypted store. The Safaricom consumer key / secret /
- * passkey form that used to live here was removed with the Daraja cutover.
+ * environment and the encrypted store. The Daraja credentials form that used to
+ * live here was removed with the cutover.
  */
-function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
+function PaymentCollectionCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
   const [cfg, setCfg] = useState<PaymentConfigStatus | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -369,13 +369,13 @@ function MpesaCard({ ispId, onSaved }: { ispId: string; onSaved: () => void }) {
 
         {!cfg?.ready && (
           <Alert kind="success">
-            Add at least a Till or Paybill number. Customers then pay from the M-Pesa
+            Add at least a Till or Paybill number. Customers then pay from the
             app or *334#, and staff confirm the payment to settle the invoice.
           </Alert>
         )}
 
         <Alert kind="info">
-          Automated M-Pesa payments run through <strong>PayHero</strong>. The platform
+          Automated payments run through <strong>PayHero</strong>. The platform
           owner connects PayHero once under <strong>Platform &rarr; Payment gateway
           &rarr; PayHero</strong> and assigns this ISP a PayHero payment channel. There
           is no Safaricom Daraja account to configure: that path was removed.

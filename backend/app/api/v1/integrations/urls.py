@@ -84,10 +84,10 @@ async def get_all_integration_urls(
     Retrieves all auto-configured URLs for a specific integration.
     
     Supported integrations:
-    - mpesa: M-PESA payment gateway
     - paystack: Paystack payment gateway
     - kopokopo: Kopo Kopo payments
     - pesapal: PesaPal payments
+    - payhero: PayHero payment gateway
     """,
 )
 async def get_integration_urls(

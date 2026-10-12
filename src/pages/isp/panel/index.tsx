@@ -327,13 +327,12 @@ function ChannelCell({ payment }: { payment: Payment }) {
 /**
  * The reference an ISP can actually use to chase a payment.
  *
- * Prefers the M-Pesa receipt, because that is what a customer reads off their phone,
+ * Prefers the provider receipt, because that is what a customer reads off their phone,
  * then PayHero's own transaction reference. The internal reference is kept in the
  * search index but is not the headline: it means nothing to the person chasing it.
  */
 function ReferenceCell({ payment }: { payment: Payment }) {
-  const shown = payment.mpesa_receipt
-    ?? payment.provider_receipt
+  const shown = payment.provider_receipt
     ?? payment.provider_transaction_id
     ?? payment.checkout_request_id
   return (
@@ -362,12 +361,11 @@ export function PaymentsPage() {
       rowKey={(p) => p.id} loading={loading}
       statusField="status" statusOptions={['success', 'pending', 'failed', 'reversed']}
       // Searchable by everything an ISP is actually asked to look a payment up by:
-      // the phone on the receipt, the M-Pesa code, PayHero's reference, our own
+      // the phone on the receipt, the provider receipt, PayHero's reference, our own
       // internal reference, and the channel it went through. Before this, a search
       // for a PayHero reference returned nothing at all.
       searchFields={(p) => [
         p.phone ?? '',
-        p.mpesa_receipt ?? '',
         p.provider_receipt ?? '',
         p.provider_transaction_id ?? '',
         p.provider_reference ?? '',
