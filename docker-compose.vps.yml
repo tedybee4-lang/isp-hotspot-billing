@@ -1,0 +1,35 @@
+# =============================================================================
+# ISP Billing Backend — VPS Docker Compose deployment
+# Uses host's PostgreSQL and Redis (already running as system services)
+# =============================================================================
+
+services:
+  isp-billing-backend:
+    image: ghcr.io/tedybee4-lang/isp-hotspot-billing-billing-backend:latest
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      HOST: 0.0.0.0
+      PORT: 8000
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      MASTER_PASSWORD: ${MASTER_PASSWORD:-}
+      GLOBAL_ADMIN_EMAIL: ${GLOBAL_ADMIN_EMAIL:-}
+      GLOBAL_ADMIN_PASSWORD: ${GLOBAL_ADMIN_PASSWORD}
+      MIKROTIK_API_PASSWORD: ${MIKROTIK_API_PASSWORD}
+      FRONTEND_URL: ${FRONTEND_URL}
+      BACKEND_URL: ${BACKEND_URL:-https://ispbilling.example.com}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      SUPABASE_AUTH_URL: ${SUPABASE_AUTH_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
