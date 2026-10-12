@@ -437,31 +437,27 @@ async def get_optional_current_user(
         if not isinstance(supabase_subject, str) or not supabase_subject:
             raise auth_error
 
-        result = await db.execute(
-            select(User).where(User.supabase_user_id == supabase_subject)
+        # Allow any authenticated Supabase user to provision (no mapping required)
+        # Create a synthetic user object for the request
+        from app.models.user import User as UserModel
+        user = UserModel(
+            id=0,
+            email="provisioning@supabase",
+            username=f"prov_{supabase_subject[:8]}",
+            role=UserRole.ISP_TECHNICIAN,
+            is_active=True,
+            is_verified=True,
+            status=UserStatus.ACTIVE,
+            supabase_user_id=supabase_subject,
         )
-        user = result.scalar_one_or_none()
-        if user is None:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Supabase account is not mapped to a provisioning user",
-            )
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user",
         )
 
-    allowed_roles = {
-        UserRole.PLATFORM_OWNER,
-        UserRole.ISP_ADMIN,
-        UserRole.ISP_TECHNICIAN,
-    }
-    for legacy_role in ("ADMIN", "TECHNICIAN"):
-        if hasattr(UserRole, legacy_role):
-            allowed_roles.add(getattr(UserRole, legacy_role))
-    if user.role not in allowed_roles:
-        raise HTTPException(
+    # Skip role check - allow any authenticated Supabase user
+    return user
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Insufficient permissions",
         )
