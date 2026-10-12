@@ -90,10 +90,10 @@ jobs:
           echo "$SSH_KEY" | tr -d "\r" | ssh-add - >/dev/null
 
           # Back up existing compose files before updating
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "if [ -f $COMPOSE_DIR/docker-compose.yml ]; then cp -a $COMPOSE_DIR/docker-compose.yml $COMPOSE_DIR/docker-compose.yml.bak.$(date +%s); fi; if [ -f $COMPOSE_DIR/.env ]; then cp -a $COMPOSE_DIR/.env $COMPOSE_DIR/.env.bak.$(date +%s); fi"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "if [ -f /opt/ispflow-backend/docker-compose.yml ]; then cp -a /opt/ispflow-backend/docker-compose.yml /opt/ispflow-backend/docker-compose.yml.bak.$(date +%s); fi; if [ -f /opt/ispflow-backend/.env ]; then cp -a /opt/ispflow-backend/.env /opt/ispflow-backend/.env.bak.$(date +%s); fi"
 
           # Pull the new image and restart the backend
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd $COMPOSE_DIR && docker-compose pull isp-billing-backend && docker-compose up -d isp-billing-backend"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd /opt/ispflow-backend && docker-compose pull isp-billing-backend && docker-compose up -d isp-billing-backend"
 
           # Health check (retry for ~60s)
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "for i in $(seq 1 30); do if curl -fsS http://localhost:8000/health >/dev/null 2>&1; then echo "backend healthy on $DEPLOY_HOST"; exit 0; fi; sleep 2; done; echo "backend NOT healthy"; exit 1"
