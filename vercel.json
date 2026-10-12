@@ -4,9 +4,9 @@
   "outputDirectory": "dist",
   "installCommand": "npm ci",
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "https://ispbilling.example.com/api/$1" },
-    { "source": "/health", "destination": "https://ispbilling.example.com/health" },
-    { "source": "/health/", "destination": "https://ispbilling.example.com/health" },
+    { "source": "/api/(.*)", "destination": "https://api.87-76-137-72.sslip.io/api/$1" },
+    { "source": "/health", "destination": "https://api.87-76-137-72.sslip.io/health" },
+    { "source": "/health/", "destination": "https://api.87-76-137-72.sslip.io/health" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [
