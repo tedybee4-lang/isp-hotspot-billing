@@ -125,7 +125,8 @@ services:
       SECRET_KEY: ${SECRET_KEY:?required for the backend profile}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       GLOBAL_ADMIN_EMAIL: ${GLOBAL_ADMIN_EMAIL:-}
-      GLOBAL_ADMIN_PASSWORD: ${GLOBAL_ADMIN_PASSWORD:-}
+      GLOBAL_ADMIN_PASSWORD: ${GLOBAL_ADMIN_PASSWORD:?set a strong GLOBAL_ADMIN_PASSWORD for the backend profile}
+      MIKROTIK_API_PASSWORD: ${MIKROTIK_API_PASSWORD:?set a strong MIKROTIK_API_PASSWORD for the backend profile}
       FRONTEND_URL: ${VITE_APP_URL:?set VITE_APP_URL to the Vercel production origin}
       BACKEND_URL: ${BACKEND_URL:-https://ispbilling.example.com}
       CORS_ORIGINS: '["${VITE_APP_URL:?set VITE_APP_URL to the Vercel production origin}"]'

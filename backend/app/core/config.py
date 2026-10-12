@@ -165,7 +165,10 @@ class Settings(BaseSettings):
     encryption_salt: Optional[str] = None
 
     global_admin_email: str = "admin@ispbilling.example.com"
-    global_admin_password: str = "Vertex2020!"  # MUST be changed via env variable in production
+    # No insecure default: the platform super-admin password MUST come from the
+    # environment. validate_production_secrets() rejects an unset or known-weak
+    # value in production so the seeded admin can never use a shipped credential.
+    global_admin_password: str = ""
     
     @model_validator(mode="after")
     def set_encryption_fallback(self) -> "Settings":
@@ -280,7 +283,10 @@ class Settings(BaseSettings):
     mikrotik_default_subnet: str = "192.168.88.0/24"  # Default subnet for provisioning
     # API user credentials (created during bootstrap for secure API access)
     mikrotik_api_username: str = "isp_api"
-    mikrotik_api_password: str = "Vertex2020!"  # MUST be changed via env variable
+    # No insecure default: the MikroTik API user password MUST come from the
+    # environment (MIKROTIK_API_PASSWORD). An empty value disables use of the
+    # shared default so a shipped credential can never be pushed to a router.
+    mikrotik_api_password: str = ""
 
     # Router Agent (polling agent installed on MikroTik routers)
     agent_default_poll_interval: int = 10  # seconds between agent polls (low so hotspot create_user lands fast for post-redeem/payment auto-login)
@@ -388,10 +394,30 @@ class Settings(BaseSettings):
                     "ENCRYPTION_KEY or MASTER_PASSWORD required in production"
                 )
 
-            # Check admin credentials
-            if self.global_admin_password == "superuser123":
+            # Check admin credentials. Reject the unset default AND the known
+            # weak/shipped values (the code default used to be "Vertex2020!",
+            # which the previous single-string check missed entirely).
+            weak_admin_passwords = {
+                "",
+                "superuser123",
+                "vertex2020!",
+                "changeme",
+                "change-me",
+                "admin",
+                "password",
+            }
+            if self.global_admin_password.lower() in weak_admin_passwords:
                 issues.append(
-                    "GLOBAL_ADMIN_PASSWORD must be changed from default in production"
+                    "GLOBAL_ADMIN_PASSWORD must be set to a strong, non-default "
+                    "value in production"
+                )
+
+            # The MikroTik API user password is pushed onto customer routers
+            # during bootstrap, so it must never fall back to a shipped default.
+            if self.mikrotik_api_password.lower() in weak_admin_passwords:
+                issues.append(
+                    "MIKROTIK_API_PASSWORD must be set to a strong, non-default "
+                    "value in production"
                 )
 
             # Check database URL
