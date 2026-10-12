@@ -342,16 +342,6 @@ class Settings(BaseSettings):
     backup_retention_days: int = 30
     backup_s3_bucket: Optional[str] = None
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> Union[List[str], str]:
-        """Parse CORS origins from string or list."""
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        raise ValueError(v)
-
     @field_validator("environment")
     @classmethod
     def validate_environment(cls, v: str) -> str:
