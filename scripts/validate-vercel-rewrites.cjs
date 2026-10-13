@@ -55,8 +55,11 @@ const { convertRewrites } = require("@vercel/routing-utils");
 const routes = convertRewrites(rewrites);
 const first = (p) => routes.find((r) => r.src && new RegExp(r.src).test(p));
 const target = first("/api/v1/routers/");
-if (!target || !String(target.dest).startsWith("https://ispbilling.example.com/api/")) {
-  fail("/api/v1/routers/ must be proxied to the VPS API, not the SPA fallback");
+// Extract the API host from the /api/(.*) rewrite destination
+const apiRewrite = rewrites.find((r) => r.source === "/api/(.*)");
+const expectedApiHost = apiRewrite?.destination?.split("/api/")[0] ?? "https://api.87-76-137-72.sslip.io";
+if (!target || !String(target.dest).startsWith(expectedApiHost + "/api/")) {
+  fail(`/api/v1/routers/ must be proxied to the VPS API (${expectedApiHost}), not the SPA fallback`);
 }
 
 console.log("vercel.json routing OK:", JSON.stringify(rewrites));
