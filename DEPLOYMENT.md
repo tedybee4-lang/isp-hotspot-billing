@@ -1,6 +1,6 @@
 # Live deployment
 
-    https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app
+    https://ispflow.vercel.app
 
 - Project id: `prj_Ze350DIlVGCyAVw1M9ZeBhezLSai`
 - Supabase: `https://dcqcunmdhyonaewwuama.supabase.co`
@@ -8,8 +8,6 @@
 `isp-hotspot-billing.vercel.app` is a **different project** in the same account
 and does not serve this app. Use the URL above, or attach a custom domain in
 the Vercel dashboard under Settings -> Domains.
-The screenshot URL `isp-hotspot-billing-phi.vercel.app` is not the configured
-production deployment; use the live URL above.
 
 ## Test accounts
 
@@ -337,7 +335,7 @@ security headers.
 
 Keep the frontend on Vercel. On the VPS, set these values in the root `.env`:
 
-- `VITE_APP_URL`: `https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app`
+- `VITE_APP_URL`: `https://ispflow.vercel.app`
   or the exact custom production origin (also used as the
   backend CORS allowlist).
 - `BACKEND_URL`: the public HTTPS API origin (placeholder: `https://ispbilling.example.com` — replace with your own domain).

@@ -218,6 +218,7 @@ class Settings(BaseSettings):
         "http://localhost:3000,http://localhost:3001,"
         "http://192.168.100.4:3000,http://192.168.100.4:3001,"
         "http://172.31.255.221:3000,http://172.31.255.221:3001,"
+        "https://ispflow.vercel.app,"
         "https://isp-hotspot-billing-phi.vercel.app,"
         "https://isp-hotspot-billing-mhapfxdsa-malariachrome-7756s-projects.vercel.app"
     )

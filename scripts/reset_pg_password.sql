@@ -1,0 +1,1 @@
+ALTER USER ispflow WITH PASSWORD 'ispflow_secure_password_2024';

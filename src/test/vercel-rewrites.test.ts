@@ -28,7 +28,12 @@ const config = JSON.parse(
   readFileSync(resolve(HERE, '..', '..', 'vercel.json'), 'utf8'),
 ) as { rewrites?: Rewrite[] }
 
-const API_HOST = 'https://ispbilling.example.com'
+/** Extract the API host from the first /api/(.*) rewrite destination. */
+const apiRewrite = config.rewrites?.find((r) => r.source === '/api/(.*)')
+const apiRewriteDest = apiRewrite?.destination
+const API_HOST = typeof apiRewriteDest === 'string' 
+  ? apiRewriteDest.split('/api/')[0] 
+  : 'https://api.87-76-137-72.sslip.io'
 
 /** Routes compiled exactly the way Vercel's CDN compiles them. */
 const routes = convertRewrites(config.rewrites ?? [])
