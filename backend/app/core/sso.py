@@ -48,24 +48,28 @@ class SSOValidator:
     def __init__(self) -> None:
         self._jwks_client: Optional[PyJWKClient] = None
 
+    def _is_configured(self) -> bool:
+        return bool(getattr(settings, "sso_issuer", None) or getattr(settings, "sso_jwks_url", None))
+
     @property
     def jwks_url(self) -> str:
-        # Prefer an explicit JWKS URL; otherwise derive the conventional path.
         if getattr(settings, "sso_jwks_url", None):
             return settings.sso_jwks_url
-        return settings.sso_issuer.rstrip("/") + "/.well-known/jwks.json"
+        issuer = getattr(settings, "sso_issuer", None)
+        if not issuer:
+            raise RuntimeError("SSO issuer not configured")
+        return issuer.rstrip("/") + "/.well-known/jwks.json"
 
     def _client(self) -> PyJWKClient:
+        if not self._is_configured():
+            raise RuntimeError("SSO not configured")
         if self._jwks_client is None:
-            # PyJWKClient caches fetched signing keys in-process.
             self._jwks_client = PyJWKClient(self.jwks_url, cache_keys=True)
         return self._jwks_client
 
     def decode(self, token: str) -> Dict[str, Any]:
-        """Validate signature/exp/iss/aud and return the claim set.
-
-        Raises ``jwt.PyJWTError`` subclasses on any validation failure.
-        """
+        if not self._is_configured():
+            raise jwt.PyJWTError("SSO not configured")
         signing_key = self._client().get_signing_key_from_jwt(token)
         claims = jwt.decode(
             token,
@@ -145,8 +149,11 @@ async def get_optional_sso_claims(request: Request) -> Optional[Dict[str, Any]]:
     token = _extract_bearer(request)
     if not token or not looks_like_sso_token(token):
         return None
+    validator = get_validator()
+    if not validator._is_configured():
+        return None
     try:
-        return get_validator().decode(token)
+        return validator.decode(token)
     except jwt.PyJWTError as exc:
         logger.info("Optional SSO token validation failed: %s", exc)
         return None
