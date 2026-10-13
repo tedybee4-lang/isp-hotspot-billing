@@ -1,5 +1,5 @@
 /**
- * Provisioning API client — clean, typed, and reliable.
+ * Provisioning API client â€” clean, typed, and reliable.
  *
  * This replaces the legacy client with:
  * - Proper Supabase session handling (waits for initialization)
@@ -67,7 +67,7 @@ export class ProvisionError extends Error {
     let needsSignIn = false
 
     // A non-JSON body is a routing/proxy problem, not an API answer. That is
-    // checked FIRST — including for 5xx — so a Cloudflare or VPS proxy HTML
+    // checked FIRST â€” including for 5xx â€” so a Cloudflare or VPS proxy HTML
     // page is reported as a misconfigured rewrite rather than a generic server
     // error the operator cannot act on.
     if (!isJson) {
@@ -75,8 +75,8 @@ export class ProvisionError extends Error {
       message = status === 401
         ? 'The provisioning engine rejected the request with an HTML page instead of JSON. The API rewrite may be misconfigured.'
         : isHtml
-          ? 'The provisioning engine returned an HTML page instead of JSON. The API rewrite may be misconfigured, or a proxy returned an error page.'
-          : 'The provisioning engine returned a non-JSON response.'
+          ? 'The provisioning engine returned an HTML page instead of JSON. (ct=, status=) The API rewrite may be misconfigured, or a proxy returned an error page.'
+          : 'The provisioning engine returned a non-JSON response. (ct=, status=)'
       needsSignIn = status === 401
     } else if (status === 401) {
       code = ProvisionErrorCode.NOT_AUTHENTICATED
@@ -179,7 +179,7 @@ async function getAccessToken(): Promise<string> {
     return data.session.access_token
   }
 
-  // No session — try to refresh (handles auto-refresh on page load)
+  // No session â€” try to refresh (handles auto-refresh on page load)
   const { data: refreshData, error: refreshError } = await sb.auth.refreshSession()
   if (refreshError || !refreshData.session?.access_token) {
     throw new ProvisionError(
@@ -231,8 +231,8 @@ async function api<T>(
       : ''
     throw new ProvisionError(
       contentType.includes('text/html')
-        ? `The provisioning engine at ${path} returned an HTML page instead of JSON. The API rewrite may be misconfigured.`
-        : `The provisioning engine at ${path} returned a non-JSON response.`,
+        ? `The provisioning engine at ${path} returned an HTML page instead of JSON. (ct=, status=) The API rewrite may be misconfigured.`
+        : `The provisioning engine at ${path} returned a non-JSON response. (ct=, status=)`,
       ProvisionErrorCode.NON_JSON_RESPONSE,
       {
         status: res.status,
@@ -263,9 +263,9 @@ async function api<T>(
   return body as T
 }
 
-// ───────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Engine response shapes (matching backend contracts)
-// ───────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type ProvisioningServiceType = 'hotspot' | 'pppoe_server' | 'both'
 
@@ -367,21 +367,21 @@ export interface DirectApiStatus {
   has_cached_scan: boolean
 }
 
-// ───────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Token management (for test compatibility)
-// ───────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-/** Check if we have a cached token (always false now — we use Supabase session). */
+/** Check if we have a cached token (always false now â€” we use Supabase session). */
 export function hasAuthToken(): boolean {
   return false
 }
 
-/** Clear any cached token (no-op — we use Supabase session). */
+/** Clear any cached token (no-op â€” we use Supabase session). */
 export function clearAuthToken(): void {
   // No-op: we don't cache tokens locally
 }
 
-/** Sign in to the provisioning engine (no-op — we use Supabase auth). */
+/** Sign in to the provisioning engine (no-op â€” we use Supabase auth). */
 export async function signIn(_email: string, _password: string): Promise<void> {
   // No-op: authentication is handled by Supabase
   // This exists for test compatibility
@@ -403,9 +403,9 @@ export async function signIn(_email: string, _password: string): Promise<void> {
   }
 }
 
-// ───────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Endpoints
-// ───────────────────────────────────────────────────────────────────────────
+// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /** Lists routers known to the engine (used to find an existing row by name). */
 export async function findRouter(name: string): Promise<BackendRouter | null> {
@@ -535,7 +535,7 @@ export async function waitForScanReport(
     const err = new ProvisionError(
       'No scan report from the router yet. Paste the bootstrap one-liner into ' +
         'the router terminal (Winbox: New Terminal), wait ~10 seconds for it ' +
-        'to finish, then scan again — the wizard reads the report the router ' +
+        'to finish, then scan again â€” the wizard reads the report the router ' +
         'sends back, so it also works behind NAT.' +
         (lastDetail ? ` Last response: ${lastDetail}` : ''),
       ProvisionErrorCode.SERVER_ERROR,
