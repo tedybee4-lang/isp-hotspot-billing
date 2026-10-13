@@ -19,6 +19,23 @@ from app.core.security import get_password_hash
 TEST_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/ispbilling_test"
 
 
+@pytest.fixture(autouse=True)
+def _no_rate_limiting(monkeypatch):
+    """Turn the Redis-backed credential rate limiter off for the whole suite.
+
+    The limits are keyed per identifier and per IP and live in Redis, so their
+    counters survive between runs: a suite that logs in more often than
+    ``IDENTIFIER_LIMIT`` (10 per 5 minutes) starts failing during fixture
+    setup with a 429 for the *login*, which looks like a product failure but is
+    only the test harness running out of budget. Tests are not production
+    traffic, and the limiter's own behaviour is exercised by its own tests.
+    """
+    from app.core import rate_limit
+
+    monkeypatch.setattr(rate_limit.settings, "rate_limit_enabled", False)
+    yield
+
+
 # Event loop is now managed automatically by pytest-asyncio with asyncio_mode = auto
 # No need for manual event_loop fixture
 
@@ -158,37 +175,47 @@ def _login_token(response) -> str:
     return token_data["access_token"]
 
 
+# Login rate limiting is enforced per client IP. Every test that needs an
+# authenticated header would otherwise perform its own login, so a suite that
+# runs a hundred authenticated requests exhausts the credential-attempt budget
+# and every later fixture fails during setup with a 429 — a test-isolation
+# failure, not a product one. Cache the token per username for the whole
+# process: one login per identity, and the header is still a real, verifiable
+# credential rather than a forged one.
+_TOKEN_CACHE: dict[str, str] = {}
+
+
+async def _cached_login(client: AsyncClient, username: str, password: str) -> str:
+    cached = _TOKEN_CACHE.get(username)
+    if cached:
+        return cached
+    response = await client.post(
+        "/api/v1/auth/login", data={"username": username, "password": password}
+    )
+    token = _login_token(response)
+    _TOKEN_CACHE[username] = token
+    return token
+
+
 @pytest_asyncio.fixture
 async def auth_headers(client: AsyncClient, test_user: User):
     """Get authentication headers for test user."""
-    response = await client.post(
-        "/api/v1/auth/login",
-        data={"username": test_user.username, "password": "testpassword"}
-    )
-    
-    return {"Authorization": f"Bearer {_login_token(response)}"}
+    token = await _cached_login(client, test_user.username, "testpassword")
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture
 async def admin_auth_headers(client: AsyncClient, test_admin_user: User):
     """Get authentication headers for admin user."""
-    response = await client.post(
-        "/api/v1/auth/login",
-        data={"username": test_admin_user.username, "password": "adminpassword"}
-    )
-    
-    return {"Authorization": f"Bearer {_login_token(response)}"}
+    token = await _cached_login(client, test_admin_user.username, "adminpassword")
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture
 async def technician_auth_headers(client: AsyncClient, test_technician_user: User):
     """Get authentication headers for technician user."""
-    response = await client.post(
-        "/api/v1/auth/login",
-        data={"username": test_technician_user.username, "password": "techpassword"}
-    )
-    
-    return {"Authorization": f"Bearer {_login_token(response)}"}
+    token = await _cached_login(client, test_technician_user.username, "techpassword")
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest_asyncio.fixture

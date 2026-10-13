@@ -180,18 +180,19 @@ async def get_current_user(
     raise credentials_exception
 
 
-async def _resolve_supabase_user(
-    request: Request,
-    db: AsyncSession,
-) -> Optional[User]:
-    """Resolve a local User from a Supabase-issued access token.
+async def _verify_supabase_subject(request: Request) -> Optional[str]:
+    """Verify the request's Bearer token against Supabase and return its subject.
 
-    Returns the mapped local ``User`` when the request carries a valid Supabase
-    JWT whose subject is mapped via ``users.supabase_user_id``. Returns ``None``
-    when there is no Bearer token, the Supabase bridge is not configured, the
-    token is not a valid Supabase token, or the subject is unmapped — so the
-    caller falls back to its normal 401. Raises 503 only when the bridge is
-    configured but Supabase is unreachable (mirrors get_optional_current_user).
+    Returns the Supabase user id when the request carries a Bearer token that
+    Supabase accepted, ``None`` when Supabase rejected it (or when the request
+    has no Bearer token, the bridge is unconfigured, or the response body is
+    unusable). Raises 503 only when the bridge is configured but Supabase is
+    unreachable — that is a server-side fault, never a caller error.
+
+    Verification is delegated to Supabase itself (``GET /auth/v1/user`` with the
+    public anon key), so there is no signature check here to get wrong, no
+    algorithm confusion, and no way for an arbitrary RS256 token to be
+    accepted. Only the public anon key is ever used.
     """
     authorization = request.headers.get("Authorization", "")
     scheme, _, token = authorization.partition(" ")
@@ -227,11 +228,37 @@ async def _resolve_supabase_user(
         return None
     if not isinstance(supabase_subject, str) or not supabase_subject:
         return None
+    return supabase_subject
 
+
+async def _load_user_by_supabase_subject(
+    db: AsyncSession,
+    supabase_subject: str,
+) -> Optional[User]:
+    """Load the authoritative local ``users`` row for a Supabase subject."""
     result = await db.execute(
         select(User).where(User.supabase_user_id == supabase_subject)
     )
     return result.scalar_one_or_none()
+
+
+async def _resolve_supabase_user(
+    request: Request,
+    db: AsyncSession,
+) -> Optional[User]:
+    """Resolve a local User from a Supabase-issued access token.
+
+    Returns the mapped local ``User`` when the request carries a valid Supabase
+    JWT whose subject is mapped via ``users.supabase_user_id``. Returns ``None``
+    when there is no Bearer token, the Supabase bridge is not configured, the
+    token is not a valid Supabase token, or the subject is unmapped — so the
+    caller falls back to its normal 401. Raises 503 only when the bridge is
+    configured but Supabase is unreachable.
+    """
+    supabase_subject = await _verify_supabase_subject(request)
+    if supabase_subject is None:
+        return None
+    return await _load_user_by_supabase_subject(db, supabase_subject)
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -389,74 +416,101 @@ async def get_optional_current_user(
 ) -> User:
     """Require an active technician/admin identity for operator provisioning.
 
-    The historical name is retained to avoid breaking route imports. Missing,
-    invalid, and expired credentials are rejected by the unified resolver;
-    no synthetic or privileged user is ever substituted.
+    The historical name is retained to avoid breaking route imports. Resolution
+    order:
+
+    1. The unified resolver — the local HS256 JWT or a central SSO RS256 JWT.
+    2. A Supabase-issued access token, verified by Supabase itself and then
+       mapped to the authoritative local ``users`` row via
+       ``supabase_user_id``.
+
+    The mapped local row is authoritative for active state, role and
+    organization, so tenant isolation and the router provisioning permission
+    are enforced exactly as they are for every other authenticated endpoint.
+
+    Status semantics, distinct at every step:
+      * 401 — no Bearer token, or Supabase rejected the token (invalid/expired).
+      * 403 — a valid token whose subject is not provisioned as local staff
+        (unmapped subject, customer role, or inactive account).
+      * 503 — the Supabase bridge is configured but unreachable/misconfigured.
+        A 503 is a server fault and is deliberately never reported as an
+        authentication failure.
+
+    No synthetic or privileged user is ever substituted: fabricating one here
+    (the previous behaviour) broke ``provisioning_sessions.user_id``'s
+    foreign key, destroyed tenant scoping, and hid a NameError as a 500.
     """
+    auth_error = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    # 1) Local JWT / SSO first (back-compat path).
     try:
         user = await get_current_user_unified(request=request, db=db)
-    except HTTPException as auth_error:
+    except HTTPException:
         authorization = request.headers.get("Authorization", "")
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
             raise auth_error
-
-        supabase_url = (settings.supabase_auth_url or "").rstrip("/")
-        anon_key = (settings.supabase_anon_key or "").strip()
-        if not supabase_url.startswith("https://") or not anon_key:
+        # A Bearer token the local and SSO resolvers did not recognise: it is a
+        # Supabase JWT, resolved below.
+    else:
+        if not user.is_active:
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Supabase provisioning identity verification is not configured with a public HTTPS URL and anon key",
-            ) from auth_error
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Account is not active",
+            )
+        return user
 
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(
-                    f"{supabase_url}/auth/v1/user",
-                    headers={
-                        "apikey": anon_key,
-                        "Authorization": f"Bearer {token.strip()}",
-                    },
-                )
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Supabase identity verification is temporarily unavailable",
-            ) from exc
+    # 2) Supabase access token. The request carries a Bearer token the local
+    #    and SSO resolvers did not recognise, so it must be a Supabase JWT.
+    supabase_url = (settings.supabase_auth_url or "").rstrip("/")
+    anon_key = (settings.supabase_anon_key or "").strip()
+    if not supabase_url.startswith("https://") or not anon_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Supabase provisioning identity verification is not configured "
+                "with a public HTTPS URL and anon key"
+            ),
+        )
 
-        if response.status_code != status.HTTP_200_OK:
-            raise auth_error
+    try:
+        supabase_subject = await _verify_supabase_subject(request)
+    except HTTPException:
+        # 503: Supabase itself is unreachable. Never masked as an auth error.
+        raise
+    if supabase_subject is None:
+        # Supabase rejected the token: invalid or expired.
+        raise auth_error
 
-        try:
-            supabase_subject = response.json().get("id")
-        except (ValueError, AttributeError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Supabase identity verification returned an invalid response",
-            ) from exc
-        if not isinstance(supabase_subject, str) or not supabase_subject:
-            raise auth_error
-
-        # Allow any authenticated Supabase user to provision (no mapping required)
-        # Create a synthetic user object for the request
-        from app.models.user import User as UserModel
-        user = UserModel(
-            id=0,
-            email="provisioning@supabase",
-            username=f"prov_{supabase_subject[:8]}",
-            role=UserRole.ISP_TECHNICIAN,
-            is_active=True,
-            is_verified=True,
-            status=UserStatus.ACTIVE,
-            supabase_user_id=supabase_subject,
+    # Identity only — the mapped local row remains authoritative.
+    user = await _load_user_by_supabase_subject(db, supabase_subject)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This account is not provisioned for router management. "
+                "Ask your administrator to grant access."
+            ),
         )
     if not user.is_active:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account is not active",
         )
 
-    # Skip role check - allow any authenticated Supabase user
+    # Router provisioning is an ISP-staff operation. Platform owners and ISP
+    # admins/technicians only — a customer identity must never enroll a router,
+    # which is how a tenant's routers would otherwise be reachable.
+    if user.role not in (UserRole.PLATFORM_OWNER, UserRole.ISP_ADMIN, UserRole.ISP_TECHNICIAN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Insufficient permissions",
+        )
+
     return user
 
 

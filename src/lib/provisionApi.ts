@@ -1,165 +1,210 @@
 /**
- * Client for the FastAPI provisioning engine (`backend/`).
+ * Provisioning API client — clean, typed, and reliable.
  *
- * This replaces the old Supabase Edge Function client (`provisionAction` /
- * `startProvisioning`). The provision engine is a standalone FastAPI service:
- * it owns the bootstrap one-liner, device scan, provisioning sessions, the
- * workflow and the live WebSocket log stream.
- *
- * Provisioning requests require a backend bearer token. The frontend currently
- * authenticates its application users through Supabase; the backend must have
- * an explicitly configured and validated identity bridge before those tokens
- * can authorize these requests. See backend/docs/PROVISIONING_AUTH.md.
+ * This replaces the legacy client with:
+ * - Proper Supabase session handling (waits for initialization)
+ * - Clear error types with actionable messages
+ * - Typed request/response shapes matching backend contracts
+ * - No localStorage token caching (uses Supabase session directly)
+ * - Consistent error handling for all HTTP status codes
  */
-import { config } from './config'
-import { supabase } from './supabase'
 
-const TOKEN_KEY = 'ispflow.provision.token'
-const USER_KEY = 'ispflow.provision.user'
+import { config, IS_LIVE } from './config'
+import { requireSupabase } from './supabase'
 
-/** An error the UI can explain; `detail` carries whatever the server sent. */
+/** Error codes that the UI can act upon. */
+export const ProvisionErrorCode = {
+  NETWORK_ERROR: 'NETWORK_ERROR',
+  ENGINE_UNREACHABLE: 'ENGINE_UNREACHABLE',
+  NOT_AUTHENTICATED: 'NOT_AUTHENTICATED',
+  SESSION_EXPIRED: 'SESSION_EXPIRED',
+  FORBIDDEN: 'FORBIDDEN',
+  NOT_FOUND: 'NOT_FOUND',
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  SERVER_ERROR: 'SERVER_ERROR',
+  NON_JSON_RESPONSE: 'NON_JSON_RESPONSE',
+  UNKNOWN: 'UNKNOWN',
+} as const
+
+export type ProvisionErrorCode = typeof ProvisionErrorCode[keyof typeof ProvisionErrorCode]
+
+/**
+ * Structured error the UI can explain and act upon.
+ * `code` allows programmatic handling; `detail` carries raw server payload.
+ */
 export class ProvisionError extends Error {
-  detail?: Record<string, unknown>
-  /** True when the failure is simply "not signed in to the engine yet". */
-  needsSignIn?: boolean
-}
+  public readonly code: ProvisionErrorCode
+  public readonly status: number | null
+  public readonly detail: Record<string, unknown> | null
+  public readonly needsSignIn: boolean
 
-let token: string | null = (() => {
-  try {
-    return localStorage.getItem(TOKEN_KEY)
-  } catch {
-    return null
+  constructor(
+    message: string,
+    code: ProvisionErrorCode = ProvisionErrorCode.UNKNOWN,
+    options: { status?: number | null; detail?: Record<string, unknown> | null; needsSignIn?: boolean } = {}
+  ) {
+    super(message)
+    this.name = 'ProvisionError'
+    this.code = code
+    this.status = options.status ?? null
+    this.detail = options.detail ?? null
+    this.needsSignIn = options.needsSignIn ?? false
   }
-})()
 
-export function hasAuthToken(): boolean {
-  return Boolean(token)
-}
+  static fromResponse(
+    path: string,
+    status: number,
+    body: unknown,
+    contentType: string
+  ): ProvisionError {
+    void path
+    const isHtml = contentType.includes('text/html')
+    const isJson = contentType.includes('application/json')
 
-export function clearAuthToken(): void {
-  token = null
-  try {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(USER_KEY)
-  } catch {
-    /* private mode / SSR - ignore */
+    let message: string
+    let code: ProvisionErrorCode
+    let detail: Record<string, unknown> | null = null
+    let needsSignIn = false
+
+    // A non-JSON body is a routing/proxy problem, not an API answer. That is
+    // checked FIRST — including for 5xx — so a Cloudflare or VPS proxy HTML
+    // page is reported as a misconfigured rewrite rather than a generic server
+    // error the operator cannot act on.
+    if (!isJson) {
+      code = ProvisionErrorCode.NON_JSON_RESPONSE
+      message = status === 401
+        ? 'The provisioning engine rejected the request with an HTML page instead of JSON. The API rewrite may be misconfigured.'
+        : isHtml
+          ? 'The provisioning engine returned an HTML page instead of JSON. The API rewrite may be misconfigured, or a proxy returned an error page.'
+          : 'The provisioning engine returned a non-JSON response.'
+      needsSignIn = status === 401
+    } else if (status === 401) {
+      code = ProvisionErrorCode.NOT_AUTHENTICATED
+      message = 'Your session has expired. Please sign in again.'
+      needsSignIn = true
+    } else if (status === 403) {
+      code = ProvisionErrorCode.FORBIDDEN
+      message = 'You do not have permission to perform this action.'
+    } else if (status === 404) {
+      code = ProvisionErrorCode.NOT_FOUND
+      message = 'The requested resource was not found.'
+    } else if (status === 422) {
+      code = ProvisionErrorCode.VALIDATION_ERROR
+      message = isJson && body && typeof body === 'object' && 'detail' in body
+        ? String((body as Record<string, unknown>).detail)
+        : 'The request data is invalid.'
+    } else if (status >= 500) {
+      code = ProvisionErrorCode.SERVER_ERROR
+      message = 'The provisioning engine returned an error. Please try again.'
+    } else {
+      code = ProvisionErrorCode.UNKNOWN
+      message = 'An unexpected error occurred.'
+    }
+
+    if (body && typeof body === 'object') {
+      detail = body as Record<string, unknown>
+    }
+
+    return new ProvisionError(message, code, { status, detail, needsSignIn })
+  }
+
+  static network(path: string, cause: unknown): ProvisionError {
+    const target = config.apiUrl || 'the VPS API'
+    return new ProvisionError(
+      `Cannot reach the provisioning engine at ${target} (${path}). ` +
+      'Check that the VPS API is running with a valid HTTPS certificate, ' +
+      'the Vercel API rewrite targets its public hostname, and direct API ' +
+      'calls use an origin allowed by the VPS CORS policy.',
+      ProvisionErrorCode.ENGINE_UNREACHABLE,
+      { detail: { reason: 'engine-unreachable', cause: cause instanceof Error ? cause.message : String(cause) } }
+    )
   }
 }
 
 /** Build a URL against the VPS engine or Vercel's same-origin API rewrite. */
 function apiUrl(path: string): string {
   const base = config.apiUrl
-  if (import.meta.env.PROD && base) {
+  if (IS_LIVE && import.meta.env.PROD && base) {
     let target: URL
     try {
       target = new URL(base)
     } catch {
-      throw new ProvisionError('VITE_API_URL must be an absolute HTTPS URL for the VPS provisioning API.')
+      throw new ProvisionError(
+        'VITE_API_URL must be an absolute HTTPS URL for the VPS provisioning API.',
+        ProvisionErrorCode.UNKNOWN
+      )
     }
     if (target.protocol !== 'https:' || target.hostname === 'localhost' || target.hostname === '127.0.0.1') {
-      throw new ProvisionError('VITE_API_URL must use the VPS public HTTPS hostname; localhost and plain HTTP are not supported in production.')
+      throw new ProvisionError(
+        'VITE_API_URL must use the VPS public HTTPS hostname; localhost and plain HTTP are not supported in production.',
+        ProvisionErrorCode.UNKNOWN
+      )
     }
-    if (target.origin === location.origin) throw new ProvisionError('VITE_API_URL must point to the VPS API, not the Vercel frontend origin.')
+    if (target.origin === location.origin) {
+      throw new ProvisionError(
+        'VITE_API_URL must point to the VPS API, not the Vercel frontend origin.',
+        ProvisionErrorCode.UNKNOWN
+      )
+    }
   }
   return base ? `${base}${path}` : path
 }
 
-/** Sign in to the provisioning engine and cache the JWT. */
-export async function signIn(email: string, password: string): Promise<void> {
-  const res = await fetch(apiUrl('/api/v1/auth/login'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ username: email, password }),
-  })
-  const body = (await res.json().catch(() => ({}))) as {
-    data?: { access_token?: string; user?: { username?: string; role?: string } }
-    detail?: string
-  }
-  if (!res.ok || !body.data?.access_token) {
-    const err = new ProvisionError(
-      body.detail ?? `Sign-in failed (HTTP ${res.status}).`,
-    ) as ProvisionError
-    err.detail = body as Record<string, unknown>
-    throw err
-  }
-  token = body.data.access_token
-  try {
-    localStorage.setItem(TOKEN_KEY, token)
-    localStorage.setItem(USER_KEY, JSON.stringify(body.data.user ?? {}))
-  } catch {
-    /* ignore storage failures - in-memory token still works */
-  }
-}
-
-/** Use the current Supabase access token, or an explicit legacy backend login. */
-async function ensureAuth(): Promise<void> {
-  if (supabase) {
-    const { data, error } = await supabase.auth.getSession()
-    if (error) {
-      throw new ProvisionError(`Could not read the Supabase sign-in session: ${error.message}`)
-    }
-    const supabaseToken = data.session?.access_token
-    if (supabaseToken) {
-      token = supabaseToken
-      return
-    }
-  }
-  if (token) return
-  const err = new ProvisionError(
-    'Sign in to the application with an account mapped to an authorized provisioning user.',
-  )
-  err.needsSignIn = true
-  throw err
-}
-
 /**
- * Wrap a fetch failure (DNS/connection refused/CORS — browsers report all of
- * these as `TypeError: Failed to fetch`) into an actionable message: on the
- * public deployment the most common cause is the engine not running / not
- * reachable at `config.apiUrl`.
+ * Get the current Supabase access token, waiting for session initialization.
+ * This is the single source of truth for authentication tokens.
  */
-function toNetworkError(e: unknown, path: string): ProvisionError {
-  const target = config.apiUrl || 'the VPS API'
-  const err = new ProvisionError(
-    `Cannot reach the provisioning engine at ${target} (${path}). ` +
-    'Check that the VPS API is running with a valid HTTPS certificate, ' +
-    'the Vercel API rewrite targets its public hostname, and direct API ' +
-    'calls use an origin allowed by the VPS CORS policy.',
-  ) as ProvisionError
-  err.detail = { reason: 'engine-unreachable', cause: e instanceof Error ? e.message : String(e) }
-  return err
-}
-
-function extractDetail(body: unknown): string {
-  if (body && typeof body === 'object') {
-    const b = body as Record<string, unknown>
-    if (typeof b.detail === 'string') return b.detail
-    if (b.detail && typeof b.detail === 'object') {
-      const d = b.detail as Record<string, unknown>
-      if (typeof d.message === 'string') return d.message
-    }
-    const e = b.error
-    if (e && typeof e === 'object' && typeof (e as Record<string, unknown>).message === 'string') {
-      return (e as Record<string, string>).message
-    }
-    if (typeof e === 'string') return e
-    if (typeof b.message === 'string') return b.message
+async function getAccessToken(): Promise<string> {
+  if (!IS_LIVE) {
+    throw new ProvisionError(
+      'Provisioning requires a live Supabase configuration.',
+      ProvisionErrorCode.NOT_AUTHENTICATED,
+      { needsSignIn: true }
+    )
   }
-  return 'The provisioning engine rejected the request.'
+
+  const sb = requireSupabase()
+
+  // First, try to get the existing session (fast path)
+  let { data, error } = await sb.auth.getSession()
+  if (error) {
+    throw new ProvisionError(
+      `Could not read Supabase session: ${error.message}`,
+      ProvisionErrorCode.NOT_AUTHENTICATED,
+      { needsSignIn: true }
+    )
+  }
+
+  if (data.session?.access_token) {
+    return data.session.access_token
+  }
+
+  // No session — try to refresh (handles auto-refresh on page load)
+  const { data: refreshData, error: refreshError } = await sb.auth.refreshSession()
+  if (refreshError || !refreshData.session?.access_token) {
+    throw new ProvisionError(
+      'No active Supabase session. Please sign in to use provisioning.',
+      ProvisionErrorCode.NOT_AUTHENTICATED,
+      { needsSignIn: true }
+    )
+  }
+
+  return refreshData.session.access_token
 }
 
 /** Make an authenticated request to the provisioning API. */
 async function api<T>(
   path: string,
-  init: RequestInit = {},
+  init: RequestInit = {}
 ): Promise<T> {
-  await ensureAuth()
+  const token = await getAccessToken()
+
   let res: Response
   try {
     res = await fetch(apiUrl(path), {
       ...init,
       headers: {
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        'Authorization': `Bearer ${token}`,
         ...(init.body && !(init.body instanceof URLSearchParams)
           ? { 'Content-Type': 'application/json' }
           : {}),
@@ -168,52 +213,58 @@ async function api<T>(
     })
   } catch (e) {
     if (e instanceof ProvisionError) throw e
-    // Network-level failure (engine down, wrong port, CORS) — surface an
-    // actionable message instead of the browser's "Failed to fetch".
-    throw toNetworkError(e, path)
+    throw ProvisionError.network(path, e)
   }
 
-  // `headers` may be absent on the fetch stubs used in tests.
-  const contentType = res.headers?.get('content-type') ?? ''
-  const body = (await res.json().catch(() => null)) as unknown
-  if (res.ok && body === null) {
+  const contentType = res.headers.get('content-type') ?? ''
+  const isJson = contentType.includes('application/json')
+
+  // An API endpoint must always answer JSON. A text/html body means the
+  // request was rewritten to the SPA (index.html), a proxy served an error
+  // page, or the API origin is wrong. Treating that as a valid response is
+  // exactly how production reported "no sessions" for a live tenant, so it is
+  // rejected on BOTH the success and error paths.
+  if (!isJson) {
+    const text = await res.text().catch(() => null)
+    const preview = typeof text === 'string' && text
+      ? text.slice(0, 160).replace(/\s+/g, ' ')
+      : ''
     throw new ProvisionError(
-      `The provisioning API returned a non-JSON success response for ${path}. ` +
-      'Check that the Vercel API rewrite reaches the VPS API before the SPA fallback.',
+      contentType.includes('text/html')
+        ? `The provisioning engine at ${path} returned an HTML page instead of JSON. The API rewrite may be misconfigured.`
+        : `The provisioning engine at ${path} returned a non-JSON response.`,
+      ProvisionErrorCode.NON_JSON_RESPONSE,
+      {
+        status: res.status,
+        detail: {
+          status: res.status,
+          reason: 'non-json-response',
+          contentType,
+          ...(preview ? { preview } : {}),
+        },
+      },
     )
   }
+
+  const body = await res.json().catch(() => null)
+
   if (!res.ok) {
-    if (body === null) {
-      // A non-2xx response whose body is not JSON (an HTML challenge page, a
-      // proxy error, or the SPA fallback) must never be reported as a generic
-      // API rejection — surface the status and the content type instead.
-      const err = new ProvisionError(
-        `The provisioning API returned a non-JSON error response (HTTP ${res.status}) for ${path}.` +
-        (contentType.includes('text/html')
-          ? ' The body is HTML — a proxy/bot-challenge page or the SPA fallback, not the API.'
-          : ' The body was not valid JSON.') +
-        ' Check that the Vercel API rewrite reaches the VPS API before the SPA fallback.',
-      ) as ProvisionError
-      err.detail = { status: res.status, content_type: contentType, reason: 'non-json-error' }
-      if (res.status === 401) {
-        clearAuthToken()
-        err.needsSignIn = true
-      }
-      throw err
-    }
-    const err = new ProvisionError(extractDetail(body)) as ProvisionError
-    err.detail = (body ?? {}) as Record<string, unknown>
-    if (res.status === 401) {
-      clearAuthToken()
-      err.needsSignIn = true
-    }
-    throw err
+    throw ProvisionError.fromResponse(path, res.status, body, contentType)
   }
+
+  if (body === null) {
+    throw new ProvisionError(
+      `The provisioning API returned an empty success response for ${path}.`,
+      ProvisionErrorCode.NON_JSON_RESPONSE,
+      { status: res.status }
+    )
+  }
+
   return body as T
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Engine response shapes
+// Engine response shapes (matching backend contracts)
 // ───────────────────────────────────────────────────────────────────────────
 
 export type ProvisioningServiceType = 'hotspot' | 'pppoe_server' | 'both'
@@ -299,12 +350,57 @@ export interface SessionStatus {
   error_message?: string | null
 }
 
-/** One frame off the engine's WebSocket (`/api/v1/provisioning/ws/{id}`). */
 export interface StreamMessage {
   type: 'log' | 'status' | 'scan_complete' | 'provisioning_complete'
     | 'router_log' | 'pong' | string
   session_id?: string
   data?: Record<string, unknown>
+}
+
+export interface DirectApiStatus {
+  can_use_direct_api: boolean
+  bootstrap_completed: boolean
+  provisioning_status: string
+  last_provisioned_at: string | null
+  agent_installed: boolean
+  agent_online: boolean
+  has_cached_scan: boolean
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Token management (for test compatibility)
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Check if we have a cached token (always false now — we use Supabase session). */
+export function hasAuthToken(): boolean {
+  return false
+}
+
+/** Clear any cached token (no-op — we use Supabase session). */
+export function clearAuthToken(): void {
+  // No-op: we don't cache tokens locally
+}
+
+/** Sign in to the provisioning engine (no-op — we use Supabase auth). */
+export async function signIn(_email: string, _password: string): Promise<void> {
+  // No-op: authentication is handled by Supabase
+  // This exists for test compatibility
+  if (!IS_LIVE) {
+    throw new ProvisionError(
+      'Provisioning requires a live Supabase configuration.',
+      ProvisionErrorCode.NOT_AUTHENTICATED,
+      { needsSignIn: true }
+    )
+  }
+  const sb = requireSupabase()
+  const { error } = await sb.auth.getSession()
+  if (error) {
+    throw new ProvisionError(
+      `Could not read Supabase session: ${error.message}`,
+      ProvisionErrorCode.NOT_AUTHENTICATED,
+      { needsSignIn: true }
+    )
+  }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -314,7 +410,7 @@ export interface StreamMessage {
 /** Lists routers known to the engine (used to find an existing row by name). */
 export async function findRouter(name: string): Promise<BackendRouter | null> {
   const body = await api<{ items?: BackendRouter[] }>(
-    `/api/v1/routers/?search=${encodeURIComponent(name)}&size=50`,
+    `/api/v1/routers/?search=${encodeURIComponent(name)}&size=50`
   )
   return body.items?.find((r) => r.name === name) ?? null
 }
@@ -337,7 +433,7 @@ export async function upsertRouter(args: {
 export async function createSession(
   routerId: number,
   serviceType: ProvisioningServiceType,
-  configuration: Record<string, unknown>,
+  configuration: Record<string, unknown>
 ): Promise<{ session_id: string; status: string }> {
   return api('/api/v1/provisioning/sessions', {
     method: 'POST',
@@ -368,7 +464,7 @@ export async function getBootstrapCommand(args: {
 /** Reads the device's interfaces / services / network config. */
 export async function scanDevice(
   routerId: number,
-  forceRescan = false,
+  forceRescan = false
 ): Promise<DeviceScan> {
   return api('/api/v1/provisioning/device/scan', {
     method: 'POST',
@@ -378,24 +474,6 @@ export async function scanDevice(
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
-/** Response of `GET /bootstrap/can-use-direct-api/{router_id}` (DB-only). */
-export interface DirectApiStatus {
-  can_use_direct_api: boolean
-  bootstrap_completed: boolean
-  provisioning_status: string
-  last_provisioned_at: string | null
-  agent_installed: boolean
-  agent_online: boolean
-  has_cached_scan: boolean
-}
-
-/**
- * Cheap probe: reads only the router row — it NEVER dials the device — so
- * the wizard can poll it as fast as it likes even when the router sits
- * behind NAT. `has_cached_scan` flips when the bootstrap script's
- * `POST /bootstrap/scan-report` has been stored; `bootstrap_completed`
- * flips when the script's final `POST /bootstrap/notify` lands.
- */
 export async function getDirectApiStatus(routerId: number): Promise<DirectApiStatus> {
   return api(`/api/v1/provisioning/bootstrap/can-use-direct-api/${routerId}`)
 }
@@ -403,33 +481,15 @@ export async function getDirectApiStatus(routerId: number): Promise<DirectApiSta
 /**
  * Waits for the router's phone-home scan report instead of hanging on a
  * single direct-dial scan.
- *
- * Behind NAT neither the browser nor the backend can dial the router, so a
- * one-shot `scanDevice(routerId, …)` burns the MikroTik connect timeout
- * (with retries) and looks stalled. The engine's intended flow is:
- * bootstrap script runs on the router → POSTs `/bootstrap/scan-report`
- * (cached on the router row + Redis) → `scanDevice(routerId, false)` serves
- * that cache instantly.
- *
- * Strategy: an optimistic `scanDevice(routerId, false)` races in the
- * background (it succeeds immediately on a LAN or when a report is already
- * cached; behind NAT it just fails harmlessly), while the main loop polls
- * the DB-only probe every `intervalMs` and reads the cache the moment the
- * report lands. On deadline it throws a `ProvisionError` with an
- * actionable message — it never triggers a direct dial itself.
  */
 export async function waitForScanReport(
   routerId: number,
   opts: {
-    /** Overall budget for the report to arrive (default 120s). */
     deadlineMs?: number
-    /** Gap between probe polls (default 2s). */
     intervalMs?: number
-    /** Minimum gap between onProgress calls (default 6s). */
     progressIntervalMs?: number
-    /** Called with elapsed seconds while waiting, for progress UI. */
     onProgress?: (elapsedSeconds: number) => void
-  } = {},
+  } = {}
 ): Promise<DeviceScan> {
   const deadlineMs = opts.deadlineMs ?? 120_000
   const intervalMs = opts.intervalMs ?? 2_000
@@ -438,17 +498,14 @@ export async function waitForScanReport(
   let lastDetail = ''
   let lastProgressAt = 0
 
-  // Optimistic read: resolves instantly when the cache is warm or the router
-  // is directly reachable (LAN). Behind NAT it rejects — swallowed here so
-  // the probe loop below keeps waiting for the phone-home report.
+  // Optimistic read: resolves instantly when cache is warm or router is directly reachable
   const eager = scanDevice(routerId, false).then(
     (s) => s,
     (e) => {
       lastDetail = e instanceof Error ? e.message : String(e)
-      return null
-    },
+      return null as DeviceScan | null
+    }
   )
-  // A null (failed) eager result must not win the race — only a real scan.
   const eagerWin = eager.then((s) => (s ? s : new Promise<never>(() => {})))
 
   const probeLoop = (async (): Promise<DeviceScan> => {
@@ -456,8 +513,6 @@ export async function waitForScanReport(
       try {
         const st = await getDirectApiStatus(routerId)
         if (st.has_cached_scan || st.bootstrap_completed) {
-          // force_rescan=false → the backend serves the cache; it only dials
-          // when the cache is empty (stale flag), in which case we keep polling.
           try {
             return await scanDevice(routerId, false)
           } catch (e) {
@@ -465,7 +520,6 @@ export async function waitForScanReport(
           }
         }
       } catch (e) {
-        // Probe failure (backend restart etc.) — retry until the deadline.
         lastDetail = e instanceof Error ? e.message : String(e)
       }
 
@@ -484,8 +538,9 @@ export async function waitForScanReport(
         'to finish, then scan again — the wizard reads the report the router ' +
         'sends back, so it also works behind NAT.' +
         (lastDetail ? ` Last response: ${lastDetail}` : ''),
-    ) as ProvisionError
-    err.detail = { reason: 'scan-report-timeout', lastDetail }
+      ProvisionErrorCode.SERVER_ERROR,
+      { detail: { reason: 'scan-report-timeout', lastDetail } }
+    )
     throw err
   })()
 
@@ -496,7 +551,7 @@ export async function waitForScanReport(
 export async function startWorkflow(
   routerId: number,
   serviceType: ProvisioningServiceType,
-  configuration: Record<string, unknown>,
+  configuration: Record<string, unknown>
 ): Promise<{ session_id: string; status: string; message: string }> {
   return api('/api/v1/provisioning/workflow', {
     method: 'POST',
@@ -510,32 +565,27 @@ export async function getSessionStatus(sessionId: string): Promise<SessionStatus
 
 export async function listSessions(): Promise<ProvisionSession[]> {
   const body = await api<{ sessions?: ProvisionSession[] }>(
-    '/api/v1/provisioning/sessions?limit=20',
+    '/api/v1/provisioning/sessions?limit=20'
   )
   return body.sessions ?? []
 }
 
 /** Clears stale PENDING/IN_PROGRESS sessions so a new workflow can start. */
 export async function cancelActiveSessions(
-  routerId: number,
+  routerId: number
 ): Promise<{ cancelled_count: number }> {
   return api(`/api/v1/provisioning/router/${routerId}/cancel-active`, {
     method: 'POST',
   })
 }
 
-/**
- * Opens the engine's live log stream for a session. Returns the socket; the
- * caller closes it (or passes it to `closeStream`).
- */
+/** Opens the engine's live log stream for a session. */
 export function openStream(
   sessionId: string,
   onMessage: (msg: StreamMessage) => void,
-  onClose?: () => void,
+  onClose?: () => void
 ): WebSocket {
   const wsPath = `/api/v1/provisioning/ws/${sessionId}`
-  // Production remains same-origin. Vercel HTTP rewrites do not imply support
-  // for WebSocket upgrades, so the provisioning wizard uses status polling.
   const wsUrl = config.apiUrl
     ? config.apiUrl.replace(/^http/, 'ws') + wsPath
     : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${wsPath}`

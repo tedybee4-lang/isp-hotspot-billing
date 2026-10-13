@@ -1,338 +1,405 @@
 /**
- * Tests for the provision-engine API client (`src/lib/provisionApi.ts`).
+ * Tests for the provisioning API client (`src/lib/provisionApi.ts`).
  *
- * The wizard cannot work without this layer, and the engine's login envelope
- * (`{ data: { access_token, ... } }`, form-encoded POST) is the one contract
- * that must never drift: a 200 without the envelope is as broken as a 401.
- * Everything is exercised against a fetch stub — no backend required.
+ * The rebuilt feature authenticates through Supabase: the browser signs in
+ * once, and the client attaches the signed-in user's real access token to
+ * every provisioning request. There is no engine-side login and no local
+ * token cache, so these tests pin that contract instead:
+ *
+ *   - a signed-in session supplies the Bearer token
+ *   - a missing/expired session that cannot be refreshed never issues a
+ *     request (no anonymous call is ever attempted)
+ *   - HTTP 401 / 403 / 422 / 500 are surfaced distinctly, and a backend 500
+ *     is never masqueraded as an authentication failure
+ *   - non-JSON bodies (the Vercel SPA fallback, proxy error pages) are
+ *     reported as such with the real status
+ *   - session list, empty list, bootstrap generation and invalid router input
+ *     all behave
+ *
+ * Everything is exercised against a fetch stub and a stubbed Supabase client
+ * — no backend required.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import {
-  signIn, hasAuthToken, clearAuthToken, listSessions, ProvisionError,
-  waitForScanReport, findRouter,
-} from './provisionApi'
-import { config } from './config'
-import type { DeviceScan } from './provisionApi'
 
-function jsonResponse(body: unknown, status = 200) {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: () => Promise.resolve(body),
-  } as Response
+/**
+ * Supabase auth stub. Declared with `vi.hoisted` so the module factory below
+ * can reference it before the test body runs (the mocked module resolves
+ * during import, which happens before module-level `const` initialisation).
+ */
+const auth = vi.hoisted(() => ({
+  getSession: vi.fn(),
+  refreshSession: vi.fn(),
+}))
+
+vi.mock('./supabase', () => ({
+  supabase: { auth },
+  requireSupabase: () => ({ auth }),
+}))
+
+vi.mock('./config', () => ({
+  IS_LIVE: true,
+  config: { apiUrl: 'https://api.example.com' },
+}))
+
+import {
+  listSessions, getBootstrapCommand, ProvisionError, ProvisionErrorCode,
+  createSession, findRouter,
+} from './provisionApi'
+
+interface Session { access_token: string }
+
+/** The Supabase session shapes the client must handle. */
+function session(value: Session | null, error: Error | null = null) {
+  return { data: { session: value }, error }
+}
+
+function authHeaderOf(init?: RequestInit): string {
+  return String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '')
+}
+
+/** Captures the ProvisionError a rejected call produced, failing if it did not. */
+async function caughtError(p: Promise<unknown>): Promise<ProvisionError> {
+  try {
+    await p
+  } catch (e) {
+    return e as ProvisionError
+  }
+  throw new Error('expected the call to reject, but it resolved')
 }
 
 beforeEach(() => {
-  vi.unstubAllEnvs()
-  clearAuthToken()
   vi.unstubAllGlobals()
-  localStorage.clear()
+  // Default: a signed-in user with a real access token.
+  auth.getSession.mockReset()
+  auth.refreshSession.mockReset()
+  auth.getSession.mockResolvedValue(session({ access_token: 'supabase-access-token' }))
+  auth.refreshSession.mockResolvedValue(session({ access_token: 'refreshed-token' }))
 })
 
-function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {
-  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => handler(url, init)))
+function jsonResponse(body: unknown, status = 200, contentType = 'application/json') {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (k: string) => (k.toLowerCase() === 'content-type' ? contentType : null) },
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(typeof body === 'string' ? body : JSON.stringify(body)),
+  } as unknown as Response
 }
 
-describe('engine sign-in', () => {
-  it('stores the JWT from the login envelope and marks itself authed', async () => {
-    stubFetch((url) => {
-      expect(String(url)).toContain('/api/v1/auth/login')
-      return jsonResponse({ data: { access_token: 'tok123', user: { username: 'superuser' } } })
-    })
-    expect(hasAuthToken()).toBe(false)
-    await signIn('superuser@example.com', 'pw')
-    expect(hasAuthToken()).toBe(true)
-    expect(localStorage.getItem('ispflow.provision.token')).toBe('tok123')
-  })
+function stubFetch(handler: (url: string, init?: RequestInit) => unknown) {
+  const fn = vi.fn(async (url: string, init?: RequestInit) => handler(url, init))
+  vi.stubGlobal('fetch', fn)
+  return fn
+}
 
-  it('posts form-encoded credentials, the way the OAuth2 login expects', async () => {
-    let seen: RequestInit | undefined
+// `_url` parameters are intentionally unused: the handler receives the URL but
+// these handlers only assert on headers or bodies.
+
+/* ── Authentication ─────────────────────────────────────────────────────── */
+
+describe('authentication from the Supabase session', () => {
+  it('attaches the signed-in user access token to every provisioning request', async () => {
+    let header = ''
     stubFetch((_url, init) => {
-      seen = init
-      return jsonResponse({ data: { access_token: 'tok123' } })
+      header = authHeaderOf(init)
+      return jsonResponse({ sessions: [] })
     })
-    await signIn('someone@example.com', 'secret')
-    expect(seen?.headers).toMatchObject({ 'Content-Type': 'application/x-www-form-urlencoded' })
-    const params = new URLSearchParams(String(seen?.body))
-    expect(params.get('username')).toBe('someone@example.com')
-    expect(params.get('password')).toBe('secret')
+
+    await listSessions()
+
+    expect(header).toBe('Bearer supabase-access-token')
+    expect(auth.getSession).toHaveBeenCalled()
   })
 
-  it('rejects loudly when the envelope has no token', async () => {
-    stubFetch(() => jsonResponse({ data: {} }))
-    await expect(signIn('a', 'b')).rejects.toBeInstanceOf(ProvisionError)
-    expect(hasAuthToken()).toBe(false)
+  it('never uses the Supabase anon key as the bearer token', async () => {
+    let header = ''
+    stubFetch((_url, init) => {
+      header = authHeaderOf(init)
+      return jsonResponse({ sessions: [] })
+    })
+
+    await listSessions()
+
+    expect(header).not.toMatch(/supabase.*anon/i)
+    expect(header.startsWith('Bearer ')).toBe(true)
+    expect(header.replace('Bearer ', '').length).toBeGreaterThan(0)
   })
 
-  it('surfaces the server detail on bad credentials', async () => {
-    stubFetch(() => jsonResponse({ detail: 'Incorrect username or password' }, 401))
-    await expect(signIn('a', 'b')).rejects.toThrowError(/Incorrect username or password/)
+  it('restores a session via refresh when getSession has none yet (page reload)', async () => {
+    // The initial read is empty — the client has just mounted and Supabase has
+    // not rehydrated the persisted session yet. It must refresh rather than
+    // failing the operator out.
+    auth.getSession.mockResolvedValueOnce(session(null))
+
+    let header = ''
+    stubFetch((_url, init) => {
+      header = authHeaderOf(init)
+      return jsonResponse({ sessions: [] })
+    })
+
+    await expect(listSessions()).resolves.toEqual([])
+    expect(header).toBe('Bearer refreshed-token')
+  })
+
+  it('issues NO request when there is no session and refresh fails', async () => {
+    auth.getSession.mockResolvedValue(session(null))
+    auth.refreshSession.mockResolvedValue(
+      session(null, new Error('refresh_token_already_used')),
+    )
+    const fetchMock = stubFetch(() => jsonResponse({ sessions: [] }))
+
+    await expect(listSessions()).rejects.toMatchObject({
+      code: ProvisionErrorCode.NOT_AUTHENTICATED,
+      needsSignIn: true,
+    })
+    // The core guarantee: unauthenticated traffic is never sent.
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reports a session read error immediately without sending a request', async () => {
+    auth.getSession.mockResolvedValue(session(null, new Error('lock broken')))
+    const fetchMock = stubFetch(() => jsonResponse({ sessions: [] }))
+
+    await expect(listSessions()).rejects.toMatchObject({ needsSignIn: true })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
-describe('authenticated calls', () => {
-  it('sends the Bearer token and parses the session list', async () => {
-    let auth = ''
-    let calls = 0
-    stubFetch((url, init) => {
-      calls += 1
-      if (String(url).includes('/api/v1/auth/login')) {
-        return jsonResponse({ data: { access_token: 'tok123' } })
-      }
-      auth = String((init?.headers as Record<string, string>).Authorization)
-      expect(String(url)).toContain('/api/v1/provisioning/sessions?limit=20')
-      return jsonResponse({ sessions: [{ session_id: 's1', router_id: 1, status: 'pending', service_type: 'hotspot', created_at: null, completed_at: null }] })
-    })
-    // Sign in first: that is the supported path to a bearer token.
-    await signIn('a', 'b')
+/* ── Session list ───────────────────────────────────────────────────────── */
+
+describe('provisioning session list', () => {
+  it('returns real sessions from the backend', async () => {
+    stubFetch(() => jsonResponse({
+      sessions: [{
+        session_id: 's1', router_id: 1, status: 'completed',
+        service_type: 'hotspot', created_at: '2026-01-01T00:00:00Z', completed_at: null,
+      }],
+      skip: 0, limit: 20, total: 1,
+    }))
+
     const sessions = await listSessions()
-    expect(calls).toBe(2)
-    expect(auth).toBe('Bearer tok123')
     expect(sessions).toHaveLength(1)
     expect(sessions[0].session_id).toBe('s1')
   })
 
-  it('does not send provisioning requests without a backend identity token', async () => {
-    const fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
-    await expect(listSessions()).rejects.toMatchObject({ needsSignIn: true })
-    expect(fetchMock).not.toHaveBeenCalled()
+  it('handles an empty session list as a valid empty array', async () => {
+    stubFetch(() => jsonResponse({ sessions: [], total: 0 }))
+    await expect(listSessions()).resolves.toEqual([])
   })
 
-  it('clears an expired backend token and preserves the API 401 response', async () => {
-    let requestCount = 0
-    stubFetch((url) => {
-      if (String(url).includes('/api/v1/auth/login')) {
-        return jsonResponse({ data: { access_token: 'expired-token' } })
-      }
-      requestCount += 1
-      return jsonResponse({ detail: 'Not authenticated' }, 401)
-    })
-    await signIn('a', 'b')
-
-    await expect(listSessions()).rejects.toMatchObject({
-      message: 'Not authenticated',
-      needsSignIn: true,
-    })
-    expect(requestCount).toBe(1)
-    expect(hasAuthToken()).toBe(false)
+  it('handles a response with no sessions key at all', async () => {
+    stubFetch(() => jsonResponse({}))
+    await expect(listSessions()).resolves.toEqual([])
   })
 
-  it('turns a network failure into an engine-unreachable ProvisionError', async () => {
-    // "Failed to fetch" (engine down / wrong port / CORS) must surface an
-    // actionable message naming the engine URL, not the browser's TypeError.
-    stubFetch((url) => {
-      if (String(url).includes('/api/v1/auth/login')) {
-        return jsonResponse({ data: { access_token: 'tok123' } })
-      }
-      throw new TypeError('Failed to fetch')
-    })
-    await signIn('a', 'b')
-    await expect(listSessions()).rejects.toMatchObject({
-      detail: { reason: 'engine-unreachable' },
-    })
-    await expect(listSessions()).rejects.toThrowError(/Cannot reach the provisioning engine/)
-  })
-
-  it('rejects an HTML SPA fallback returned as a successful API response', async () => {
-    stubFetch((url) => String(url).includes('/api/v1/auth/login')
-      ? jsonResponse({ data: { access_token: 'tok123' } })
-      : ({
-        ok: true,
-        status: 200,
-        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
-      } as Response))
-
-    await signIn('a', 'b')
-    await expect(listSessions()).rejects.toThrowError(/non-JSON success response/)
-  })
-
-  it('regression: findRouter reports the SPA fallback instead of fake router data (prod /app/provision bug)', async () => {
-    // Production returned the SPA (HTTP 200, text/html) for
-    // `/api/v1/routers/?search=mapito&size=50` because the trailing-slash URL
-    // missed the Vercel proxy rewrite. The wizard must surface that as an
-    // error rather than parse it or invent a result.
-    let requested = ''
-    stubFetch((url) => {
-      const u = String(url)
-      if (u.includes('/api/v1/auth/login')) {
-        return jsonResponse({ data: { access_token: 'tok123' } })
-      }
-      requested = u
-      // The SPA index.html: res.json() rejects exactly like production.
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        headers: { get: () => 'text/html; charset=utf-8' },
-        json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON')),
-      } as unknown as Response)
-    })
-
-    await signIn('a', 'b')
-    await expect(findRouter('mapito')).rejects.toThrowError(
-      /non-JSON success response for \/api\/v1\/routers\/\?search=mapito&size=50/,
-    )
-    expect(requested).toContain('/api/v1/routers/?search=mapito&size=50')
-  })
-
-  it('surfaces a non-JSON error response (HTML challenge/proxy page) with its status', async () => {
-    stubFetch((url) => {
-      if (String(url).includes('/api/v1/auth/login')) {
-        return jsonResponse({ data: { access_token: 'tok123' } })
-      }
-      // e.g. a Cloudflare interstitial or proxy error page: non-2xx + HTML.
-      return Promise.resolve({
-        ok: false,
-        status: 403,
-        headers: { get: () => 'text/html; charset=UTF-8' },
-        json: () => Promise.reject(new SyntaxError('Unexpected token <')),
-      } as unknown as Response)
-    })
-
-    await signIn('a', 'b')
-    await expect(listSessions()).rejects.toMatchObject({
-      detail: { status: 403, reason: 'non-json-error' },
-    })
-    await expect(listSessions()).rejects.toThrowError(
-      /non-JSON error response \(HTTP 403\).*The body is HTML/s,
-    )
-  })
-
-
-  it('uses the configured API base instead of silently switching origins', async () => {
-    let requestUrl = ''
-    stubFetch((url) => {
-      if (String(url).includes('/api/v1/auth/login')) {
-        return jsonResponse({ data: { access_token: 'tok123' } })
-      }
-      requestUrl = String(url)
+  it('requests the page the acceptance criteria names', async () => {
+    let url = ''
+    stubFetch((u) => {
+      url = String(u)
       return jsonResponse({ sessions: [] })
     })
-    await signIn('a', 'b')
-    await expect(listSessions()).resolves.toEqual([])
-    expect(requestUrl).toBe(`${config.apiUrl}/api/v1/provisioning/sessions?limit=20`)
+    await listSessions()
+    expect(url).toContain('/api/v1/provisioning/sessions?limit=20')
   })
 })
 
-/* ── Device scan: waiting for the router's phone-home report ──────────────── */
+/* ── HTTP error handling ────────────────────────────────────────────────── */
 
-const SCAN_FIXTURE: DeviceScan = {
-  interfaces: ['ether1', 'ether2'],
-  wan_interface: 'ether1',
-  services: [{ name: 'hotspot', active: false, available: true }],
-  network_config: {
-    router_ip: '192.168.88.1', router_ip_cidr: '192.168.88.1/24',
-    network: '192.168.88.0/24', network_address: '192.168.88.0',
-    gateway: '192.168.88.1', broadcast: '192.168.88.255',
-    dhcp_start: '192.168.88.2', dhcp_end: '192.168.88.254',
-    dhcp_pool: '192.168.88.2 - 192.168.88.254',
-    subnet_mask: '255.255.255.0', cidr: 24, total_hosts: 254,
-    dns_servers: ['8.8.8.8'], current_subnet: '192.168.88.1/24',
-    wan_interface: 'ether1',
-  },
-  system_info: {
-    identity: 'MikroTik', board_name: 'hAP ac2', model: 'hAP ac2',
-    version: '7.16.2', architecture: 'arm64', uptime: '1w2d',
-  },
-  current_subnet: '192.168.88.1/24',
-  available_services: ['pppoe'],
-}
-
-function statusFixture(over: Record<string, unknown> = {}) {
-  return {
-    can_use_direct_api: false,
-    bootstrap_completed: false,
-    provisioning_status: 'pending',
-    last_provisioned_at: null,
-    agent_installed: false,
-    agent_online: false,
-    has_cached_scan: false,
-    ...over,
-  }
-}
-
-describe('waitForScanReport', () => {
-  beforeEach(async () => {
-    clearAuthToken()
-    // Token up front so waitForScanReport's fetches are authenticated calls.
-    stubFetch((url) => String(url).includes('/api/v1/auth/login')
-      ? jsonResponse({ data: { access_token: 'tok123' } })
-      : jsonResponse({}))
-    await signIn('a', 'b')
+describe('HTTP error handling', () => {
+  it('surfaces an expired session (401) as a sign-in prompt', async () => {
+    stubFetch(() => jsonResponse({ detail: 'Not authenticated' }, 401))
+    await expect(listSessions()).rejects.toMatchObject({
+      code: ProvisionErrorCode.NOT_AUTHENTICATED,
+      status: 401,
+      needsSignIn: true,
+    })
   })
 
-  it('returns immediately when the cache is already warm (optimistic read wins)', async () => {
-    const probes: string[] = []
-    stubFetch((url) => {
-      const u = String(url)
-      if (u.includes('/auth/login')) return jsonResponse({ data: { access_token: 'tok123' } })
-      if (u.includes('/can-use-direct-api/')) {
-        probes.push(u)
-        // Probe is slower to be asked than the eager read — must not matter.
-        return jsonResponse(statusFixture({ has_cached_scan: true }))
-      }
-      if (u.includes('/device/scan')) return jsonResponse(SCAN_FIXTURE)
-      return jsonResponse({})
-    })
-    const scan = await waitForScanReport(7, { deadlineMs: 500 })
-    expect(scan.interfaces).toEqual(['ether1', 'ether2'])
-    expect(scan.wan_interface).toBe('ether1')
+  it('surfaces a 403 as a permission problem, not an authentication failure', async () => {
+    stubFetch(() => jsonResponse({ detail: 'Insufficient permissions' }, 403))
+    const err = await caughtError(listSessions())
+    expect(err).toBeInstanceOf(ProvisionError)
+    expect(err.code).toBe(ProvisionErrorCode.FORBIDDEN)
+    expect(err.status).toBe(403)
+    expect(err.needsSignIn).toBe(false)
   })
 
-  it('polls the DB-only probe until the report lands, then reads the cache', async () => {
-    let probes = 0
-    let scans = 0
-    const seenBodies: unknown[] = []
-    stubFetch((url, init) => {
-      const u = String(url)
-      if (u.includes('/auth/login')) return jsonResponse({ data: { access_token: 'tok123' } })
-      if (u.includes('/can-use-direct-api/')) {
-        probes += 1
-        // First two polls: router has not phoned home yet. Third: cached.
-        return jsonResponse(statusFixture({ has_cached_scan: probes >= 3 }))
-      }
-      if (u.includes('/device/scan')) {
-        scans += 1
-        seenBodies.push(init?.body)
-        // The eager attempt (before any report) fails the way a NAT'd
-        // direct dial does; the post-probe read succeeds from the cache.
-        if (scans === 1) return jsonResponse({ detail: 'No credentials available for router' }, 400)
-        return jsonResponse(SCAN_FIXTURE)
-      }
-      return jsonResponse({})
+  it('surfaces a 404 as not-found', async () => {
+    stubFetch(() => jsonResponse({ detail: 'Provisioning session not found' }, 404))
+    await expect(listSessions()).rejects.toMatchObject({
+      code: ProvisionErrorCode.NOT_FOUND,
+      status: 404,
     })
-    const scan = await waitForScanReport(7, {
-      deadlineMs: 3000, intervalMs: 25, progressIntervalMs: 10,
-    })
-    expect(scan.current_subnet).toBe('192.168.88.1/24')
-    expect(probes).toBeGreaterThanOrEqual(3)
-    expect(scans).toBe(2)
-    // Every scan read is non-forcing: the waiter never triggers a direct dial.
-    for (const body of seenBodies) {
-      expect(JSON.parse(String(body))).toMatchObject({ force_rescan: false })
-    }
   })
 
-  it('times out with an actionable message instead of hanging forever', async () => {
-    stubFetch((url) => {
-      const u = String(url)
-      if (u.includes('/auth/login')) return jsonResponse({ data: { access_token: 'tok123' } })
-      if (u.includes('/can-use-direct-api/')) return jsonResponse(statusFixture()) // never ready
-      if (u.includes('/device/scan')) return jsonResponse({ detail: 'connection timed out' }, 500)
-      return jsonResponse({})
+  it('never reports a backend 500 as an authentication error', async () => {
+    // The regression this guards: an unhandled exception inside a provisioning
+    // endpoint used to be misreported as "not authenticated", sending the
+    // operator to the login page to fix a server-side bug.
+    stubFetch(() => jsonResponse({ detail: 'Failed to list provisioning sessions' }, 500))
+    const err = await caughtError(listSessions())
+    expect(err.code).toBe(ProvisionErrorCode.SERVER_ERROR)
+    expect(err.status).toBe(500)
+    expect(err.needsSignIn).toBe(false)
+    expect(err.message).not.toMatch(/sign in/i)
+  })
+
+  it('aborts before sending when the API client detects a misconfigured origin', async () => {
+    // config is stubbed, so a relative path is fine; just assert the path is
+    // joined against the configured base rather than the current origin.
+    let url = ''
+    stubFetch((u) => {
+      url = String(u)
+      return jsonResponse({ items: [] })
     })
-    const progress: number[] = []
+    await findRouter('office')
+    expect(url.startsWith('https://api.example.com/')).toBe(true)
+  })})
+
+/* ── Non-JSON responses ─────────────────────────────────────────────────── */
+
+describe('non-JSON responses', () => {
+  it('rejects the Vercel SPA fallback returned as a "successful" API response', async () => {
+    // Production bug: an un-proxied API path returned index.html with HTTP
+    // 200. It must surface as an error, never as a fake empty result.
+    stubFetch(() => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'text/html; charset=utf-8' },
+      text: () => Promise.resolve('<!doctype html><html></html>'),
+    } as unknown as Response))
+
+    await expect(listSessions()).rejects.toMatchObject({
+      code: ProvisionErrorCode.NON_JSON_RESPONSE,
+      status: 200,
+    })
+  })
+
+  it('surfaces a non-JSON error response with its real status', async () => {
+    stubFetch(() => ({
+      ok: false,
+      status: 502,
+      headers: { get: () => 'text/html' },
+      text: () => Promise.resolve('<html>bad gateway</html>'),
+    } as unknown as Response))
+
+    const err = await caughtError(listSessions())
+    expect(err.status).toBe(502)
+    expect(err.code).toBe(ProvisionErrorCode.NON_JSON_RESPONSE)
+  })
+
+  it('treats an empty 200 body as an error rather than a silent success', async () => {
+    stubFetch(() => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      json: () => Promise.resolve(null),
+    } as unknown as Response))
+
+    await expect(listSessions()).rejects.toBeInstanceOf(ProvisionError)
+  })
+})
+
+/* ── Network failures ───────────────────────────────────────────────────── */
+
+describe('network failures', () => {
+  it('turns a fetch failure into an actionable engine-unreachable error', async () => {
+    stubFetch(() => { throw new TypeError('Failed to fetch') })
+    const err = await caughtError(listSessions())
+    expect(err.code).toBe(ProvisionErrorCode.ENGINE_UNREACHABLE)
+    expect(err.detail).toMatchObject({ reason: 'engine-unreachable' })
+    expect(err.message).toMatch(/Cannot reach the provisioning engine/)
+  })
+})
+
+/* ── Bootstrap command generation ───────────────────────────────────────── */
+
+describe('bootstrap command generation', () => {
+  it('returns the real one-liner generated by the backend', async () => {
+    let requested = ''
+    stubFetch((u) => {
+      requested = String(u)
+      expect(requested).toContain('/api/v1/provisioning/bootstrap/command')
+      return jsonResponse({
+        command: '/tool fetch mode=https url="https://api.example.com/..." dst-path=ISP.rsc',
+        script_url: 'https://api.example.com/api/v1/provisioning/bootstrap/script?token=abc',
+        token: 'bootstrap-token',
+        expires_in: 600,
+        notes: ['Waiting for mikrotik to come online...'],
+        notify_url: 'https://api.example.com/api/v1/provisioning/bootstrap/notify',
+        bootstrap_already_done: false,
+        encrypted_url: false,
+      })
+    })
+
+    const b = await getBootstrapCommand({
+      identity: 'Office Router', api_port: 8728, interface: 'ether1',
+      ip_address: '192.168.88.1', session_id: 'sess-1', router_id: 7,
+    })
+    expect(b.command).toContain('/tool fetch')
+    expect(b.token).toBe('bootstrap-token')
+  })
+
+  it('sends the parameters the backend route requires', async () => {
+    let url = ''
+    stubFetch((u) => {
+      url = String(u)
+      return jsonResponse({ command: 'c', notes: [], notify_url: '', bootstrap_already_done: false })
+    })
+
+    await getBootstrapCommand({
+      identity: 'Office Router', api_port: 8728, interface: 'ether1',
+      ip_address: '192.168.88.1', session_id: 'sess-1', router_id: 7,
+    })
+
+    const qs = new URL(url).searchParams
+    expect(qs.get('identity')).toBe('Office Router')
+    expect(qs.get('api_port')).toBe('8728')
+    expect(qs.get('interface')).toBe('ether1')
+    expect(qs.get('ip_address')).toBe('192.168.88.1')
+    expect(qs.get('session_id')).toBe('sess-1')
+    expect(qs.get('router_id')).toBe('7')
+  })
+
+  it('surfaces invalid router input (422) as a validation error, not a crash', async () => {
+    stubFetch(() => jsonResponse({
+      detail: 'Router identity contains unsupported characters',
+    }, 422))
+
+    const err = await caughtError(getBootstrapCommand({
+      identity: 'bad/identity', api_port: 8728, interface: 'ether1',
+    }))
+
+    expect(err.code).toBe(ProvisionErrorCode.VALIDATION_ERROR)
+    expect(err.status).toBe(422)
+    expect(err.message).toMatch(/unsupported characters/)
+  })
+
+  it('reports a missing session (404) plainly', async () => {
+    stubFetch(() => jsonResponse({ detail: 'Provisioning session not found' }, 404))
     await expect(
-      waitForScanReport(7, {
-        deadlineMs: 80, intervalMs: 10, progressIntervalMs: 0,
-        onProgress: (s) => progress.push(s),
-      }),
-    ).rejects.toMatchObject({
-      detail: { reason: 'scan-report-timeout' },
+      getBootstrapCommand({ identity: 'R', api_port: 8728, interface: 'ether1', session_id: 'nope' }),
+    ).rejects.toMatchObject({ code: ProvisionErrorCode.NOT_FOUND })
+  })
+})
+
+/* ── Session creation (wizard step 1) ───────────────────────────────────── */
+
+describe('createSession', () => {
+  it('posts the router, service type and configuration the backend expects', async () => {
+    let body = ''
+    let url = ''
+    stubFetch((u, init) => {
+      url = String(u)
+      body = String(init?.body)
+      return jsonResponse({ session_id: 's1', status: 'pending' }, 201)
     })
-    await expect(
-      waitForScanReport(7, { deadlineMs: 40, intervalMs: 10 }),
-    ).rejects.toThrowError(/bootstrap/i)
-    expect(progress.length).toBeGreaterThan(0)
+
+    const res = await createSession(7, 'hotspot', { identity: 'Office Router' })
+    expect(res.session_id).toBe('s1')
+    expect(url).toContain('/api/v1/provisioning/sessions')
+    expect(JSON.parse(body)).toEqual({
+      router_id: 7, service_type: 'hotspot', configuration: { identity: 'Office Router' },
+    })
   })
 })

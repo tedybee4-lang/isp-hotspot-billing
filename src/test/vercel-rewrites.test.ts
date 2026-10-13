@@ -62,11 +62,16 @@ describe('vercel.json API rewrites (production /app/provision regression)', () =
     ['/api/v1/auth/login', '/api/v1/auth/login'],
     ['/api/v1/provisioning/sessions', '/api/v1/provisioning/sessions?limit=20'],
     ['/api/v1/provisioning/device/scan', '/api/v1/provisioning/device/scan'],
+    // The acceptance-criteria bootstrap call, with its query string.
+    ['/api/v1/provisioning/bootstrap/command', '/api/v1/provisioning/bootstrap/command?identity=R&api_port=8728&interface=ether1'],
+    // Wizard step 1 and step 3.
+    ['/api/v1/provisioning/sessions', '/api/v1/provisioning/sessions'],
+    ['/api/v1/provisioning/workflow', '/api/v1/provisioning/workflow'],
+    ['/api/v1/provisioning/sessions/abc/status', '/api/v1/provisioning/sessions/abc/status'],
     // Trailing-slash health probe.
     ['/health/', '/health/'],
     ['/health', '/health'],
   ] as const
-
   it.each(apiPaths)('proxies %s to the VPS API before the SPA fallback', (path, url) => {
     const match = firstMatch(path)
     expect(match, `no rewrite matched ${url}`).not.toBeNull()

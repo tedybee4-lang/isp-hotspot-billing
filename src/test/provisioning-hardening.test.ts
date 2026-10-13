@@ -19,12 +19,44 @@ const DB = 'worker/src/db.ts'
 const PROVISION_API = 'src/lib/provisionApi.ts'
 
 describe('router credential handling after the engine swap', () => {
-  it('keeps an engine-sign-in surface for the provisioning UI', () => {
-    const api = read(PROVISION_API)
-    // The wizard authenticates against the FastAPI engine, not Supabase.
-    expect(api).toMatch(/\/api\/v1\/auth\/login/)
-    // Secrets are never persisted beyond the in-memory/localStorage token.
+  const api = read(PROVISION_API)
+
+  it('authenticates through the Supabase session, not a stored engine token', () => {
+    // The rebuilt provisioning client signs the user in through Supabase and
+    // attaches that session's real access token to every engine request. It
+    // keeps no local JWT cache, so the only token source is the session.
+    expect(api).toMatch(/Authorization'?:\s*`Bearer \$\{token\}`/)
+    expect(api).toMatch(/auth\.getSession\(\)/)
+    expect(api).toMatch(/auth\.refreshSession\(\)/)
+  })
+
+  it('never uses the Supabase anon key as a user access token', () => {
+    // The anon key identifies the *project*, not the *user*. Sending it as a
+    // bearer token would pretend every request came from an identity it is
+    // not, and must never appear in the client's token path.
+    expect(api).not.toMatch(/Bearer \$\{[^}]*anon[^}]*\}/i)
+    expect(api).not.toMatch(/anonKey/i)
+  })
+
+  it('never persists a credential to storage', () => {
+    // The previous client cached the engine JWT in localStorage. The rebuild
+    // reads every token from the live Supabase session instead, so there is
+    // nothing for an XSS to lift and replay.
+    expect(api).not.toMatch(/localStorage\.setItem\([^)]*(token|credential|jwt)/i)
+    expect(api).not.toMatch(/sessionStorage/)
+  })
+
+  it('never contacts an engine-side login endpoint for provisioning', () => {
+    // There is no browser credential-exchange path: the backend validates the
+    // Supabase token itself via Supabase's own /auth/v1/user endpoint.
+    expect(api).not.toMatch(/\/api\/v1\/auth\/login/)
+  })
+
+  it('exposes no secret-bearing credential surface to the browser', () => {
+    // Router and RADIUS secrets stay server-side.
     expect(api).not.toMatch(/secret_ciphertext/)
+    expect(api).not.toMatch(/saveRadiusSecret/)
+    expect(api).not.toMatch(/service_role/i)
   })
 })
 
