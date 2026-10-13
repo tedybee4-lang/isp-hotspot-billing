@@ -92,6 +92,9 @@ jobs:
           # Back up existing compose files before updating
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "if [ -f /opt/ispflow-backend/docker-compose.yml ]; then cp -a /opt/ispflow-backend/docker-compose.yml /opt/ispflow-backend/docker-compose.yml.bak.$(date +%s); fi; if [ -f /opt/ispflow-backend/.env ]; then cp -a /opt/ispflow-backend/.env /opt/ispflow-backend/.env.bak.$(date +%s); fi"
 
+          # Update docker-compose.yml from repo (ensures Supabase env vars are defined)
+          scp docker-compose.vps.yml "$DEPLOY_USER@$DEPLOY_HOST:/opt/ispflow-backend/docker-compose.yml"
+
           # Update .env with new frontend URL and CORS settings
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'cat > /opt/ispflow-backend/.env << "ENVEOF"
 DATABASE_URL=postgresql+asyncpg://ispflow:xxx@127.0.0.1:5432/ispflow
