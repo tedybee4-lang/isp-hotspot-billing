@@ -92,6 +92,29 @@ jobs:
           # Back up existing compose files before updating
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "if [ -f /opt/ispflow-backend/docker-compose.yml ]; then cp -a /opt/ispflow-backend/docker-compose.yml /opt/ispflow-backend/docker-compose.yml.bak.$(date +%s); fi; if [ -f /opt/ispflow-backend/.env ]; then cp -a /opt/ispflow-backend/.env /opt/ispflow-backend/.env.bak.$(date +%s); fi"
 
+          # Update .env with new frontend URL and CORS settings
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'cat > /opt/ispflow-backend/.env << "ENVEOF"
+DATABASE_URL=postgresql+asyncpg://ispflow:xxx@127.0.0.1:5432/ispflow
+REDIS_URL=redis://127.0.0.1:6379/0
+CELERY_BROKER_URL=redis://127.0.0.1:6379/1
+CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/2
+SECRET_KEY=5ksk0V2mqWjPHmEv2_qVd-7woyPxbUTysoNPDRFHDVPlPA625sqH24BZHYe_YhiD
+ENCRYPTION_KEY=
+MASTER_PASSWORD=4Amn2zG_CbrH1Gcmpo4OmgsboPVBkqYxAAsfpwdLmgQ
+GLOBAL_ADMIN_EMAIL=admin@example.com
+GLOBAL_ADMIN_PASSWORD=ChangeMe_2024!@#$
+MIKROTIK_API_PASSWORD=ChangeMe_2024!@#$
+FRONTEND_URL=https://ispflow.vercel.app
+BACKEND_URL=https://api.87-76-137-72.sslip.io
+CORS_ORIGINS=["https://ispflow.vercel.app"]
+SUPABASE_AUTH_URL=https://dcqcunmdhyonaewwuama.supabase.co
+SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjcWN1bm1kaHlvbmFld3d1YW1hIiwicm9sZSI6ImFub255IiwiaWF0IjoxNzM3NTc1Njc2LCJleHAiOjIwNTMxNTE2NzZ9.dcKZgQJp-bWAn_6v8KPU9TV_qC3U_bSnD4kmV_V6Pjk
+ENVIRONMENT=production
+HOST=0.0.0.0
+PORT=8000
+DEBUG=false
+ENVEOF'
+
           # Pull the new image and restart the backend
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "cd /opt/ispflow-backend && docker-compose pull isp-billing-backend && docker-compose up -d isp-billing-backend"
 
