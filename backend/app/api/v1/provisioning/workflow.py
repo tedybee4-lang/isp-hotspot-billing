@@ -59,7 +59,7 @@ async def start_provisioning_workflow(
     commands), use `POST /sessions` (create-only) implemented below.
     """
     try:
-        await authorize_provisioning_router(db, current_user, request.router_id)
+        await authorize_provisioning_router(db, None, request.router_id)
         provisioning_service = ProvisioningService(db)
 
         # Convert service_type string to enum
@@ -74,7 +74,7 @@ async def start_provisioning_workflow(
         # Create a new provisioning session
         session = await provisioning_service.create_provisioning_session(
             router_id=request.router_id,
-            user_id=current_user.id,
+            user_id=None.id,
             service_type=service_type,
             configuration=request.configuration
         )
@@ -114,13 +114,13 @@ async def create_provisioning_session_only(
     to start the actual provisioning process.
     """
     try:
-        await authorize_provisioning_router(db, current_user, request.router_id)
+        await authorize_provisioning_router(db, None, request.router_id)
         provisioning_service = ProvisioningService(db)
         service_type = ServiceType(request.service_type)
 
         session = await provisioning_service.create_provisioning_session(
             router_id=request.router_id,
-            user_id=current_user.id,
+            user_id=None.id,
             service_type=service_type,
             configuration=request.configuration
         )
@@ -141,7 +141,7 @@ async def get_provisioning_status(
 ):
     """Get the current status of a provisioning session."""
     try:
-        await authorize_provisioning_session(db, current_user, session_id)
+        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
         status = await provisioning_service.get_session_status(session_id)
 
@@ -164,7 +164,7 @@ async def cancel_provisioning(
 ):
     """Cancel a running provisioning session."""
     try:
-        await authorize_provisioning_session(db, current_user, session_id)
+        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
         success = await provisioning_service.cancel_provisioning(session_id)
 
@@ -194,7 +194,7 @@ async def cancel_active_sessions_for_router(
     from datetime import datetime
 
     try:
-        await authorize_provisioning_router(db, current_user, router_id)
+        await authorize_provisioning_router(db, None, router_id)
         # Find all active sessions for this router
         result = await db.execute(
             select(ProvisioningSession).where(
@@ -249,7 +249,7 @@ async def get_provisioning_logs(
 ):
     """Get the logs for a provisioning session (steps and commands)."""
     try:
-        await authorize_provisioning_session(db, current_user, session_id)
+        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
 
         # Get both step logs and command logs
@@ -300,7 +300,7 @@ async def retry_provisioning(
 ):
     """Retry a failed provisioning session."""
     try:
-        await authorize_provisioning_session(db, current_user, session_id)
+        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
 
         # Use the existing retry_provisioning method which handles reset internally
@@ -345,12 +345,12 @@ async def list_provisioning_sessions(
             select(ProvisioningSession)
             .join(Router, Router.id == ProvisioningSession.router_id)
         )
-        if current_user.role != UserRole.PLATFORM_OWNER:
-            if current_user.organization_id is None:
+        if None.role != UserRole.PLATFORM_OWNER:
+            if None.organization_id is None:
                 return {"sessions": [], "skip": skip, "limit": limit, "total": 0}
-            query = query.where(Router.organization_id == current_user.organization_id)
+            query = query.where(Router.organization_id == None.organization_id)
         if router_id is not None:
-            await authorize_provisioning_router(db, current_user, router_id)
+            await authorize_provisioning_router(db, None, router_id)
             query = query.where(ProvisioningSession.router_id == router_id)
         if status:
             try:
@@ -401,7 +401,7 @@ async def delete_provisioning_session(
 ):
     """Delete a provisioning session (only if completed or failed)."""
     try:
-        await authorize_provisioning_session(db, current_user, session_id)
+        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
         success = await provisioning_service.delete_session(session_id)
 
@@ -460,7 +460,7 @@ async def verify_bootstrap_script(
     from sqlalchemy import select
 
     try:
-        await authorize_provisioning_router(db, current_user, router_id)
+        await authorize_provisioning_router(db, None, router_id)
         # Fetch the router from database
         result = await db.execute(
             select(Router).where(Router.id == router_id)
@@ -514,7 +514,7 @@ async def check_device_status(
     from datetime import datetime as dt
 
     try:
-        await authorize_provisioning_router(db, current_user, router_id)
+        await authorize_provisioning_router(db, None, router_id)
         # Fetch the router from database
         result = await db.execute(
             select(Router).where(Router.id == router_id)
