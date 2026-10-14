@@ -55,7 +55,7 @@ Deno.serve(async (req) => {
 
   const { data: userData, error: userErr } = await admin.auth.getUser(token)
   if (userErr || !userData?.user) {
-    return json({ error: 'Your session has expired. Sign in again.' }, 401)
+    return json({ error: 'Authentication required. Please sign in or continue as guest.' }, 401)
   }
 
   const { data: profile } = await admin

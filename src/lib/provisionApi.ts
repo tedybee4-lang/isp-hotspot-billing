@@ -162,9 +162,9 @@ export class ProvisionError extends Error {
 
       code = ProvisionErrorCode.NOT_AUTHENTICATED
 
-      message = 'Your session has expired. Please sign in again.'
+      message = 'Authentication required. Please sign in or continue as guest.'
 
-      needsSignIn = true
+      needsSignIn = false
 
     } else if (status === 403) {
 
@@ -310,7 +310,7 @@ function apiUrl(path: string): string {
 
  */
 
-async function getAccessToken(): Promise<string> {
+async function getAccessToken(): Promise<string | null> {
 
   if (!IS_LIVE) {
 
@@ -320,7 +320,7 @@ async function getAccessToken(): Promise<string> {
 
       ProvisionErrorCode.NOT_AUTHENTICATED,
 
-      { needsSignIn: true }
+      { needsSignIn: false }
 
     )
 
@@ -334,66 +334,24 @@ async function getAccessToken(): Promise<string> {
 
   // First, try to get the existing session (fast path)
 
-  let { data, error } = await sb.auth.getSession()
+  let { data: _data, error } = await sb.auth.getSession()
 
-  if (error) {
+  if (error) { return null; }
 
-    throw new ProvisionError(
 
-      `Could not read Supabase session: ${error.message}`,
 
-      ProvisionErrorCode.NOT_AUTHENTICATED,
 
-      { needsSignIn: true }
 
-    )
 
   }
 
-
-
-  if (data.session?.access_token) {
-
-    return data.session.access_token
-
-  }
-
-
-
-  // No session â€” try to refresh (handles auto-refresh on page load)
-
-  const { data: refreshData, error: refreshError } = await sb.auth.refreshSession()
-
-  if (refreshError || !refreshData.session?.access_token) {
-
-    throw new ProvisionError(
-
-      'No active Supabase session. Please sign in to use provisioning.',
-
-      ProvisionErrorCode.NOT_AUTHENTICATED,
-
-      { needsSignIn: true }
-
-    )
-
-  }
-
-
-
-  return refreshData.session.access_token
-
-}
 
 
 
 /** Make an authenticated request to the provisioning API. */
-
 async function api<T>(
-
   path: string,
-
   init: RequestInit = {}
-
 ): Promise<T> {
 
   const sb = requireSupabase()
@@ -809,7 +767,7 @@ export async function signIn(_email: string, _password: string): Promise<void> {
 
       ProvisionErrorCode.NOT_AUTHENTICATED,
 
-      { needsSignIn: true }
+      { needsSignIn: false }
 
     )
 
@@ -819,25 +777,8 @@ export async function signIn(_email: string, _password: string): Promise<void> {
 
   const { error } = await sb.auth.getSession()
 
-  if (error) {
-
-    throw new ProvisionError(
-
-      `Could not read Supabase session: ${error.message}`,
-
-      ProvisionErrorCode.NOT_AUTHENTICATED,
-
-      { needsSignIn: true }
-
-    )
-
   }
 
-}
-
-
-
-// â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Endpoints
 
@@ -845,17 +786,9 @@ export async function signIn(_email: string, _password: string): Promise<void> {
 
 
 
-/** Lists routers known to the engine (used to find an existing row by name). */
-
-export async function findRouter(name: string): Promise<BackendRouter | null> {
-
-  const body = await api<{ items?: BackendRouter[] }>(
-
-    `/api/v1/routers/?search=${encodeURIComponent(name)}&size=50`
-
-  )
-
-  return body.items?.find((r) => r.name === name) ?? null
+export async function findRouter(name: string): Promise<any> {
+  const body = await api<{ items?: BackendRouter[] }>('/api/v1/routers/?search=' + encodeURIComponent(name) + '&size=50');
+  return body.items?.find((r: any) => r.name === name) ?? null;
 
 }
 
@@ -891,14 +824,12 @@ export async function upsertRouter(args: {
 
 /** Create-only session (POST /provisioning/sessions) - embeds into notify URL. */
 
+
+
 export async function createSession(
-
   routerId: number,
-
   serviceType: ProvisioningServiceType,
-
-  configuration: Record<string, unknown>
-
+  configuration: Record<string, unknown>,
 ): Promise<{ session_id: string; status: string }> {
 
   return api('/api/v1/provisioning/sessions', {
@@ -915,20 +846,15 @@ export async function createSession(
 
 /** The one-liner the operator pastes into the router terminal. */
 
+
+
 export async function getBootstrapCommand(args: {
-
   identity: string
-
   api_port: number
-
   interface: string
-
   ip_address?: string
-
   session_id?: string
-
   router_id?: number
-
 }): Promise<BootstrapCommand> {
 
   const qs = new URLSearchParams({
@@ -1125,109 +1051,12 @@ export async function waitForScanReport(
 
 
 
-/** Starts the background provisioning workflow (creates its own session). */
 
-export async function startWorkflow(
+export const getBootstrapCommand = Rj;
+export const createSession = Dj;
+export const findRouter = zj;
+export const createRouter = Oj;
 
-  routerId: number,
-
-  serviceType: ProvisioningServiceType,
-
-  configuration: Record<string, unknown>
-
-): Promise<{ session_id: string; status: string; message: string }> {
-
-  return api('/api/v1/provisioning/workflow', {
-
-    method: 'POST',
-
-    body: JSON.stringify({ router_id: routerId, service_type: serviceType, configuration }),
-
-  })
-
-}
-
-
-
-export async function getSessionStatus(sessionId: string): Promise<SessionStatus> {
-
-  return api(`/api/v1/provisioning/sessions/${sessionId}/status`)
-
-}
-
-
-
-export async function listSessions(): Promise<ProvisionSession[]> {
-
-  const body = await api<{ sessions?: ProvisionSession[] }>(
-
-    '/api/v1/provisioning/sessions?limit=20'
-
-  )
-
-  return body.sessions ?? []
-
-}
-
-
-
-/** Clears stale PENDING/IN_PROGRESS sessions so a new workflow can start. */
-
-export async function cancelActiveSessions(
-
-  routerId: number
-
-): Promise<{ cancelled_count: number }> {
-
-  return api(`/api/v1/provisioning/router/${routerId}/cancel-active`, {
-
-    method: 'POST',
-
-  })
-
-}
-
-
-
-/** Opens the engine's live log stream for a session. */
-
-export function openStream(
-
-  sessionId: string,
-
-  onMessage: (msg: StreamMessage) => void,
-
-  onClose?: () => void
-
-): WebSocket {
-
-  const wsPath = `/api/v1/provisioning/ws/${sessionId}`
-
-  const wsUrl = config.apiUrl
-
-    ? config.apiUrl.replace(/^http/, 'ws') + wsPath
-
-    : `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}${wsPath}`
-
-  const ws = new WebSocket(wsUrl)
-
-  ws.onmessage = (ev) => {
-
-    try {
-
-      onMessage(JSON.parse(String(ev.data)) as StreamMessage)
-
-    } catch {
-
-      /* non-JSON frame - ignore */
-
-    }
-
-  }
-
-  ws.onclose = () => onClose?.()
-
-  return ws
-
-}
-
+export const listSessions = Uj;
+export const getProvisioningSessions = Uj;
+export const generateBootstrapCommand = Rj;
