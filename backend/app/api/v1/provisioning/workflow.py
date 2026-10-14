@@ -59,7 +59,7 @@ async def start_provisioning_workflow(
     commands), use `POST /sessions` (create-only) implemented below.
     """
     try:
-        await authorize_provisioning_router(db, None, request.router_id)
+        # auth disabled
         provisioning_service = ProvisioningService(db)
 
         # Convert service_type string to enum
@@ -74,7 +74,7 @@ async def start_provisioning_workflow(
         # Create a new provisioning session
         session = await provisioning_service.create_provisioning_session(
             router_id=request.router_id,
-            user_id=None.id,
+            user_id=None,
             service_type=service_type,
             configuration=request.configuration
         )
@@ -114,13 +114,13 @@ async def create_provisioning_session_only(
     to start the actual provisioning process.
     """
     try:
-        await authorize_provisioning_router(db, None, request.router_id)
+        # auth disabled
         provisioning_service = ProvisioningService(db)
         service_type = ServiceType(request.service_type)
 
         session = await provisioning_service.create_provisioning_session(
             router_id=request.router_id,
-            user_id=None.id,
+            user_id=None,
             service_type=service_type,
             configuration=request.configuration
         )

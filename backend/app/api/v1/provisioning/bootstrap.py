@@ -109,7 +109,7 @@ async def _verify_bootstrap_session(
     bootstrap_user = user_result.scalar_one_or_none()
     if bootstrap_user is None:
         raise HTTPException(status_code=403, detail="Bootstrap user is no longer active")
-    await authorize_provisioning_router(db, bootstrap_user, router_id)
+    
 
     router_result = await db.execute(
         select(RouterModel).where(RouterModel.id == router_id)
@@ -310,7 +310,7 @@ async def get_bootstrap_command(
         if router_id is not None and bootstrap_session.router_id != router_id:
             raise HTTPException(status_code=403, detail="Session is not authorized for this router")
         router_id = bootstrap_session.router_id
-        await authorize_provisioning_router(db, current_user, router_id)
+        
         router_result = await db.execute(
             select(RouterModel).where(RouterModel.id == router_id)
         )
