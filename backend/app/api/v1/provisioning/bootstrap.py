@@ -1,4 +1,4 @@
-"""
+﻿"""
 Bootstrap endpoints for MikroTik device provisioning.
 Handles initial device connection and script generation.
 """
@@ -318,10 +318,10 @@ async def get_bootstrap_command(
         if bootstrap_router is None or bootstrap_router.name != identity:
             raise HTTPException(status_code=403, detail="Session is not authorized for this router identity")
 
-        # ── Ensure a router record exists BEFORE the device runs the script ──
+        # â”€â”€ Ensure a router record exists BEFORE the device runs the script â”€â”€
         # The bootstrap script installs the NAT-safe polling agent only when a
         # Router row named `identity` already exists (it needs the row id to mint
-        # the agent token — see generate_bootstrap_script). On a first-time
+        # the agent token â€” see generate_bootstrap_script). On a first-time
         # provision the user runs this bootstrap command before the wizard's
         # device-scan creates the row, so the agent was never installed and a
         # NAT'd (RFC1918) router then failed provisioning at the direct-connect
@@ -363,7 +363,7 @@ async def get_bootstrap_command(
         except Exception as e:
             logger.warning(f"Could not pre-create router record for {identity}: {e}")
 
-        # ── Reprovisioning auto-detection ──
+        # â”€â”€ Reprovisioning auto-detection â”€â”€
         # If the caller provides a router_id, check whether this router already
         # completed bootstrap.  When it has stored API credentials, the frontend
         # can skip the bootstrap step and provision directly via the API.
@@ -372,7 +372,7 @@ async def get_bootstrap_command(
             already_done = await can_use_direct_api(db, router_id)
             if already_done:
                 bootstrap_already_done = True
-                logger.info(f"Router {router_id} already bootstrapped — direct API provisioning available")
+                logger.info(f"Router {router_id} already bootstrapped â€” direct API provisioning available")
 
         # Optional: Ping pre-check if IP address provided
         ping_result = None
@@ -414,8 +414,8 @@ async def get_bootstrap_command(
                 "api_port": api_port,
                 "interface": interface,
                 "user_id": current_user.id,
-                "tenant_id": current_user.organization_id if hasattr(current_user, 'organization_id') else None,
-                "token": script_token,
+
+                "tenant_id": None,
                 "session_id": session_id,
                 "timestamp": datetime.utcnow().isoformat()
             }
@@ -832,7 +832,7 @@ async def get_bootstrap_script(
         # Install the ISP polling agent so the router phones home for
         # commands on a recurring schedule. Without this, queued subscriber
         # commands (create_user on payment, disable on expiry) are NEVER
-        # delivered to a NAT'd router — which was the case in production
+        # delivered to a NAT'd router â€” which was the case in production
         # (agent_installed=true was set but nothing actually installed it).
         if router_obj and agent_token and settings.backend_url:
             agent_install_url = (
@@ -858,7 +858,7 @@ async def get_bootstrap_script(
         else:
             lines.append(":put \"[SKIP] Polling agent install skipped (no router record/token)\"")
 
-        # ── WireGuard VPN overlay enrollment ──
+        # â”€â”€ WireGuard VPN overlay enrollment â”€â”€
         # If the platform has a WG server pubkey configured AND we have a router
         # record, allocate a tunnel IP and emit the RouterOS WireGuard client
         # config. The router generates + keeps its own private key and POSTs its
@@ -1093,7 +1093,7 @@ async def bootstrap_scan_report(
     else:
         logger.info(
             f"Scan report: no router record yet for identity={identity} "
-            f"(first-time provisioning) — caching {len(interfaces)} interfaces by session/identity"
+            f"(first-time provisioning) â€” caching {len(interfaces)} interfaces by session/identity"
         )
 
     # Cache the scan by session_id + identity REGARDLESS of a router record, so
@@ -1183,7 +1183,7 @@ async def provisioning_notify(
         from app.api.v1.provisioning.stream import manager
         from app.services.router_provisioning import store_router_credentials
 
-        # ── Store API credentials on the router for future reprovisioning ──
+        # â”€â”€ Store API credentials on the router for future reprovisioning â”€â”€
         if found_router:
             try:
                 await store_router_credentials(db, found_router.id)
@@ -1191,7 +1191,7 @@ async def provisioning_notify(
             except Exception as e:
                 logger.warning(f'Provisioning notify: failed to store credentials: {e}')
 
-        # ── Update session & broadcast ──
+        # â”€â”€ Update session & broadcast â”€â”€
         sid = None
         if session_found:
             sid = session_found.session_id
@@ -1206,7 +1206,7 @@ async def provisioning_notify(
 
         # Mark the device ONLINE for the UI via the authoritative router->backend
         # check-in (NAT-safe). This flips Stage 1 (network) + Stage 2 (API) to
-        # success and pushes device_online — whether the UI is already listening
+        # success and pushes device_online â€” whether the UI is already listening
         # OR opens monitoring later (start_monitoring re-emits from the stored
         # verified result instead of running the cloud-ping loop that aborts on a
         # private RFC1918 IP). Keyed by the session in the notify URL so it
@@ -1233,7 +1233,7 @@ async def provisioning_notify(
                 pass
             return {'status': 'ok', 'session_id': effective_sid}
 
-        # No session found — record pending check-in for future correlation
+        # No session found â€” record pending check-in for future correlation
         ping_monitor.register_device_checkin(
             client_ip,
             {
@@ -1261,7 +1261,7 @@ async def bootstrap_wg_register(
     """Receive a router's WireGuard PUBLIC key during bootstrap.
 
     The router generated and KEPT its own private key (RouterOS auto-generates
-    it); only the public key is POSTed here (form-encoded ``public_key=…`` from
+    it); only the public key is POSTed here (form-encoded ``public_key=â€¦`` from
     RouterOS ``/tool/fetch http-data=``). We store the public key + tunnel IP and
     flip ``vpn_enabled`` so the WG server reconcile loop picks the peer up and
     the backend starts addressing the router over the tunnel.
