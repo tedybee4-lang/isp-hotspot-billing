@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Provisioning API client â€” clean, typed, and reliable.
  *
  * This replaces the legacy client with:
@@ -197,25 +197,40 @@ async function api<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
-  const token = await getAccessToken()
+  const sb = requireSupabase()
 
-  let res: Response
-  try {
-    res = await fetch(apiUrl(path), {
+  async function doFetch(token: string): Promise<Response> {
+    return fetch(apiUrl(path), {
       ...init,
       headers: {
-        'Authorization': `Bearer ${token}`,
+        'Authorization': `Bearer ${token}`, 
         ...(init.body && !(init.body instanceof URLSearchParams)
           ? { 'Content-Type': 'application/json' }
           : {}),
         ...(init.headers ?? {}),
       },
     })
+  }
+
+  let res: Response
+  try {
+    const token = await getAccessToken()
+    res = await doFetch(token)
   } catch (e) {
     if (e instanceof ProvisionError) throw e
     throw ProvisionError.network(path, e)
   }
 
+  if (res.status === 401) {
+    try {
+      const { data: refreshData, error: refreshError } = await sb.auth.refreshSession()
+      if (!refreshError && refreshData.session?.access_token) {
+        res = await doFetch(refreshData.session.access_token)
+      }
+    } catch {
+      // ignore
+    }
+  }
   const contentType = res.headers.get('content-type') ?? ''
   const isJson = contentType.includes('application/json')
 
