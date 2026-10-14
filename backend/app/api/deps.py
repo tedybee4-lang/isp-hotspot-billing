@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db, AsyncSessionLocal
 from app.core.config import settings
 from app.core.security import verify_token
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, UserStatus
 from app.modules.auth import UserService
 
 
@@ -134,8 +134,8 @@ async def get_current_user(
 
     Accepts EITHER the local HS256 JWT (back-compat, tried first) OR a central
     SSO RS256 JWT (validated via JWKS, JIT-provisioned on first sight). The entire
-    API authorizes through this resolver — directly, or via get_current_active_user
-    and the tenant/org dependencies in deps_tenant.py / deps_org.py — so making it
+    API authorizes through this resolver â€” directly, or via get_current_active_user
+    and the tenant/org dependencies in deps_tenant.py / deps_org.py â€” so making it
     SSO-aware lets every protected endpoint serve SSO-authenticated users, not just
     /auth/me. Previously SSO tokens 401'd everywhere except the unified endpoints.
     """
@@ -154,7 +154,7 @@ async def get_current_user(
             return user
         raise credentials_exception
 
-    # 2) SSO RS256 fall-through — validate via JWKS + JIT-provision/link. Stash
+    # 2) SSO RS256 fall-through â€” validate via JWKS + JIT-provision/link. Stash
     #    the claims on request.state for downstream enrichment/gating (mirrors
     #    get_current_user_unified).
     from app.core.sso import get_optional_sso_claims, provision_sso_user
@@ -166,13 +166,13 @@ async def get_current_user(
 
     # 3) Supabase fall-through. The web frontend authenticates every user
     #    through Supabase, so a Supabase-issued access token must resolve here
-    #    too — otherwise operator endpoints (e.g. GET /api/v1/routers/, used by
+    #    too â€” otherwise operator endpoints (e.g. GET /api/v1/routers/, used by
     #    the Add-a-MikroTik wizard via src/lib/provisionApi.ts) 401 with
     #    AUTH_1003 ("Not authenticated") for a correctly signed-in user.
     #    Identity only: the mapped local User row is authoritative for active
     #    state, role, and organization, and the existing downstream active/role
     #    checks (get_current_active_user, require_technician_or_admin) still run
-    #    unchanged — so tenant isolation and authorization are preserved.
+    #    unchanged â€” so tenant isolation and authorization are preserved.
     supabase_user = await _resolve_supabase_user(request, db)
     if supabase_user is not None:
         return supabase_user
@@ -187,7 +187,7 @@ async def _verify_supabase_subject(request: Request) -> Optional[str]:
     Supabase accepted, ``None`` when Supabase rejected it (or when the request
     has no Bearer token, the bridge is unconfigured, or the response body is
     unusable). Raises 503 only when the bridge is configured but Supabase is
-    unreachable — that is a server-side fault, never a caller error.
+    unreachable â€” that is a server-side fault, never a caller error.
 
     Verification is delegated to Supabase itself (``GET /auth/v1/user`` with the
     public anon key), so there is no signature check here to get wrong, no
@@ -251,7 +251,7 @@ async def _resolve_supabase_user(
     Returns the mapped local ``User`` when the request carries a valid Supabase
     JWT whose subject is mapped via ``users.supabase_user_id``. Returns ``None``
     when there is no Bearer token, the Supabase bridge is not configured, the
-    token is not a valid Supabase token, or the subject is unmapped — so the
+    token is not a valid Supabase token, or the subject is unmapped â€” so the
     caller falls back to its normal 401. Raises 503 only when the bridge is
     configured but Supabase is unreachable.
     """
@@ -261,12 +261,12 @@ async def _resolve_supabase_user(
     return await _load_user_by_supabase_subject(db, supabase_subject)
 
 
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Unified current-user (Phase 1b): accept EITHER the existing local HS256 JWT
 # OR a central SSO RS256 JWT (with JIT provisioning). Local path is tried
 # first for full back-compat; SSO is a fall-through. Nothing here changes the
 # behavior of the local-only ``get_current_user`` above.
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def get_current_user_unified(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -274,7 +274,7 @@ async def get_current_user_unified(
     """Resolve the current user from a local JWT or an SSO JWT.
 
     Order:
-    1. Local HS256 JWT (existing behavior, unchanged) — back-compat first.
+    1. Local HS256 JWT (existing behavior, unchanged) â€” back-compat first.
     2. SSO RS256 JWT -> validate via JWKS -> JIT-provision/link a local User.
 
     The resolved SSO claims (when present) are stashed on ``request.state.sso_claims``
@@ -407,9 +407,9 @@ def require_technician_or_admin():
     return role_checker
 
 
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Provisioning operator authentication
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async def get_optional_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -419,7 +419,7 @@ async def get_optional_current_user(
     The historical name is retained to avoid breaking route imports. Resolution
     order:
 
-    1. The unified resolver — the local HS256 JWT or a central SSO RS256 JWT.
+    1. The unified resolver â€” the local HS256 JWT or a central SSO RS256 JWT.
     2. A Supabase-issued access token, verified by Supabase itself and then
        mapped to the authoritative local ``users`` row via
        ``supabase_user_id``.
@@ -429,10 +429,10 @@ async def get_optional_current_user(
     are enforced exactly as they are for every other authenticated endpoint.
 
     Status semantics, distinct at every step:
-      * 401 — no Bearer token, or Supabase rejected the token (invalid/expired).
-      * 403 — a valid token whose subject is not provisioned as local staff
+      * 401 â€” no Bearer token, or Supabase rejected the token (invalid/expired).
+      * 403 â€” a valid token whose subject is not provisioned as local staff
         (unmapped subject, customer role, or inactive account).
-      * 503 — the Supabase bridge is configured but unreachable/misconfigured.
+      * 503 â€” the Supabase bridge is configured but unreachable/misconfigured.
         A 503 is a server fault and is deliberately never reported as an
         authentication failure.
 
@@ -486,7 +486,7 @@ async def get_optional_current_user(
         # Supabase rejected the token: invalid or expired.
         raise auth_error
 
-    # Identity only — the mapped local row remains authoritative.
+    # Identity only â€” the mapped local row remains authoritative.
     user = await _load_user_by_supabase_subject(db, supabase_subject)
     if user is None:
         raise HTTPException(
@@ -503,7 +503,7 @@ async def get_optional_current_user(
         )
 
     # Router provisioning is an ISP-staff operation. Platform owners and ISP
-    # admins/technicians only — a customer identity must never enroll a router,
+    # admins/technicians only â€” a customer identity must never enroll a router,
     # which is how a tenant's routers would otherwise be reachable.
     if user.role not in (UserRole.PLATFORM_OWNER, UserRole.ISP_ADMIN, UserRole.ISP_TECHNICIAN):
         raise HTTPException(
@@ -579,16 +579,16 @@ def require_customer_or_admin():
     return role_checker
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Multi-outlet scope (Phase 5) — OPTIONAL, ADDITIVE.
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Multi-outlet scope (Phase 5) â€” OPTIONAL, ADDITIVE.
 #
 # Clients (e.g. a per-outlet POS/admin UI) may send an ``X-Outlet-ID`` header to
 # scope reads/writes to a single outlet. This dependency parses it and returns
-# it as ``Optional[int]`` — it NEVER requires the header and NEVER errors when
+# it as ``Optional[int]`` â€” it NEVER requires the header and NEVER errors when
 # it is absent or malformed (returns None), so every existing caller that omits
 # it is completely unaffected. Routers thread it into queries only as an
 # additional ``WHERE`` filter when present.
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def get_outlet_id(request: Request) -> Optional[int]:
     """Return the X-Outlet-ID header as an int, or None when absent/invalid."""
     raw = request.headers.get("X-Outlet-ID") or request.headers.get("x-outlet-id")
@@ -629,8 +629,8 @@ def get_pagination_params(
     return PaginationParams(page=page, size=size)
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Subscription gating (Phase 1b) — OPT-IN dependency.
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Subscription gating (Phase 1b) â€” OPT-IN dependency.
 #
 # For MUTATING requests (POST/PUT/PATCH/DELETE) made by an SSO user who is NOT
 # a platform owner / superuser, returns 403 {code: "subscription_inactive",
@@ -642,7 +642,7 @@ def get_pagination_params(
 # accidentally applied to the public captive-portal / hotspot / pppoe routes.
 # Wire it into ISP-admin business routers only, e.g.:
 #     router = APIRouter(dependencies=[Depends(enforce_subscription_active)])
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -700,23 +700,23 @@ async def enforce_subscription_active(request: Request) -> None:
         )
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Plan-LIMIT gating (Phase 3) — central subscriptions-api migration.
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Plan-LIMIT gating (Phase 3) â€” central subscriptions-api migration.
 #
 # enforce_plan_limit(limit_key, count_fn) returns a FastAPI dependency that
 # blocks a CREATE/mutation when the tenant has reached the per-plan limit
 # (e.g. max_routers, max_customers) defined in the central subscriptions-api.
 #
-# Limit resolution (fast → slow):
+# Limit resolution (fast â†’ slow):
 #   1. SSO JWT claims `sub_limits` (enriched by auth-api from subscriptions-api)
 #   2. fallback: live read via SubscriptionsClient.get_subscription(tenant_uuid)
 #
 # DEGRADES SAFELY (migration-safe): if NO subscription limit information is
-# available — local-JWT user, no SSO claims, subscriptions-api not configured /
-# unreachable, tenant not yet subscribed, or the limit key absent — the action
+# available â€” local-JWT user, no SSO claims, subscriptions-api not configured /
+# unreachable, tenant not yet subscribed, or the limit key absent â€” the action
 # is ALLOWED (current behavior preserved) and a warning is logged. A limit value
 # of -1 (or 0) means unlimited. Superuser / platform owner always bypass.
-# ──────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def _limit_is_unlimited(value: Any) -> bool:
     """A plan limit of -1 (convention) or non-positive means "no cap"."""
     try:
@@ -767,11 +767,11 @@ def enforce_plan_limit(limit_key: str, count_fn):
         if claims is None:
             claims = await get_optional_sso_claims(request)
 
-        # No SSO claims → local-JWT request: no central subscription context.
+        # No SSO claims â†’ local-JWT request: no central subscription context.
         # Migration-safe: ALLOW (local Licence model still governs limits).
         if not claims:
             log.warning(
-                "enforce_plan_limit(%s): no SSO claims on request — allowing "
+                "enforce_plan_limit(%s): no SSO claims on request â€” allowing "
                 "(local Licence model still authoritative during migration)",
                 limit_key,
             )
@@ -801,17 +801,17 @@ def enforce_plan_limit(limit_key: str, count_fn):
             except Exception as exc:  # never block on a subscriptions outage
                 log.warning(
                     "enforce_plan_limit(%s): subscriptions-api lookup failed "
-                    "(%s) — allowing (fail-open during migration)",
+                    "(%s) â€” allowing (fail-open during migration)",
                     limit_key,
                     exc,
                 )
                 return
 
-        # No limit info anywhere → migration-safe ALLOW.
+        # No limit info anywhere â†’ migration-safe ALLOW.
         if limit_value is None:
             log.warning(
                 "enforce_plan_limit(%s): no limit found in claims or "
-                "subscriptions-api — allowing (fail-open during migration)",
+                "subscriptions-api â€” allowing (fail-open during migration)",
                 limit_key,
             )
             return
@@ -822,7 +822,7 @@ def enforce_plan_limit(limit_key: str, count_fn):
         try:
             limit_int = int(limit_value)
         except (TypeError, ValueError):
-            return  # unparseable limit → allow rather than block
+            return  # unparseable limit â†’ allow rather than block
 
         org_id = (
             None
@@ -831,9 +831,9 @@ def enforce_plan_limit(limit_key: str, count_fn):
         )
         try:
             current = int(await count_fn(db, org_id))
-        except Exception as exc:  # counting failed → don't block the user
+        except Exception as exc:  # counting failed â†’ don't block the user
             log.warning(
-                "enforce_plan_limit(%s): usage count failed (%s) — allowing",
+                "enforce_plan_limit(%s): usage count failed (%s) â€” allowing",
                 limit_key,
                 exc,
             )
