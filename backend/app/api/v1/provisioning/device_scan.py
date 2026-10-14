@@ -15,12 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import (
     authorize_provisioning_router,
     get_db,
-    get_optional_current_user,
 )
 from app.core.config import settings
 from app.integrations.mikrotik import get_mikrotik_client
 from app.models.router import Router
-from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +98,7 @@ class DeviceScanResponse(BaseModel):
 async def scan_device(
     request: DeviceScanRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_optional_current_user),
-):
+    ):
     """Scan a MikroTik device for interfaces, ports, and services.
 
     Scanned data is persisted to the router's config JSON field to avoid

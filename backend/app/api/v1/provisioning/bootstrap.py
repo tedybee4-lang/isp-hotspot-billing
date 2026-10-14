@@ -15,11 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import APIRouter, Depends, Query, HTTPException, Request, Path, Response
 from fastapi.responses import PlainTextResponse
-from app.models.user import User
 from app.models.provisioning import ProvisioningSession, ProvisioningStatus
 from app.api.deps import (
     authorize_provisioning_router,
-    get_optional_current_user,
     get_db,
 )
 from app.core.security import create_access_token
@@ -272,7 +270,6 @@ async def get_bootstrap_command(
     session_id: Optional[str] = Query(None, description="Optional provisioning session_id to include in bootstrap callback"),
     router_id: Optional[int] = Query(None, description="Router ID - if provided, checks whether bootstrap was already done"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_optional_current_user),
 ):
     """Generate a one-liner RouterOS command for initial device provisioning with proper access token.
 
@@ -689,14 +686,14 @@ async def get_bootstrap_script(
             "  :do {",
             "    /user/group/add name=ISP-api policy=local,telnet,ssh,ftp,reboot,read,write,policy,test,winbox,password,web,sniff,sensitive,api,romon,rest-api",
             "    :put \"[OK] User group created\"",
-            "    :log info \"BOOTSTRAP: User group ISP-api created\"",
+            "    :log info \"BOOTSTRAP group ISP-api created\"",
             "  } on-error={",
             "    :put \"[FAIL] Failed to create user group\"",
             "    :log error \"BOOTSTRAP: Failed to create user group\"",
             "  }",
             "} else={",
             "  :put \"[SKIP] User group already exists\"",
-            "  :log info \"BOOTSTRAP: User group already exists\"",
+            "  :log info \"BOOTSTRAP group already exists\"",
             "}",
             "",
             "# Step 7/8 - Create API user",
@@ -1318,7 +1315,6 @@ async def bootstrap_wg_register(
 async def check_direct_api_access(
     router_id: int = Path(..., description="Router ID"),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_optional_current_user),
 ):
     """Check if router has stored credentials for direct API reprovisioning.
 
@@ -1386,7 +1382,6 @@ async def start_ping_monitoring(
     max_attempts: int = Query(300, description="Maximum check attempts", ge=1, le=1000),
     timeout_ms: int = Query(1000, description="Connection timeout in milliseconds", ge=100, le=5000),
     identity: Optional[str] = Query(None, description="Router identity (for NAT-safe cross-session check-in correlation)"),
-    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Start two-stage device monitoring for a provisioning session.
@@ -1448,7 +1443,6 @@ async def start_ping_monitoring(
 @router.post("/ping/stop/{session_id}")
 async def stop_ping_monitoring(
     session_id: str,
-    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Stop ping monitoring for a provisioning session.
@@ -1494,7 +1488,6 @@ async def stop_ping_monitoring(
 @router.get("/ping/status/{session_id}")
 async def get_ping_status(
     session_id: str,
-    current_user: User = Depends(get_optional_current_user),
 ):
     """
     Get the latest ping monitoring status for a session.
