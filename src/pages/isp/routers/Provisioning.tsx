@@ -1,119 +1,84 @@
-import React, { useState, useEffect } from 'react';
-import { generateBootstrapCommand, fetchProvisioningSessions, startProvisioningWorkflow } from '@/lib/provisionApi';
-import { fetchNodes } from '@/lib/data';
+import React, { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { generateBootstrapCommand } from '@/lib/provisionApi'
+
+type ServiceMode = 'hotspot' | 'pppoe' | 'both'
+
+const SERVICE_MODES: Array<{ value: ServiceMode; label: string; hint: string }> = [
+  { value: 'hotspot', label: 'HotSpot', hint: 'Voucher & captive-portal Wi-Fi access' },
+  { value: 'pppoe', label: 'PPPoE', hint: 'Username/password broadband sessions' },
+  { value: 'both', label: 'Both (HotSpot & PPPoE)', hint: 'Run HotSpot and PPPoE on the same router' },
+]
 
 export default function RouterProvisioningPage() {
-  const [identity, setIdentity] = useState('');
-  const [wanInterface, setWanInterface] = useState('ether1');
-  const [bootstrapCommand, setBootstrapCommand] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<{session_id: string; identity: string; wan_interface: string; status: string}[]>([]);
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const [serviceType, setServiceType] = useState<'hotspot' | 'pppoe_server' | 'both'>('hotspot');
-  const [routerId, setRouterId] = useState<number | null>(null);
-  const [routers, setRouters] = useState<any[]>([]);
-  const [provisioningSessionId, setProvisioningSessionId] = useState<string | null>(null);
-  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
+  const navigate = useNavigate()
 
-  const loadSessions = async () => {
+  const [identity, setIdentity] = useState('')
+  const [wanInterface, setWanInterface] = useState('ether1')
+  const [serviceMode, setServiceMode] = useState<ServiceMode>('hotspot')
+  const [hotspotInterface, setHotspotInterface] = useState('ether2')
+  const [pppoeInterface, setPppoeInterface] = useState('ether3')
+
+  const [bootstrapCommand, setBootstrapCommand] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle')
+
+  const showHotspotPort = serviceMode === 'hotspot' || serviceMode === 'both'
+  const showPppoePort = serviceMode === 'pppoe' || serviceMode === 'both'
+
+  const handleGenerate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setBootstrapCommand('')
+    setLoading(true)
+
     try {
-      const data = await fetchProvisioningSessions();
-      setSessions(data || []);
-    } catch (e) {
-      console.error("Failed to load sessions:", e);
-    }
-  };
-
-  const loadRouters = async () => {
-    try {
-      const data = await fetchNodes();
-      setRouters(Array.isArray(data) ? data : []);
-    } catch (e) {
-      console.error("Failed to load routers:", e);
-    }
-  };
-
-  useEffect(() => {
-    loadSessions();
-    loadRouters();
-  }, []);
-
-  const handleStartProvisioning = async () => {
-    if (!routerId || !provisioningSessionId) {
-      setError('Please select a router and generate bootstrap command first');
-      return;
-    }
-    setError(null);
-    setLoading(true);
-    setWorkflowStatus('Starting provisioning workflow...');
-    
-    try {
-      const res = await startProvisioningWorkflow({
-        router_id: routerId,
-        service_type: serviceType,
-        configuration: {}
-      });
-      setProvisioningSessionId(res.session_id);
-      setWorkflowStatus(res.message || 'Provisioning workflow started successfully');
-      loadSessions();
+      const res = await generateBootstrapCommand({
+        identity: identity.trim(),
+        wan_interface: wanInterface.trim(),
+        service_mode: serviceMode,
+        hotspot_interface: showHotspotPort ? hotspotInterface.trim() : undefined,
+        pppoe_interface: showPppoePort ? pppoeInterface.trim() : undefined,
+      })
+      setBootstrapCommand(res.bootstrap_command)
     } catch (err: any) {
-      setError(err.message || 'Error starting provisioning workflow. Please try again.');
+      setError(err?.message || 'Failed to generate the bootstrap command. Please try again.')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(bootstrapCommand);
-      setCopyStatus('copied');
-      setTimeout(() => setCopyStatus('idle'), 2000);
+      await navigator.clipboard.writeText(bootstrapCommand)
+      setCopyStatus('copied')
     } catch {
-      setCopyStatus('failed');
-      setTimeout(() => setCopyStatus('idle'), 2000);
+      setCopyStatus('failed')
     }
-  };
-
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-    
-    try {
-      const res = await generateBootstrapCommand({
-        identity: identity || 'Router-1',
-        wan_interface: wanInterface || 'ether1',
-      });
-      setBootstrapCommand(res.bootstrap_command);
-      setCopyStatus('idle');
-      setProvisioningSessionId(res.session_id);
-      loadSessions();
-    } catch (err: any) {
-      setError(err.message || 'Error generating command. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
+    setTimeout(() => setCopyStatus('idle'), 2500)
+  }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold mb-6">Router Provisioning</h1>
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold mb-1">Router Provisioning</h1>
+        <p className="text-sm text-gray-500">
+          Add a MikroTik router, pick the services it should run, then generate its one-line enrollment script.
+        </p>
+      </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md mb-6 text-sm font-medium">
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md text-sm font-medium">
           {error}
         </div>
       )}
 
-      {/* Bootstrap a new router */}
-      <div className="bg-white p-6 rounded-lg shadow-sm border mb-8">
-        <h2 className="text-lg font-semibold mb-2">Bootstrap a new router</h2>
-        <p className="text-sm text-gray-500 mb-6">
-          Generates a RouterOS one-liner for the router to enroll itself.
-        </p>
-
-        <form onSubmit={handleGenerate} className="space-y-4">
+      <form onSubmit={handleGenerate} className="space-y-6">
+        {/* Step 1: Router details */}
+        <div className="bg-white p-6 rounded-lg shadow-sm border">
+          <h2 className="text-lg font-semibold mb-1">1. Router details</h2>
+          <p className="text-sm text-gray-500 mb-4">Name the router and tell us which port faces the internet.</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Router identity</label>
@@ -121,7 +86,7 @@ export default function RouterProvisioningPage() {
                 type="text"
                 value={identity}
                 onChange={(e) => setIdentity(e.target.value)}
-                placeholder="e.g. Office Router"
+                placeholder="e.g. Beta-Router"
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 required
               />
@@ -138,109 +103,116 @@ export default function RouterProvisioningPage() {
               />
             </div>
           </div>
+        </div>
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {loading ? 'Generating...' : 'Generate bootstrap command'}
-          </button>
-        </form>
+        {/* Step 2: Service mode and ports */}
+        <div className="bg-white p-6 rounded-lg shadow-sm border">
+          <h2 className="text-lg font-semibold mb-1">2. Service mode</h2>
+          <p className="text-sm text-gray-500 mb-4">Choose which billing services this router should run.</p>
 
-        {bootstrapCommand && (
-          <div className="mt-6 p-4 bg-gray-900 text-green-400 rounded-md font-mono text-sm overflow-x-auto relative">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-gray-400 text-xs"># Copy and paste into WinBox Terminal:</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {SERVICE_MODES.map((mode) => (
               <button
-                onClick={handleCopy}
-                disabled={loading || copyStatus === 'copied'}
-                className="px-3 py-1 text-xs bg-gray-700 text-gray-200 rounded hover:bg-gray-600 disabled:opacity-50 transition-colors"
+                key={mode.value}
+                type="button"
+                onClick={() => setServiceMode(mode.value)}
+                className={
+                  'text-left p-4 rounded-lg border transition ' +
+                  (serviceMode === mode.value
+                    ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-500'
+                    : 'border-gray-200 hover:border-gray-300 bg-white')
+                }
               >
-                {copyStatus === 'copied' ? (
-                  <span className="text-green-400">✓ Copied!</span>
-                ) : copyStatus === 'failed' ? (
-                  <span className="text-red-400">Failed</span>
-                ) : (
-                  'Copy'
-                )}
+                <span className="block text-sm font-semibold text-gray-900">{mode.label}</span>
+                <span className="block text-xs text-gray-500 mt-1">{mode.hint}</span>
               </button>
-            </div>
-            <code>{bootstrapCommand}</code>
+            ))}
           </div>
-        )}
-      </div>
 
-      {/* Provision Service */}
-      {bootstrapCommand && (
-        <div className="bg-white p-6 rounded-lg shadow-sm border mb-8">
-          <h2 className="text-lg font-semibold mb-4">Provision Service</h2>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Router</label>
-              <select
-                value={routerId || ''}
-                onChange={(e) => setRouterId(Number(e.target.value) || null)}
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">Select a router...</option>
-                {routers.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name || r.ip_address || r.id}</option>
-                ))}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Service Type</label>
-              <select
-                value={serviceType}
-                onChange={(e) => setServiceType(e.target.value as any)}
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="hotspot">Hotspot</option>
-                <option value="pppoe_server">PPPoE</option>
-                <option value="both">Both (Hotspot + PPPoE)</option>
-              </select>
-            </div>
-
-            <button
-              onClick={handleStartProvisioning}
-              disabled={loading || !routerId}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
-            >
-              {loading ? 'Starting...' : 'Start Provisioning Workflow'}
-            </button>
-            {workflowStatus && (
-              <div className="text-sm text-green-600 mt-2">
-                {workflowStatus}
+          {/* Dynamic port selection */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
+            {showHotspotPort && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">HotSpot LAN interface</label>
+                <input
+                  type="text"
+                  value={hotspotInterface}
+                  onChange={(e) => setHotspotInterface(e.target.value)}
+                  placeholder="ether2"
+                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="text-xs text-gray-400 mt-1">The port your HotSpot clients connect to.</p>
+              </div>
+            )}
+            {showPppoePort && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">PPPoE interface</label>
+                <input
+                  type="text"
+                  value={pppoeInterface}
+                  onChange={(e) => setPppoeInterface(e.target.value)}
+                  placeholder="ether3"
+                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <p className="text-xs text-gray-400 mt-1">The port your PPPoE clients connect to.</p>
               </div>
             )}
           </div>
         </div>
-      )}
 
-      {/* Provisioning sessions list */}
-      <div className="bg-white p-6 rounded-lg shadow-sm border">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold">Provisioning sessions</h2>
-          <button onClick={loadSessions} className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50">
-            Refresh
+        {/* Step 3: Generate */}
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-6 py-2.5 bg-indigo-600 text-white font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {loading ? 'Generating...' : 'Generate Bootstrap Command'}
           </button>
         </div>
+      </form>
 
-        {sessions.length === 0 ? (
-          <p className="text-sm text-gray-500">No active provisioning sessions found.</p>
-        ) : (
-          <div className="divide-y">
-            {sessions.map((s, idx) => (
-              <div key={s.session_id || idx} className="py-3 flex justify-between text-sm">
-                <span>{s.identity || 'Router'} ({s.wan_interface || 'ether1'})</span>
-                <span className="text-gray-500">{s.status || 'Pending'}</span>
-              </div>
-            ))}
+      {/* Success state */}
+      {bootstrapCommand && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="h-6 w-6 rounded-full bg-green-500 text-white grid place-items-center text-xs font-bold">
+              ✓
+            </span>
+            <h2 className="text-lg font-semibold text-green-900">Script Loaded Successfully</h2>
           </div>
-        )}
-      </div>
+          <p className="text-sm text-green-800">
+            Paste this one-liner into the router's WinBox terminal. The router will enroll itself and the
+            selected services will be applied automatically.
+          </p>
+          <div className="relative">
+            <pre className="bg-gray-900 text-green-400 rounded-md font-mono text-xs p-4 pr-24 overflow-x-auto whitespace-pre-wrap break-all">
+              {bootstrapCommand}
+            </pre>
+            <button
+              onClick={handleCopy}
+              className="absolute top-2 right-2 px-3 py-1.5 text-xs font-medium bg-gray-700 text-gray-200 rounded hover:bg-gray-600"
+            >
+              {copyStatus === 'copied' ? 'Copied!' : copyStatus === 'failed' ? 'Failed' : 'Copy'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-3 pt-2">
+            <button
+              onClick={() => navigate('/app/routers')}
+              className="px-5 py-2.5 bg-indigo-600 text-white font-medium rounded-md hover:bg-indigo-700"
+            >
+              View Router Dashboard
+            </button>
+            <button
+              onClick={handleGenerate}
+              disabled={loading}
+              className="px-5 py-2.5 border border-gray-300 bg-white text-gray-700 font-medium rounded-md hover:bg-gray-50 disabled:opacity-50"
+            >
+              Regenerate Script
+            </button>
+          </div>
+        </div>
+      )}
     </div>
-  );
+  )
 }

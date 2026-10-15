@@ -3,6 +3,12 @@ const API_BASE_URL = '/api/v1/provisioning';
 export interface BootstrapRequest {
   identity: string;
   wan_interface: string;
+  /** Which services the router should be enrolled with: hotspot, pppoe, or both. */
+  service_mode?: 'hotspot' | 'pppoe' | 'both';
+  /** LAN interface for the HotSpot server (e.g. ether2). */
+  hotspot_interface?: string;
+  /** Interface for the PPPoE server (e.g. ether3). */
+  pppoe_interface?: string;
 }
 
 export interface BootstrapResponse {
@@ -32,10 +38,16 @@ export interface SessionStatusResponse {
 }
 
 export async function generateBootstrapCommand(data: BootstrapRequest): Promise<BootstrapResponse> {
-  const payload = {
+  const payload: Record<string, string> = {
     identity: data.identity || 'Router-1',
     wan_interface: data.wan_interface || 'ether1',
   };
+
+  // Only include the service selection and interface assignments when they are
+  // actually provided, so plain identity/WAN-only calls stay minimal.
+  if (data.service_mode) payload.service_mode = data.service_mode;
+  if (data.hotspot_interface) payload.hotspot_interface = data.hotspot_interface;
+  if (data.pppoe_interface) payload.pppoe_interface = data.pppoe_interface;
 
   const response = await fetch(`${API_BASE_URL}/bootstrap`, {
     method: 'POST',
