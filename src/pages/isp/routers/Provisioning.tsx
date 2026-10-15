@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { generateBootstrapCommand, fetchProvisioningSessions } from '@/lib/provisionApi';
+import { generateBootstrapCommand, fetchProvisioningSessions, startProvisioningWorkflow } from '@/lib/provisionApi';
+import { fetchNodes } from '@/lib/data';
 
 export default function RouterProvisioningPage() {
   const [identity, setIdentity] = useState('');
@@ -9,6 +10,11 @@ export default function RouterProvisioningPage() {
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [serviceType, setServiceType] = useState<'hotspot' | 'pppoe_server' | 'both'>('hotspot');
+  const [routerId, setRouterId] = useState<number | null>(null);
+  const [routers, setRouters] = useState<any[]>([]);
+  const [provisioningSessionId, setProvisioningSessionId] = useState<string | null>(null);
+  const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
 
   const loadSessions = async () => {
     try {
@@ -19,9 +25,44 @@ export default function RouterProvisioningPage() {
     }
   };
 
+  const loadRouters = async () => {
+    try {
+      const data = await fetchNodes();
+      setRouters(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("Failed to load routers:", e);
+    }
+  };
+
   useEffect(() => {
     loadSessions();
+    loadRouters();
   }, []);
+
+  const handleStartProvisioning = async () => {
+    if (!routerId || !provisioningSessionId) {
+      setError('Please select a router and generate bootstrap command first');
+      return;
+    }
+    setError(null);
+    setLoading(true);
+    setWorkflowStatus('Starting workflow...');
+
+    try {
+      const res = await startProvisioningWorkflow({
+        router_id: routerId,
+        service_type: serviceType,
+        configuration: {}
+      });
+      setWorkflowStatus(res.message || 'Provisioning workflow started successfully');
+      loadSessions();
+    } catch (err: any) {
+      setError(err.message || 'Error starting provisioning workflow. Please try again.');
+      setWorkflowStatus(null);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleCopy = async () => {
     try {
@@ -46,6 +87,7 @@ export default function RouterProvisioningPage() {
       });
       setBootstrapCommand(res.bootstrap_command);
       setCopyStatus('idle');
+      setProvisioningSessionId(res.session_id);
       loadSessions();
     } catch (err: any) {
       setError(err.message || 'Error generating command. Please try again.');
@@ -127,6 +169,49 @@ export default function RouterProvisioningPage() {
           </div>
         )}
       </div>
+
+      {bootstrapCommand && (
+        <div className="bg-white p-6 rounded-lg shadow-sm border mb-8">
+          <h2 className="text-lg font-semibold mb-4">Provision Service</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Router</label>
+              <select
+                value={routerId || ''}
+                onChange={(e) => setRouterId(Number(e.target.value) || null)}
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Select a router...</option>
+                {routers.map((r) => (
+                  <option key={r.id} value={r.id}>{r.name || r.host || r.id}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Service Type</label>
+              <select
+                value={serviceType}
+                onChange={(e) => setServiceType(e.target.value as any)}
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="hotspot">Hotspot</option>
+                <option value="pppoe_server">PPPoE</option>
+                <option value="both">Both (Hotspot + PPPoE)</option>
+              </select>
+            </div>
+            <button
+              onClick={handleStartProvisioning}
+              disabled={loading || !routerId}
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+            >
+              {loading ? 'Starting...' : 'Start Provisioning Workflow'}
+            </button>
+            {workflowStatus && (
+              <div className="text-sm text-green-600">{workflowStatus}</div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white p-6 rounded-lg shadow-sm border">
         <div className="flex justify-between items-center mb-4">
