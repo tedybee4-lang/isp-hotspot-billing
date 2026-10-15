@@ -23,7 +23,7 @@ import IspLayout from './pages/isp/IspLayout'
 import { CaptivePortalSettingsPage } from './pages/isp/settings/CaptivePortal'
 import { PaymentSettingsPage, NetworkSettingsPage, SmsSettingsPage } from './pages/isp/settings/Payment'
 import { HashBackPaymentSettings } from './pages/isp/settings/HashBackPayments'
-import ProvisioningPage from './pages/isp/routers/Provisioning'
+import { ProvisioningPage } from './pages/isp/routers/Provisioning'
 import {
   DashboardPage, CustomersPage, PaymentsPage, InvoicesPage,
   SessionsPage, VouchersPage, SmsPage, ResellersPage, CommissionsPage,
