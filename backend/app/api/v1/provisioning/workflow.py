@@ -74,7 +74,7 @@ async def start_provisioning_workflow(
         # Create a new provisioning session
         session = await provisioning_service.create_provisioning_session(
             router_id=request.router_id,
-            user_id=None,
+            user_id=1,  # Default user for public provisioning
             service_type=service_type,
             configuration=request.configuration
         )
@@ -120,7 +120,7 @@ async def create_provisioning_session_only(
 
         session = await provisioning_service.create_provisioning_session(
             router_id=request.router_id,
-            user_id=None,
+            user_id=1,  # Default user for public provisioning
             service_type=service_type,
             configuration=request.configuration
         )
@@ -132,6 +132,40 @@ async def create_provisioning_session_only(
     except Exception as e:
         logger.error(f"Failed to create provisioning session: {e}")
         raise HTTPException(status_code=500, detail="Failed to create provisioning session")
+
+
+@router.get("/sessions")
+async def list_provisioning_sessions(
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """List provisioning sessions (public, no auth required)."""
+    try:
+        from sqlalchemy import desc
+        from app.models.provisioning import ProvisioningSession
+
+        result = await db.execute(
+            select(ProvisioningSession)
+            .order_by(desc(ProvisioningSession.created_at))
+            .limit(limit)
+        )
+        sessions = result.scalars().all()
+
+        return [
+            {
+                "id": s.session_id,
+                "identity": s.configuration.get("identity", "Router") if s.configuration else "Router",
+                "wan_interface": s.configuration.get("wan_interface", "ether1") if s.configuration else "ether1",
+                "status": s.status,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+            }
+            for s in sessions
+        ]
+
+    except Exception as e:
+        logger.error(f"Failed to list provisioning sessions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list sessions")
 
 
 @router.get("/sessions/{session_id}/status", response_model=SessionStatusResponse)

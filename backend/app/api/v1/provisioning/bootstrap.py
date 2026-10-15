@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import APIRouter, Depends, Query, HTTPException, Request, Path, Response
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 from app.models.provisioning import ProvisioningSession, ProvisioningStatus
 from app.api.deps import (
     authorize_provisioning_router,
@@ -32,6 +33,158 @@ logger = logging.getLogger(__name__)
 DEFAULT_ROUTER_IP = settings.mikrotik_default_ip
 DEFAULT_SUBNET = settings.mikrotik_default_subnet
 router = APIRouter()
+
+
+class BootstrapCreateRequest(BaseModel):
+    identity: str
+    wan_interface: str = "ether1"
+
+
+class BootstrapCreateResponse(BaseModel):
+    session_id: str
+    bootstrap_command: str
+
+
+@router.post("", response_model=BootstrapCreateResponse)
+async def create_bootstrap(
+    request: BootstrapCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a bootstrap command for router provisioning (public, no auth required).
+
+    This endpoint:
+    1. Creates or finds a router by identity
+    2. Creates a provisioning session
+    3. Returns the bootstrap one-liner command
+    """
+    try:
+        identity = request.identity.strip()
+        if not identity:
+            raise HTTPException(status_code=422, detail="Router identity is required")
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,63}", identity):
+            raise HTTPException(status_code=422, detail="Router identity contains unsupported characters")
+
+        wan_interface = request.wan_interface or "ether1"
+
+        # Find or create router (using default org)
+        from app.models.router import Router
+        from app.modules.routers.service import RouterService
+        from app.services.router_provisioning import store_router_credentials
+
+        # Look for existing router by name (no org filter for public provisioning)
+        result = await db.execute(select(Router).where(Router.name == identity))
+        existing_router = result.scalars().first()
+
+        router_obj = existing_router
+        if not existing_router:
+            # Create new router with default settings
+            api_password = settings.require_mikrotik_api_password()
+            svc = RouterService(db, organization_id=None)
+            router_obj = await svc.create_router(
+                name=identity,
+                ip_address=DEFAULT_ROUTER_IP,
+                username=settings.mikrotik_api_username,
+                password=api_password,
+                port=8728,
+            )
+            await store_router_credentials(
+                db=db,
+                router_id=router_obj.id,
+                username=settings.mikrotik_api_username,
+                password=api_password,
+                bootstrap_completed=False,
+            )
+            logger.info(f"Created new router {router_obj.id} ({identity}) for bootstrap")
+
+        # Create provisioning session
+        from app.modules.provisioning import ProvisioningService
+        from app.models.provisioning import ServiceType
+
+        provisioning_service = ProvisioningService(db)
+        
+        # Use default user_id for public provisioning (must exist in database)
+        DEFAULT_USER_ID = 1
+        session = await provisioning_service.create_provisioning_session(
+            router_id=router_obj.id,
+            user_id=DEFAULT_USER_ID,
+            service_type=ServiceType.HOTSPOT,
+            configuration={"identity": identity, "wan_interface": wan_interface}
+        )
+
+        # Generate bootstrap command (reuse existing logic but without auth)
+        # Build the bootstrap command directly
+        from app.core.security import create_access_token
+        from datetime import datetime, timedelta, timezone
+        import secrets
+        from urllib.parse import urlencode
+
+        def _issue_bootstrap_credential(
+            user_id: int,
+            session_id: str,
+            router_id: int,
+            operation: str,
+        ) -> str:
+            return create_access_token(
+                {
+                    "sub": str(user_id),
+                    "jti": secrets.token_urlsafe(24),
+                    "iat": datetime.now(timezone.utc).timestamp(),
+                    "purpose": "router_bootstrap",
+                    "session_id": session_id,
+                    "router_id": router_id,
+                    "bootstrap_scopes": [operation],
+                },
+                expires_delta=timedelta(minutes=10),
+                token_type="router_bootstrap",
+            )
+
+        script_token = _issue_bootstrap_credential(
+            DEFAULT_USER_ID, session.session_id, router_obj.id, "bootstrap.script"
+        )
+        notify_token = _issue_bootstrap_credential(
+            DEFAULT_USER_ID, session.session_id, router_obj.id, "bootstrap.notify"
+        )
+
+        # Determine canonical backend base URL
+        base = settings.backend_url or os.getenv('BACKEND_URL')
+        if base:
+            base = base.replace('http://', 'https://')
+        else:
+            base = f"https://api.87-76-137-72.sslip.io"
+
+        # Build script URL with tokens
+        script_url = (
+            f"{base}/api/v1/provisioning/bootstrap/script?"
+            f"{urlencode({'token': script_token, 'identity': identity, 'api_port': 8728, 'interface': wan_interface, 'session_id': session.session_id})}"
+        )
+
+        fetch_mode = "https" if script_url.startswith("https://") else "http"
+
+        # Build notify URL
+        notify_params = urlencode({
+            "session_id": session.session_id,
+            "token": notify_token,
+            "identity": identity,
+            "status": "bootstrap_completed",
+        })
+        notify_url = f"{base}/api/v1/provisioning/bootstrap/notify?{notify_params}"
+        notify_mode = "https" if notify_url.startswith("https://") else "http"
+
+        # Generate the one-liner command
+        command = f"/tool fetch mode={fetch_mode} url=\"{script_url}\" dst-path=ISP.rsc;:delay 2s;/import ISP.rsc;"
+        command += f" :delay 1s; /tool fetch mode={notify_mode} url=\"{notify_url}\" http-method=post;"
+
+        return BootstrapCreateResponse(
+            session_id=session.session_id,
+            bootstrap_command=command
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create bootstrap: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate bootstrap command")
 
 
 def _issue_bootstrap_credential(
