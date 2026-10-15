@@ -1,22 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { generateBootstrapCommand, fetchProvisioningSessions, startProvisioningWorkflow, fetchProvisioningSessionStatus } from '@/lib/provisionApi';
+import { generateBootstrapCommand, fetchProvisioningSessions, startProvisioningWorkflow } from '@/lib/provisionApi';
 import { fetchNodes } from '@/lib/data';
-
-// Type definitions for proper API response handling
-interface ProvisioningSession {
-  session_id: string;
-  identity: string;
-  wan_interface: string;
-  status: string;
-  service_type?: string;
-}
-
-interface Router {
-  id: number;
-  name: string;
-  host?: string;
-  ip_address?: string;
-}
 
 export default function RouterProvisioningPage() {
   const [identity, setIdentity] = useState('');
@@ -24,24 +8,18 @@ export default function RouterProvisioningPage() {
   const [bootstrapCommand, setBootstrapCommand] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sessions, setSessions] = useState<ProvisioningSession[]>([]);
+  const [sessions, setSessions] = useState<{session_id: string; identity: string; wan_interface: string; status: string}[]>([]);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [serviceType, setServiceType] = useState<'hotspot' | 'pppoe_server' | 'both'>('hotspot');
   const [routerId, setRouterId] = useState<number | null>(null);
-  const [routers, setRouters] = useState<Router[]>([]);
+  const [routers, setRouters] = useState<any[]>([]);
   const [provisioningSessionId, setProvisioningSessionId] = useState<string | null>(null);
   const [workflowStatus, setWorkflowStatus] = useState<string | null>(null);
-  const [showEnrollmentStep, setShowEnrollmentStep] = useState(false);
-  const [enrollmentStep, setEnrollmentStep] = useState(0);
-  
-  const [hotspotInterface, setHotspotInterface] = useState('ether2');
-  const [pppoeInterface, setPppoeInterface] = useState('ether3');
-  const [useManualInterfaces, setUseManualInterfaces] = useState(false);
 
   const loadSessions = async () => {
     try {
       const data = await fetchProvisioningSessions();
-      setSessions(Array.isArray(data) ? data : []);
+      setSessions(data || []);
     } catch (e) {
       console.error("Failed to load sessions:", e);
     }
@@ -69,31 +47,18 @@ export default function RouterProvisioningPage() {
     setError(null);
     setLoading(true);
     setWorkflowStatus('Starting provisioning workflow...');
-    setShowEnrollmentStep(true);
-    setEnrollmentStep(1);
     
     try {
-      const configuration = {
-        hotspot_interface: useManualInterfaces ? hotspotInterface : 'ether2',
-        pppoe_interface: useManualInterfaces ? pppoeInterface : 'ether3',
-        identity: identity || 'Router-1',
-        wan_interface: wanInterface || 'ether1',
-        service_type: serviceType,
-      };
-      
       const res = await startProvisioningWorkflow({
         router_id: routerId,
         service_type: serviceType,
-        configuration
+        configuration: {}
       });
       setProvisioningSessionId(res.session_id);
       setWorkflowStatus(res.message || 'Provisioning workflow started successfully');
-      setEnrollmentStep(2);
       loadSessions();
     } catch (err: any) {
       setError(err.message || 'Error starting provisioning workflow. Please try again.');
-      setWorkflowStatus(null);
-      setShowEnrollmentStep(false);
     } finally {
       setLoading(false);
     }
@@ -220,7 +185,7 @@ export default function RouterProvisioningPage() {
               >
                 <option value="">Select a router...</option>
                 {routers.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name || r.host || r.ip_address || r.id}</option>
+                  <option key={r.id} value={r.id}>{r.name || r.ip_address || r.id}</option>
                 ))}
               </select>
             </div>
@@ -237,67 +202,6 @@ export default function RouterProvisioningPage() {
                 <option value="both">Both (Hotspot + PPPoE)</option>
               </select>
             </div>
-
-            {/* Manual interface configuration */}
-            {(serviceType === 'hotspot' || serviceType === 'both') && (
-              <div className="bg-blue-50 p-4 rounded-md">
-                <h3 className="text-sm font-medium text-blue-900 mb-2">HotSpot Configuration</h3>
-                <div className="flex items-center space-x-2 mb-3">
-                  <input
-                    type="checkbox"
-                    id="useManualInterfaces"
-                    checked={useManualInterfaces}
-                    onChange={(e) => setUseManualInterfaces(e.target.checked)}
-                    className="h-4 w-4 text-indigo-600"
-                  />
-                  <label htmlFor="useManualInterfaces" className="text-sm text-blue-800">
-                    Use manual interface configuration (default: HotSpot on ether2)
-                  </label>
-                </div>
-                {useManualInterfaces && (
-                  <div>
-                    <label className="block text-xs text-blue-700 mb-1">HotSpot Interface</label>
-                    <input
-                      type="text"
-                      value={hotspotInterface}
-                      onChange={(e) => setHotspotInterface(e.target.value)}
-                      placeholder="ether2"
-                      className="w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-
-            {(serviceType === 'pppoe_server' || serviceType === 'both') && (
-              <div className="bg-green-50 p-4 rounded-md">
-                <h3 className="text-sm font-medium text-green-900 mb-2">PPPoE Configuration</h3>
-                <div className="flex items-center space-x-2 mb-3">
-                  <input
-                    type="checkbox"
-                    id="useManualPppoeInterfaces"
-                    checked={useManualInterfaces}
-                    onChange={(e) => setUseManualInterfaces(e.target.checked)}
-                    className="h-4 w-4 text-green-600"
-                  />
-                  <label htmlFor="useManualPppoeInterfaces" className="text-sm text-green-800">
-                    Use manual interface configuration (default: PPPoE on ether3)
-                  </label>
-                </div>
-                {useManualInterfaces && (
-                  <div>
-                    <label className="block text-xs text-green-700 mb-1">PPPoE Interface</label>
-                    <input
-                      type="text"
-                      value={pppoeInterface}
-                      onChange={(e) => setPppoeInterface(e.target.value)}
-                      placeholder="ether3"
-                      className="w-full px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-green-500"
-                    />
-                  </div>
-                )}
-              </div>
-            )}
 
             <button
               onClick={handleStartProvisioning}
