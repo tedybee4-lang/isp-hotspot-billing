@@ -168,6 +168,12 @@ async def create_bootstrap(
             DEFAULT_USER_ID, session.session_id, router_obj.id, "bootstrap.notify"
         )
 
+        # Store notify_token in session configuration for later lookup by notify endpoint
+        from sqlalchemy.orm.attributes import flag_modified
+        session.configuration["bootstrap_notify_token"] = notify_token
+        flag_modified(session, "configuration")
+        await db.commit()
+
         # Determine canonical backend base URL
         base = settings.backend_url or os.getenv('BACKEND_URL')
         if base:
@@ -188,12 +194,10 @@ async def create_bootstrap(
 
         fetch_mode = "https" if script_url.startswith("https://") else "http"
 
-        # Build notify URL (encrypted payload to avoid "Filename too long" error)
+        # Build notify URL (minimal payload - just session_id to avoid "Filename too long" error)
+        # The notify endpoint will look up the session and validate using stored bootstrap token
         notify_payload = {
             "session_id": session.session_id,
-            "token": notify_token,
-            "identity": identity,
-            "status": "bootstrap_completed",
         }
         encrypted_notify = generate_encrypted_payload(notify_payload)
         notify_url = f"{base}/api/v1/provisioning/bootstrap/notify/{encrypted_notify}"
@@ -1364,6 +1368,22 @@ async def provisioning_notify(
         except Exception as e:
             logger.error(f"Failed to decrypt notify payload: {e}")
             raise HTTPException(status_code=400, detail="Invalid encrypted payload")
+    
+    # If no token provided but session_id is available, look up the session's bootstrap token
+    if not token and session_id:
+        try:
+            from app.models.provisioning import ProvisioningSession
+            result = await db.execute(
+                select(ProvisioningSession).where(ProvisioningSession.session_id == session_id)
+            )
+            session_obj = result.scalar_one_or_none()
+            if session_obj and session_obj.configuration:
+                # The bootstrap token is stored in the session configuration
+                token = session_obj.configuration.get("bootstrap_notify_token")
+                if token:
+                    logger.info(f"Using bootstrap token from session {session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to look up bootstrap token from session: {e}")
     
     if not token:
         raise HTTPException(status_code=400, detail='Token is required')
