@@ -12,11 +12,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlencode
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 from fastapi import APIRouter, Depends, Query, HTTPException, Request, Path, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from app.models.provisioning import ProvisioningSession, ProvisioningStatus
+from app.models.user import User
 from app.api.deps import (
     authorize_provisioning_router,
     get_db,
@@ -78,28 +79,50 @@ async def create_bootstrap(
 
         router_obj = existing_router
         if not existing_router:
-            # Create new router with default settings
-            api_password = settings.require_mikrotik_api_password()
-            svc = RouterService(db, organization_id=None)
-            router_obj = await svc.create_router(
-                name=identity,
-                ip_address=DEFAULT_ROUTER_IP,
-                username=settings.mikrotik_api_username,
-                password=api_password,
-                port=8728,
-            )
-            await store_router_credentials(
-                db=db,
-                router_id=router_obj.id,
-                username=settings.mikrotik_api_username,
-                password=api_password,
-                bootstrap_completed=False,
-            )
-            logger.info(f"Created new router {router_obj.id} ({identity}) for bootstrap")
+            # Check if a router with the default IP already exists (no org filter)
+            result = await db.execute(select(Router).where(Router.ip_address == DEFAULT_ROUTER_IP))
+            ip_router = result.scalars().first()
+            if ip_router:
+                # Use existing router with this IP, update its name if different
+                router_obj = ip_router
+                if router_obj.name != identity:
+                    router_obj.name = identity
+                    await db.commit()
+                    logger.info(f"Updated router {router_obj.id} name to {identity}")
+            else:
+                # Create new router with default settings
+                api_password = settings.require_mikrotik_api_password()
+                svc = RouterService(db, organization_id=None)
+                router_obj = await svc.create_router(
+                    name=identity,
+                    ip_address=DEFAULT_ROUTER_IP,
+                    username=settings.mikrotik_api_username,
+                    password=api_password,
+                    port=8728,
+                )
+                await store_router_credentials(
+                    db=db,
+                    router_id=router_obj.id,
+                    username=settings.mikrotik_api_username,
+                    password=api_password,
+                    bootstrap_completed=False,
+                )
+                logger.info(f"Created new router {router_obj.id} ({identity}) for bootstrap")
 
         # Create provisioning session
         from app.modules.provisioning import ProvisioningService
-        from app.models.provisioning import ServiceType
+        from app.models.provisioning import ServiceType, ProvisioningStatus
+        from sqlalchemy import update
+
+        # Cancel any existing active sessions for this router (public provisioning allows re-provisioning)
+        now = datetime.utcnow()
+        await db.execute(
+            update(ProvisioningSession)
+            .where(ProvisioningSession.router_id == router_obj.id)
+            .where(ProvisioningSession.status.in_([ProvisioningStatus.PENDING, ProvisioningStatus.IN_PROGRESS]))
+            .values(status=ProvisioningStatus.CANCELLED, completed_at=now)
+        )
+        await db.commit()
 
         provisioning_service = ProvisioningService(db)
         
@@ -115,7 +138,6 @@ async def create_bootstrap(
         # Generate bootstrap command (reuse existing logic but without auth)
         # Build the bootstrap command directly
         from app.core.security import create_access_token
-        from datetime import datetime, timedelta, timezone
         import secrets
         from urllib.parse import urlencode
 
@@ -153,22 +175,28 @@ async def create_bootstrap(
         else:
             base = f"https://api.87-76-137-72.sslip.io"
 
-        # Build script URL with tokens
-        script_url = (
-            f"{base}/api/v1/provisioning/bootstrap/script?"
-            f"{urlencode({'token': script_token, 'identity': identity, 'api_port': 8728, 'interface': wan_interface, 'session_id': session.session_id})}"
-        )
+        # Build script URL with tokens (encrypted payload for shorter URL)
+        script_payload = {
+            "token": script_token,
+            "identity": identity,
+            "api_port": 8728,
+            "interface": wan_interface,
+            "session_id": session.session_id,
+        }
+        encrypted_script = generate_encrypted_payload(script_payload)
+        script_url = f"{base}/api/v1/provisioning/bootstrap/script/{encrypted_script}"
 
         fetch_mode = "https" if script_url.startswith("https://") else "http"
 
-        # Build notify URL
-        notify_params = urlencode({
+        # Build notify URL (encrypted payload to avoid "Filename too long" error)
+        notify_payload = {
             "session_id": session.session_id,
             "token": notify_token,
             "identity": identity,
             "status": "bootstrap_completed",
-        })
-        notify_url = f"{base}/api/v1/provisioning/bootstrap/notify?{notify_params}"
+        }
+        encrypted_notify = generate_encrypted_payload(notify_payload)
+        notify_url = f"{base}/api/v1/provisioning/bootstrap/notify/{encrypted_notify}"
         notify_mode = "https" if notify_url.startswith("https://") else "http"
 
         # Generate the one-liner command
@@ -1297,8 +1325,10 @@ async def bootstrap_scan_report(
 
 
 @router.post('/notify')
+@router.post('/notify/{encrypted_payload}')
 async def provisioning_notify(
     request: Request,
+    encrypted_payload: Optional[str] = None,
     session_id: Optional[str] = Query(None, description="Provisioning session UUID"),
     token: Optional[str] = Query(None, description="Provisioning token (required)"),
     identity: Optional[str] = Query(None, description="Router identity name"),
@@ -1312,12 +1342,29 @@ async def provisioning_notify(
     1. **session_id** - Direct session lookup (preferred, provided by bootstrap command)
     2. **IP / identity** - Fallback: find router by IP or name, then find active session
 
+    Supports two modes:
+    1. Traditional: Query parameters (token, session_id, identity, status)
+    2. Encrypted: Single encrypted payload in URL path
+
     After correlating:
     - Marks provisioning session as bootstrap_completed
     - Stores encrypted API credentials on the router for future reprovisioning
     - Broadcasts `provisioning_complete` over WebSocket so UI auto-advances
     - Stops any active ping monitoring
     """
+    # Handle encrypted payload mode
+    if encrypted_payload:
+        try:
+            payload = decrypt_payload(encrypted_payload)
+            token = payload.get("token")
+            session_id = payload.get("session_id")
+            identity = payload.get("identity")
+            status = payload.get("status", "bootstrap_completed")
+            logger.info(f"Using encrypted payload for notify, session: {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to decrypt notify payload: {e}")
+            raise HTTPException(status_code=400, detail="Invalid encrypted payload")
+    
     if not token:
         raise HTTPException(status_code=400, detail='Token is required')
 

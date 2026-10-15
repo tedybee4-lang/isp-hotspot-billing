@@ -8,6 +8,7 @@ export default function RouterProvisioningPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
 
   const loadSessions = async () => {
     try {
@@ -22,6 +23,17 @@ export default function RouterProvisioningPage() {
     loadSessions();
   }, []);
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(bootstrapCommand);
+      setCopyStatus('copied');
+      setTimeout(() => setCopyStatus('idle'), 2000);
+    } catch {
+      setCopyStatus('failed');
+      setTimeout(() => setCopyStatus('idle'), 2000);
+    }
+  };
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -33,6 +45,7 @@ export default function RouterProvisioningPage() {
         wan_interface: wanInterface || 'ether1',
       });
       setBootstrapCommand(res.bootstrap_command);
+      setCopyStatus('idle');
       loadSessions();
     } catch (err: any) {
       setError(err.message || 'Error generating command. Please try again.');
@@ -93,8 +106,23 @@ export default function RouterProvisioningPage() {
         </form>
 
         {bootstrapCommand && (
-          <div className="mt-6 p-4 bg-gray-900 text-green-400 rounded-md font-mono text-sm overflow-x-auto">
-            <p className="text-gray-400 text-xs mb-2"># Copy and paste into WinBox Terminal:</p>
+          <div className="mt-6 p-4 bg-gray-900 text-green-400 rounded-md font-mono text-sm overflow-x-auto relative">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-gray-400 text-xs"># Copy and paste into WinBox Terminal:</p>
+              <button
+                onClick={handleCopy}
+                disabled={loading || copyStatus === 'copied'}
+                className="px-3 py-1 text-xs bg-gray-700 text-gray-200 rounded hover:bg-gray-600 disabled:opacity-50 transition-colors"
+              >
+                {copyStatus === 'copied' ? (
+                  <span className="text-green-400">✓ Copied!</span>
+                ) : copyStatus === 'failed' ? (
+                  <span className="text-red-400">Failed</span>
+                ) : (
+                  'Copy'
+                )}
+              </button>
+            </div>
             <code>{bootstrapCommand}</code>
           </div>
         )}
