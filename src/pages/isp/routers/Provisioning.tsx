@@ -202,6 +202,17 @@ export function ProvisioningPage() {
       try {
         const st = await fetchProvisioningSessionStatus(sid)
         setRunStatus(st.status)
+        // Auto-advance to Step 3 when the router reports a completed scan.
+        if (st.status === 'scanned' || st.router_id) {
+          pushLog('success', 'Scan report received from router — advancing to configuration.')
+          if (pollRef.current !== null) {
+            window.clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          if (step === 2) setStep(3)
+          void refreshSessions()
+          return
+        }
         if (st.status === 'completed') {
           pushLog('success', 'Provisioning completed successfully.')
           if (pollRef.current !== null) {
@@ -235,6 +246,17 @@ export function ProvisioningPage() {
       try {
         const st = await fetchProvisioningSessionStatus(sid)
         setRunStatus(st.status)
+        // Auto-advance to Step 3 when the router reports a completed scan.
+        if (st.status === 'scanned' || st.router_id) {
+          pushLog('success', 'Scan report received from router — advancing to configuration.')
+          if (pollRef.current !== null) {
+            window.clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          if (step === 2) setStep(3)
+          void refreshSessions()
+          return
+        }
         if (st.status === 'completed') {
           pushLog('success', 'Session reached completed state.')
           if (pollRef.current !== null) {
@@ -257,8 +279,8 @@ export function ProvisioningPage() {
       }
     }
     void tick()
-    pollRef.current = window.setInterval(() => void tick(), 3000)
-  }, [pushLog, refreshSessions])
+    pollRef.current = window.setInterval(() => void tick(), 2000)
+  }, [pushLog, refreshSessions, step])
 
   /* ── Step 1: one public call creates router row + session + command ── */
 

@@ -309,6 +309,7 @@ async def _verify_bootstrap_session(
     if session.status not in {
         ProvisioningStatus.PENDING,
         ProvisioningStatus.IN_PROGRESS,
+        ProvisioningStatus.SCANNED,
     }:
         raise HTTPException(status_code=409, detail="Provisioning session is not active")
 
@@ -956,6 +957,9 @@ async def get_bootstrap_script(
                 "# Collect device scan data (interfaces, system info, network, services)",
                 ":local ifList \"\"",
                 ":foreach i in=[/interface/ethernet/find] do={ :local n [/interface/ethernet/get $i name]; :if ([:len $ifList] > 0) do={ :set ifList ($ifList . \",\") }; :set ifList ($ifList . $n) }",
+                ":local macAddr \"\"",
+                ":local firstMac [/interface/ethernet/find limit=1]",
+                ":if ([:len $firstMac] > 0) do={ :set macAddr [/interface/ethernet/get $firstMac mac-address] }",
                 ":local sysVersion [/system/resource/get version]",
                 ":local sysBoard [/system/resource/get board-name]",
                 ":local sysArch [/system/resource/get architecture-name]",
@@ -976,7 +980,7 @@ async def get_bootstrap_script(
                 ":local dnsServers \"\"",
                 ":do { :set dnsServers [/ip/dns/get servers] } on-error={}",
                 "# POST scan data to backend",
-                ":local scanPostData (\"interfaces=\" . $ifList . \"&version=\" . $sysVersion . \"&board=\" . $sysBoard . \"&arch=\" . $sysArch . \"&cpu_count=\" . $sysCpu . \"&uptime=\" . $sysUptime . \"&total_memory=\" . $sysTotalMem . \"&free_memory=\" . $sysFreeMem . \"&wan_interface=\" . $wanIf . \"&hotspot_active=\" . $hotspotActive . \"&pppoe_active=\" . $pppoeActive . \"&dhcp_active=\" . $dhcpActive . \"&ip_addresses=\" . $ipAddresses . \"&dns_servers=\" . $dnsServers)",
+                ":local scanPostData (\"interfaces=\" . $ifList . \"&version=\" . $sysVersion . \"&board=\" . $sysBoard . \"&arch=\" . $sysArch . \"&cpu_count=\" . $sysCpu . \"&uptime=\" . $sysUptime . \"&total_memory=\" . $sysTotalMem . \"&free_memory=\" . $sysFreeMem . \"&wan_interface=\" . $wanIf . \"&hotspot_active=\" . $hotspotActive . \"&pppoe_active=\" . $pppoeActive . \"&dhcp_active=\" . $dhcpActive . \"&ip_addresses=\" . $ipAddresses . \"&dns_servers=\" . $dnsServers . \"&mac_address=\" . $macAddr)",
                 ":do {",
                 f"  /tool/fetch mode={scan_mode} url=\"{scan_report_url}\" http-method=post http-data=$scanPostData dst-path=scan-report.result",
                 "  :put \"[OK] Scan data sent to backend\"",
@@ -1164,6 +1168,9 @@ async def bootstrap_scan_report(
     interfaces_str = data.get('interfaces', '')
     interfaces = [i.strip() for i in interfaces_str.split(',') if i.strip()] if interfaces_str else []
 
+    # Parse MAC address (from first Ethernet interface)
+    mac_address = data.get('mac_address', '')
+
     # Parse IP addresses (format: addr@iface|addr@iface)
     ip_addresses_str = data.get('ip_addresses', '')
     ip_entries = []
@@ -1303,6 +1310,18 @@ async def bootstrap_scan_report(
     except Exception:
         pass
 
+    # Update session status to scanned and store device identifiers
+    try:
+        bootstrap_session.status = ProvisioningStatus.SCANNED
+        config = dict(bootstrap_session.configuration or {})
+        config['mac_address'] = data.get('mac_address', '')
+        config['board_name'] = system_info.get('board_name', '')
+        bootstrap_session.configuration = config
+        await db.commit()
+        logger.info(f"Scan report: session {bootstrap_session.session_id} status set to SCANNED")
+    except Exception as e:
+        logger.error(f"Scan report: failed to update session status: {e}")
+
     # ALWAYS broadcast scan_complete (router record or not) so the live wizard
     # replaces the fallback ports with the device's actual interfaces.
     if bootstrap_session.session_id:
@@ -1329,6 +1348,7 @@ async def bootstrap_scan_report(
         'router_id': router_obj.id if router_obj else None,
         'interfaces_count': len(interfaces),
         'version': system_info.get('version', ''),
+        'status': 'scanned',
     }
 
 

@@ -53,6 +53,7 @@ export interface SessionStatusResponse {
   status: string;
   current_step: string | null;
   progress: number | null;
+  router_id: number | null;
   steps: Array<Record<string, any>> | null;
   error_message: string | null;
 }

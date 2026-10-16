@@ -38,6 +38,7 @@ async def build_session_status(db: AsyncSession, session: ProvisioningSession) -
         "status": session.status.value,
         "current_step": session.current_step.value,
         "progress_percentage": session.progress_percentage,
+        "router_id": session.router_id,
         "steps_completed": completed_steps,
         "steps_total": total_steps,
         "estimated_time_remaining_minutes": estimated_remaining,

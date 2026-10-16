@@ -39,6 +39,7 @@ class SessionStatusResponse(BaseModel):
     status: str
     current_step: Optional[str] = None
     progress: Optional[int] = None
+    router_id: Optional[int] = None
     steps: Optional[List[Dict[str, Any]]] = None
     error_message: Optional[str] = None
 

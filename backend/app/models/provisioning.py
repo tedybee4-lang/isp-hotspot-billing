@@ -28,6 +28,7 @@ class ProvisioningStatus(str, PyEnum):
     
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
+    SCANNED = "scanned"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
