@@ -8,7 +8,15 @@
  * file's source, and the production /app/provision flow must work for an
  * operator who is not signed into any backend.
  */
-const API_BASE_URL = '/api/v1/provisioning';
+/**
+ * Base URL for the public provisioning API.
+ *
+ * Reads VITE_API_URL when set (e.g. to point at a custom backend domain).
+ * Falls back to the same-origin relative path, which on Vercel is rewritten
+ * by vercel.json to the backend (avoiding CORS), and locally is proxied by
+ * Vite to http://localhost:8000.
+ */
+const API_BASE_URL = (import.meta.env.VITE_API_URL ?? '/api/v1/provisioning').replace(/\/+$/, '');
 
 export interface BootstrapRequest {
   identity: string;

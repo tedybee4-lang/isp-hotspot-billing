@@ -27,7 +27,7 @@ import {
   Card, CardHeader, Button, Alert, Spinner, Badge, EmptyState, inputClass,
 } from '../../../components/ui'
 import {
-  generateBootstrapCommand, fetchProvisioningSessions, scanDevice,
+  generateBootstrapCommand, fetchProvisioningSessions,
   waitForScanReport, cancelActiveSessions, startProvisioningWorkflow,
   fetchProvisioningSessionStatus,
   type PublicProvisionSession, type DeviceScan,
@@ -225,6 +225,41 @@ export function ProvisioningPage() {
     pollRef.current = window.setInterval(() => void tick(), 3000)
   }, [pushLog, refreshSessions])
 
+  /** Poll session status as a complementary detection mechanism during Step 2.
+   *  Watches the session for terminal states and logs progress so the operator
+   *  knows the backend is being polled even when router_id is not yet available.
+   */
+  const pollSessionStatus = useCallback((sid: string) => {
+    if (pollRef.current !== null) window.clearInterval(pollRef.current)
+    const tick = async () => {
+      try {
+        const st = await fetchProvisioningSessionStatus(sid)
+        setRunStatus(st.status)
+        if (st.status === 'completed') {
+          pushLog('success', 'Session reached completed state.')
+          if (pollRef.current !== null) {
+            window.clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          void refreshSessions()
+        } else if (st.status === 'failed') {
+          pushLog('error', st.error_message ?? 'Session failed.')
+          if (pollRef.current !== null) {
+            window.clearInterval(pollRef.current)
+            pollRef.current = null
+          }
+          void refreshSessions()
+        } else if (st.status === 'in_progress' || st.status === 'pending') {
+          pushLog('info', `Session ${st.status} — waiting for scan report...`)
+        }
+      } catch (e) {
+        pushLog('warning', e instanceof Error ? e.message : 'Session status poll failed.')
+      }
+    }
+    void tick()
+    pollRef.current = window.setInterval(() => void tick(), 3000)
+  }, [pushLog, refreshSessions])
+
   /* ── Step 1: one public call creates router row + session + command ── */
 
   async function generate() {
@@ -253,6 +288,9 @@ export function ProvisioningPage() {
       void refreshSessions()
       // Start waiting for the router's phone-home scan report immediately.
       void runScan(false)
+      // Complementary session-status polling so the operator sees progress
+      // even when router_id is not yet available from the bootstrap response.
+      if (sessionId) void pollSessionStatus(sessionId)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
     } finally {
@@ -264,14 +302,32 @@ export function ProvisioningPage() {
 
   async function runScan(force = false) {
     if (routerId === null) {
-      setError('No router ID available — generate a bootstrap command first.')
+      // Fall back to session-status polling when the bootstrap response
+      // did not include a router_id. The session poller below watches for
+      // the scan report landing and will retry once we can resolve the id.
+      setError(null)
+      setBusy(true)
+      try {
+        if (sessionId) {
+          await pollSessionStatus(sessionId)
+        }
+        setError('Router ID not yet available. The wizard is polling the session for the scan report — keep the router script running and try "Force re-scan" again.')
+      } finally {
+        setBusy(false)
+      }
       return
     }
     setBusy(true); setError(null)
     try {
       const s = force
-        // Deliberate direct dial — the operator asked to bypass the cache.
-        ? await scanDevice(routerId, true)
+        // Force re-scan: restart the phone-home polling loop (DB-only, no
+        // direct dial). Never dials the router directly — that fails behind NAT.
+        ? await waitForScanReport(routerId, {
+            onProgress: (secs) => pushLog(
+              'info',
+              `Force re-scan: waiting for the router's scan report (${secs}s) — paste the bootstrap command on the router if you have not yet.`,
+            ),
+          })
         // Default: wait for the bootstrap script's phone-home report
         // (DB-only probe poll + optimistic cache read). Never dials the
         // router, so it cannot stall behind NAT; shows progress meanwhile.
@@ -282,6 +338,7 @@ export function ProvisioningPage() {
             ),
           })
       setScan(s)
+      stopStream() // stop the complementary session poller now that we have scan data
       const n = s.network_config
       setCfg((prev) => ({
         ...prev,
@@ -489,10 +546,10 @@ export function ProvisioningPage() {
                 </Button>
                 <Button size="sm" variant="secondary"
                   onClick={() => void runScan(false)} disabled={busy}>
-                  Scan device
+                  Wait for scan
                 </Button>
                 <Button size="sm" variant="secondary"
-                  onClick={() => void runScan(false)} disabled={busy}>
+                  onClick={() => void runScan(true)} disabled={busy}>
                   Force re-scan
                 </Button>
               </div>
