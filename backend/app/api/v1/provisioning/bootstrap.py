@@ -1591,7 +1591,11 @@ async def check_direct_api_access(
             threshold = (router.agent_poll_interval or 30) * 3  # 3x poll interval
             agent_online = elapsed < threshold
 
-        # Check if we have cached scan data in router.config
+        # Check cached scan data: priority is router.config, then the
+        # cross-pod bootstrap scan cache (ping_monitor) so the probe loop
+        # and the device-scan endpoint see the same state even when the
+        # router DB row was created AFTER the bootstrap script's scan-report
+        # POST (first-time provisioning).
         has_cached_scan = False
         try:
             if router.config:
@@ -1599,6 +1603,18 @@ async def check_direct_api_access(
                 has_cached_scan = bool(config_data.get("scanned_data"))
         except Exception:
             pass
+
+        if not has_cached_scan:
+            try:
+                from app.services.ping_monitor import ping_monitor
+                cached = await ping_monitor.get_scan_by_identity(router.name)
+                if cached:
+                    has_cached_scan = True
+                    logger.info(
+                        f"has_cached_scan: detected via ping_monitor for router {router_id} (identity={router.name})"
+                    )
+            except Exception:
+                pass
 
         return {
             "can_use_direct_api": has_access,

@@ -3,6 +3,7 @@ Router reprovisioning service.
 Handles configuration updates via API without requiring bootstrap command.
 """
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,9 @@ from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
+
+
+ROUTER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,63}$")
 
 
 def get_default_api_credentials() -> dict:
@@ -127,6 +131,11 @@ async def can_use_direct_api(db: AsyncSession, router_id: int) -> bool:
     Returns:
         True if router has stored credentials and bootstrap completed
     """
+    # Validate router_id format before querying the DB
+    if not ROUTER_ID_RE.match(str(router_id)):
+        logger.warning(f"Invalid router_id format: {router_id!r}")
+        return False
+
     result = await db.execute(select(Router).where(Router.id == router_id))
     router = result.scalar_one_or_none()
     
@@ -188,7 +197,13 @@ async def store_scanned_config(
         except (json.JSONDecodeError, TypeError):
             existing_config = {}
 
-    existing_config["scanned_data"] = scanned_data
+    # Persist the single configuration store the wizard reads back after a scan
+    # (get_scanned_config()). Merge the fresh scan into any previously stored
+    # scanned_data so a partial report keeps the earlier keys.
+    if isinstance(existing_config.get("scanned_data"), dict):
+        existing_config["scanned_data"].update(scanned_data)
+    else:
+        existing_config["scanned_data"] = scanned_data
     router.config = json.dumps(existing_config)
 
     # Update system info fields on the router model itself
