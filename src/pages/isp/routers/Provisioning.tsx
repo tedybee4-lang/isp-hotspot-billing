@@ -492,7 +492,7 @@ export function ProvisioningPage() {
                   Scan device
                 </Button>
                 <Button size="sm" variant="secondary"
-                  onClick={() => void runScan(true)} disabled={busy}>
+                  onClick={() => void runScan(false)} disabled={busy}>
                   Force re-scan
                 </Button>
               </div>
