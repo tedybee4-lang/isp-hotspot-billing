@@ -44,6 +44,9 @@ class BootstrapCreateRequest(BaseModel):
 class BootstrapCreateResponse(BaseModel):
     session_id: str
     bootstrap_command: str
+    # The wizard needs the router row id for the scan/workflow steps that
+    # follow; the public flow never calls the authenticated /routers CRUD.
+    router_id: Optional[int] = None
 
 
 @router.post("", response_model=BootstrapCreateResponse)
@@ -209,7 +212,8 @@ async def create_bootstrap(
 
         return BootstrapCreateResponse(
             session_id=session.session_id,
-            bootstrap_command=command
+            bootstrap_command=command,
+            router_id=router_obj.id,
         )
 
     except HTTPException:

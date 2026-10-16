@@ -4,15 +4,19 @@
  * The engine (backend/) owns everything router-side. This page walks the
  * operator through its 3-step wizard:
  *
- *   1. Bootstrap — enters the router identity, creates the router row +
- *      a create-only session, and shows the one-liner to paste into the
- *      router terminal (Winbox: New Terminal).
+ *   1. Bootstrap — enters the router identity; the public POST /bootstrap
+ *      endpoint creates/finds the router row, opens a session and returns the
+ *      one-liner to paste into the router terminal (Winbox: New Terminal).
  *   2. Device scan — reads the router's interfaces, services and network
  *      config (reported by the bootstrap script itself, so it works behind
  *      NAT), then continues into configuration.
  *   3. Apply & watch — sends the service configuration and polls session
  *      status. Live streaming remains unavailable until authenticated tickets
  *      are implemented by the API.
+ *
+ * EVERY call in this wizard is public and unauthenticated — matching the
+ * backend endpoints ("public, no auth required" / "auth disabled"). No
+ * sign-in is ever required to provision a router.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -23,12 +27,11 @@ import {
   Card, CardHeader, Button, Alert, Spinner, Badge, EmptyState, inputClass,
 } from '../../../components/ui'
 import {
-  upsertRouter, createSession, getBootstrapCommand, scanDevice, startWorkflow,
-  getSessionStatus, listSessions, cancelActiveSessions,
-  waitForScanReport,
-  type BackendRouter, type ProvisionSession, type BootstrapCommand,
-  type DeviceScan, type ProvisioningServiceType,
-} from '../../../lib/provisionEngineApi'
+  generateBootstrapCommand, fetchProvisioningSessions, scanDevice,
+  waitForScanReport, cancelActiveSessions, startProvisioningWorkflow,
+  fetchProvisioningSessionStatus,
+  type PublicProvisionSession, type DeviceScan, type ProvisioningServiceType,
+} from '../../../lib/provisionApi'
 import { cn } from '../../../utils/cn'
 
 interface LogLine {
@@ -49,8 +52,6 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 const SERVICE_TYPE: ProvisioningServiceType = 'hotspot'
-const DEFAULT_ROUTER_IP = '192.168.88.1'
-const DEFAULT_API_PORT = 8728
 const DEFAULT_WAN_INTERFACE = 'ether1'
 
 function lineLevel(level: string): string {
@@ -67,7 +68,7 @@ function lineLevel(level: string): string {
 function SessionsList({
   sessions, busy, onRefresh,
 }: {
-  sessions: ProvisionSession[]
+  sessions: PublicProvisionSession[]
   busy: boolean
   onRefresh: () => void
 }) {
@@ -89,13 +90,13 @@ function SessionsList({
         ) : (
           <div className="space-y-2">
             {sessions.map((s) => (
-              <div key={s.session_id}
+              <div key={s.id}
                 className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2">
                 <div className="min-w-0">
-                  <p className="text-[11px] font-mono text-slate-500 truncate">{s.session_id}</p>
+                  <p className="text-[11px] font-mono text-slate-500 truncate">{s.id}</p>
                   <p className="text-[11px] text-slate-500">
-                    router #{s.router_id}
-                    {s.service_type ? ` · ${s.service_type}` : ''}
+                    {s.identity || 'Router'}
+                    {s.wan_interface ? ` · ${s.wan_interface}` : ''}
                     {s.created_at ? ` · ${new Date(s.created_at).toLocaleString()}` : ''}
                   </p>
                 </div>
@@ -128,7 +129,7 @@ function LogPane({ logs }: { logs: LogLine[] }) {
 /* ── Main wizard page ────────────────────────────────────────────────────── */
 
 export function ProvisioningPage() {
-  const [sessions, setSessions] = useState<ProvisionSession[]>([])
+  const [sessions, setSessions] = useState<PublicProvisionSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -137,10 +138,10 @@ export function ProvisioningPage() {
   const [identity, setIdentity] = useState('')
   const [wanIface, setWanIface] = useState(DEFAULT_WAN_INTERFACE)
 
-  // Created records
-  const [router, setRouter] = useState<BackendRouter | null>(null)
+  // Created records (public bootstrap returns them in one call)
+  const [routerId, setRouterId] = useState<number | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [bootstrap, setBootstrap] = useState<BootstrapCommand | null>(null)
+  const [bootstrapCommand, setBootstrapCommand] = useState<string | null>(null)
 
   // Step 2 - scanned device
   const [scan, setScan] = useState<DeviceScan | null>(null)
@@ -173,7 +174,7 @@ export function ProvisioningPage() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      setSessions(await listSessions())
+      setSessions(await fetchProvisioningSessions())
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load sessions.')
     }
@@ -191,7 +192,7 @@ export function ProvisioningPage() {
     if (pollRef.current !== null) window.clearInterval(pollRef.current)
     const tick = async () => {
       try {
-        const st = await getSessionStatus(sid)
+        const st = await fetchProvisioningSessionStatus(sid)
         setRunStatus(st.status)
         if (st.status === 'completed') {
           pushLog('success', 'Provisioning completed successfully.')
@@ -216,37 +217,22 @@ export function ProvisioningPage() {
     pollRef.current = window.setInterval(() => void tick(), 3000)
   }, [pushLog, refreshSessions])
 
-  /* ── Step 1: router + session + bootstrap command ── */
+  /* ── Step 1: one public call creates router row + session + command ── */
 
   async function generate() {
     setBusy(true); setError(null)
     try {
-      const r = await upsertRouter({
-        name: identity.trim(),
-        ip_address: DEFAULT_ROUTER_IP,
-        api_port: DEFAULT_API_PORT,
+      const res = await generateBootstrapCommand({
+        identity: identity.trim(),
+        wan_interface: wanIface.trim() || DEFAULT_WAN_INTERFACE,
       })
-      setRouter(r)
-
-      const s = await createSession(r.id, SERVICE_TYPE, {
-        identity: r.name,
-        subnet_address: cfg.subnet_address,
-        cidr: Number(cfg.cidr) || 16,
-      })
-      setSessionId(s.session_id)
-
-      const b = await getBootstrapCommand({
-        identity: r.name,
-        api_port: r.port,
-        interface: wanIface,
-        ip_address: r.ip_address,
-        session_id: s.session_id,
-        router_id: r.id,
-      })
-      setBootstrap(b)
+      setSessionId(res.session_id)
+      setRouterId(res.router_id ?? null)
+      setBootstrapCommand(res.bootstrap_command)
       setLogs([])
       setRunStatus(null)
       setStep(2)
+      void refreshSessions()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
     } finally {
@@ -257,16 +243,16 @@ export function ProvisioningPage() {
   /* ── Step 2: device scan ── */
 
   async function runScan(force = false) {
-    if (!router) return
+    if (routerId === null) return
     setBusy(true); setError(null)
     try {
       const s = force
         // Deliberate direct dial — the operator asked to bypass the cache.
-        ? await scanDevice(router.id, true)
+        ? await scanDevice(routerId, true)
         // Default: wait for the bootstrap script's phone-home report
         // (DB-only probe poll + optimistic cache read). Never dials the
         // router, so it cannot stall behind NAT; shows progress meanwhile.
-        : await waitForScanReport(router.id, {
+        : await waitForScanReport(routerId, {
             onProgress: (secs) => pushLog(
               'info',
               `Waiting for the router's scan report (${secs}s) — paste the bootstrap command on the router if you have not yet.`,
@@ -301,7 +287,7 @@ export function ProvisioningPage() {
   function buildConfiguration(): Record<string, unknown> {
     const ports = cfg.bridge_ports.split(',').map((p) => p.trim()).filter(Boolean)
     return {
-      identity: router?.name,
+      identity: identity.trim(),
       subnet_address: cfg.subnet_address,
       cidr: Number(cfg.cidr) || 16,
       gateway: cfg.gateway || undefined,
@@ -314,15 +300,19 @@ export function ProvisioningPage() {
   }
 
   async function apply() {
-    if (!router) return
+    if (routerId === null) return
     setBusy(true); setError(null)
     try {
-      // The create-only session from step 1 is still PENDING; the engine
-      // refuses a new workflow while it is active, so clear it first.
-      await cancelActiveSessions(router.id)
-      const w = await startWorkflow(router.id, SERVICE_TYPE, buildConfiguration())
+      // The session from step 1 is still PENDING; the engine refuses a new
+      // workflow while it is active, so clear it first (public endpoint).
+      await cancelActiveSessions(routerId)
+      const w = await startProvisioningWorkflow({
+        router_id: routerId,
+        service_type: SERVICE_TYPE,
+        configuration: buildConfiguration(),
+      })
       pushLog('info', w.message)
-      pushLog('info', 'Tracking progress with authenticated status polling.')
+      pushLog('info', 'Tracking progress with public status polling.')
       pollStatus(w.session_id)
       setStep(3)
     } catch (e) {
@@ -380,8 +370,8 @@ export function ProvisioningPage() {
         <div className="flex gap-2">
           <Button size="sm" onClick={() => {
             stopStream()
-            setStep(1); setBootstrap(null); setScan(null); setSessionId(null)
-            setRouter(null); setLogs([]); setRunStatus(null); setError(null)
+            setStep(1); setBootstrapCommand(null); setScan(null); setSessionId(null)
+            setRouterId(null); setLogs([]); setRunStatus(null); setError(null)
           }} icon={<Plug className="w-3.5 h-3.5" />}>
             + ADD MIKROTIK
           </Button>
@@ -418,7 +408,7 @@ export function ProvisioningPage() {
             </div>
           )}
 
-          {step >= 2 && bootstrap && (
+          {step >= 2 && bootstrapCommand && (
             <div className="space-y-3">
               <p className="text-xs text-slate-600 dark:text-slate-300">
                 Open the router terminal (Winbox: <span className="font-mono">New Terminal</span>)
@@ -428,11 +418,11 @@ export function ProvisioningPage() {
                 )}
               </p>
               <pre className="rounded-xl bg-slate-900 p-4 text-[11px] font-mono text-emerald-300 overflow-x-auto whitespace-pre-wrap">
-                {bootstrap.command}
+                {bootstrapCommand}
               </pre>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="secondary" icon={<Copy className="w-3.5 h-3.5" />}
-                  onClick={() => void navigator.clipboard.writeText(bootstrap.command)}>
+                  onClick={() => void navigator.clipboard.writeText(bootstrapCommand)}>
                   Copy command
                 </Button>
                 <Button size="sm" variant="secondary"
@@ -444,24 +434,10 @@ export function ProvisioningPage() {
                   Force re-scan
                 </Button>
               </div>
-              {bootstrap.bootstrap_already_done && (
-                <Alert kind="info">
-                  This router already completed bootstrap and has stored API credentials —
-                  you can scan and apply straight away.
-                </Alert>
-              )}
-              {router && bootstrap.ping_check && !bootstrap.ping_check.reachable && (
-                <Alert kind="error">
-                  Device not responding to ping/check at {router.ip_address}. Check the network connection,
-                  then run the bootstrap command on the router anyway — its callback reaches the
-                  engine even from behind NAT.
-                </Alert>
-              )}
-              {bootstrap.notes.length > 0 && (
-                <ul className="text-[11px] text-slate-500 space-y-1">
-                  {bootstrap.notes.map((n, i) => <li key={i}>• {n}</li>)}
-                </ul>
-              )}
+              <Alert kind="info">
+                The wizard reads the scan the router sends back when it runs this
+                command, so it also works behind NAT — no direct connection needed.
+              </Alert>
             </div>
           )}
 

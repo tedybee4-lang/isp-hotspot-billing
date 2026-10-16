@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import (
-    authorize_provisioning_router,
     get_db,
 )
 from app.core.config import settings
@@ -110,9 +109,10 @@ async def scan_device(
     """
     from app.services.router_provisioning import get_router_credentials, store_scanned_config, get_scanned_config
 
-    logger.info(f"Device scan request for router_id={request.router_id} by user={current_user.username} (force_rescan={request.force_rescan})")
-
-    await authorize_provisioning_router(db, current_user, request.router_id)
+    # Public endpoint (no auth): provisioning was made fully unauthenticated,
+    # but a leftover `current_user.username` reference here crashed every scan
+    # with a NameError once the auth dependency was removed.
+    logger.info(f"Device scan request for router_id={request.router_id} (force_rescan={request.force_rescan})")
 
     # Get router from database
     result = await db.execute(select(Router).where(Router.id == request.router_id))

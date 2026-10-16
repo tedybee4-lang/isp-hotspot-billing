@@ -12,8 +12,6 @@ from sqlalchemy import select
 
 from app.models.user import User, UserRole
 from app.api.deps import (
-    authorize_provisioning_router,
-    authorize_provisioning_session,
     get_db,
 )
 from app.modules.provisioning import ProvisioningService
@@ -173,9 +171,8 @@ async def get_provisioning_status(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the current status of a provisioning session."""
+    """Get the current status of a provisioning session (public, no auth required)."""
     try:
-        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
         status = await provisioning_service.get_session_status(session_id)
 
@@ -196,9 +193,8 @@ async def cancel_provisioning(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a running provisioning session."""
+    """Cancel a running provisioning session (public, no auth required)."""
     try:
-        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
         success = await provisioning_service.cancel_provisioning(session_id)
 
@@ -281,9 +277,8 @@ async def get_provisioning_logs(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get the logs for a provisioning session (steps and commands)."""
+    """Get the logs for a provisioning session (steps and commands) (public, no auth required)."""
     try:
-        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
 
         # Get both step logs and command logs
@@ -332,9 +327,8 @@ async def retry_provisioning(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Retry a failed provisioning session."""
+    """Retry a failed provisioning session (public, no auth required)."""
     try:
-        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
 
         # Use the existing retry_provisioning method which handles reset internally
@@ -433,9 +427,8 @@ async def delete_provisioning_session(
     session_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a provisioning session (only if completed or failed)."""
+    """Delete a provisioning session (only if completed or failed) (public, no auth required)."""
     try:
-        await authorize_provisioning_session(db, None, session_id)
         provisioning_service = ProvisioningService(db)
         success = await provisioning_service.delete_session(session_id)
 
