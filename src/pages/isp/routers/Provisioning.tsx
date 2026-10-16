@@ -351,19 +351,30 @@ export function ProvisioningPage() {
 
   const stepper = (
     <div className="flex items-center gap-2 text-[11px] font-bold">
-      {(['Bootstrap', 'Device scan', 'Apply & watch'] as const).map((label, i) => (
-        <span key={label} className="flex items-center gap-2">
-          {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-slate-300" />}
-          <span className={cn(
-            'rounded-full px-3 py-1',
-            step === i + 1
-              ? 'bg-violet-600 text-white'
-              : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
-          )}>
-            {i + 1}. {label}
+      {(['Bootstrap', 'Device scan', 'Apply & watch'] as const).map((label, i) => {
+        const stepNum = i + 1
+        const disabled =
+          (stepNum === 2 && routerId === null) ||
+          (stepNum === 3 && scan === null)
+        return (
+          <span key={label} className="flex items-center gap-2">
+            {i > 0 && <ChevronRight className="w-3.5 h-3.5 text-slate-300" />}
+            <button
+              onClick={() => disabled ? null : setStep(stepNum as 1 | 2 | 3)}
+              disabled={disabled}
+              className={cn(
+                'rounded-full px-3 py-1 flex items-center gap-1 outline-none disabled:opacity-50 disabled:cursor-not-allowed',
+                step === stepNum
+                  ? 'bg-violet-600 text-white'
+                  : disabled
+                    ? 'bg-slate-200 text-slate-400'
+                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700',
+              )}>
+              {stepNum}. {label}
+            </button>
           </span>
-        </span>
-      ))}
+        )
+      })}
     </div>
   )
 
@@ -539,9 +550,10 @@ export function ProvisioningPage() {
                   <input className={cn(inputClass, 'mt-1')} value={cfg.bridge_ports}
                     onChange={(e) => setCfg({ ...cfg, bridge_ports: e.target.value })} />
                 ))}
-                {field('WAN interface', (
+                {field('WAN interface (from scan)', (
                   <input className={cn(inputClass, 'mt-1')} value={wanIface}
-                    onChange={(e) => setWanIface(e.target.value)} />
+                    readOnly disabled
+                    title="Auto-detected from the router scan" />
                 ))}
                 <div className="sm:col-span-1" />
               </div>
