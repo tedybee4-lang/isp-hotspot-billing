@@ -30,7 +30,7 @@ import {
   generateBootstrapCommand, fetchProvisioningSessions, scanDevice,
   waitForScanReport, cancelActiveSessions, startProvisioningWorkflow,
   fetchProvisioningSessionStatus,
-  type PublicProvisionSession, type DeviceScan, type ProvisioningServiceType,
+  type PublicProvisionSession, type DeviceScan,
 } from '../../../lib/provisionApi'
 import { cn } from '../../../utils/cn'
 
@@ -51,8 +51,13 @@ const STATUS_TONE: Record<string, string> = {
   timeout: 'rose',
 }
 
-const SERVICE_TYPE: ProvisioningServiceType = 'hotspot'
 const DEFAULT_WAN_INTERFACE = 'ether1'
+
+interface ServiceSelection {
+  service_mode?: 'hotspot' | 'pppoe' | 'both'
+  hotspot_interface?: string
+  pppoe_interface?: string
+}
 
 function lineLevel(level: string): string {
   switch (level) {
@@ -137,6 +142,9 @@ export function ProvisioningPage() {
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [identity, setIdentity] = useState('')
   const [wanIface, setWanIface] = useState(DEFAULT_WAN_INTERFACE)
+  const [serviceMode, setServiceMode] = useState<'hotspot' | 'pppoe' | 'both'>('hotspot')
+  const [hotspotIface, setHotspotIface] = useState('')
+  const [pppoeIface, setPppoeIface] = useState('')
 
   // Created records (public bootstrap returns them in one call)
   const [routerId, setRouterId] = useState<number | null>(null)
@@ -222,9 +230,19 @@ export function ProvisioningPage() {
   async function generate() {
     setBusy(true); setError(null)
     try {
+      const selection: ServiceSelection = {}
+      if (serviceMode === 'hotspot' && hotspotIface.trim()) selection.hotspot_interface = hotspotIface.trim()
+      if (serviceMode === 'pppoe' && pppoeIface.trim()) selection.pppoe_interface = pppoeIface.trim()
+      if (serviceMode === 'both') {
+        if (hotspotIface.trim()) selection.hotspot_interface = hotspotIface.trim()
+        if (pppoeIface.trim()) selection.pppoe_interface = pppoeIface.trim()
+      }
+      if (serviceMode) selection.service_mode = serviceMode
+
       const res = await generateBootstrapCommand({
         identity: identity.trim(),
         wan_interface: wanIface.trim() || DEFAULT_WAN_INTERFACE,
+        ...selection,
       })
       setSessionId(res.session_id)
       setRouterId(res.router_id ?? null)
@@ -233,6 +251,8 @@ export function ProvisioningPage() {
       setRunStatus(null)
       setStep(2)
       void refreshSessions()
+      // Start waiting for the router's phone-home scan report immediately.
+      void runScan(false)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
     } finally {
@@ -243,7 +263,10 @@ export function ProvisioningPage() {
   /* ── Step 2: device scan ── */
 
   async function runScan(force = false) {
-    if (routerId === null) return
+    if (routerId === null) {
+      setError('No router ID available — generate a bootstrap command first.')
+      return
+    }
     setBusy(true); setError(null)
     try {
       const s = force
@@ -308,7 +331,7 @@ export function ProvisioningPage() {
       await cancelActiveSessions(routerId)
       const w = await startProvisioningWorkflow({
         router_id: routerId,
-        service_type: SERVICE_TYPE,
+        service_type: serviceMode === 'pppoe' ? 'pppoe_server' : serviceMode,
         configuration: buildConfiguration(),
       })
       pushLog('info', w.message)
@@ -392,13 +415,41 @@ export function ProvisioningPage() {
                   onChange={(e) => setIdentity(e.target.value)} placeholder="e.g. Office Router"
                   autoComplete="off" maxLength={64} required />
               ))}
-              <div className="sm:col-span-2">
-                <Alert kind="info">
-                  Enter the router name only. The wizard uses RouterOS defaults for
-                  first contact, then discovers the router interfaces and network
-                  automatically. The session id is embedded in the callback URL.
-                </Alert>
-              </div>
+              {field('Services to enable', (
+                <div className="mt-1 flex gap-3 items-center">
+                  <label className="flex items-center gap-1 cursor-pointer text-[11px]">
+                    <input type="radio" name="service_mode" value="hotspot"
+                      checked={serviceMode === 'hotspot'}
+                      onChange={() => setServiceMode('hotspot')} /> HotSpot
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer text-[11px]">
+                    <input type="radio" name="service_mode" value="pppoe"
+                      checked={serviceMode === 'pppoe'}
+                      onChange={() => setServiceMode('pppoe')} /> PPPoE
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer text-[11px]">
+                    <input type="radio" name="service_mode" value="both"
+                      checked={serviceMode === 'both'}
+                      onChange={() => setServiceMode('both')} /> Both
+                  </label>
+                </div>
+              ))}
+              {(serviceMode === 'hotspot' || serviceMode === 'both') && (
+                <div className="sm:col-span-2">
+                  {field('HotSpot LAN interface (e.g. ether2)', (
+                    <input className={cn(inputClass, 'mt-1')} value={hotspotIface}
+                      onChange={(e) => setHotspotIface(e.target.value)} placeholder="e.g. ether2" />
+                  ))}
+                </div>
+              )}
+              {(serviceMode === 'pppoe' || serviceMode === 'both') && (
+                <div className="sm:col-span-2">
+                  {field('PPPoE server interface (e.g. ether3)', (
+                    <input className={cn(inputClass, 'mt-1')} value={pppoeIface}
+                      onChange={(e) => setPppoeIface(e.target.value)} placeholder="e.g. ether3" />
+                  ))}
+                </div>
+              )}
               <div className="sm:col-span-2 flex justify-end">
                 <Button onClick={() => void generate()} disabled={busy || !identity.trim()}
                   icon={<ChevronRight className="w-3.5 h-3.5" />}>
