@@ -307,8 +307,9 @@ export function ProvisioningPage() {
       pushLog('info', `Bootstrap session ${res.session_id.slice(0, 8)}… created for "${name}".`)
       // Start waiting for the router's phone-home scan immediately; the
       // operator pastes the command on the Discovery screen while it waits.
-      if (res.router_id != null) void watchScan(res.router_id)
-      else void watchSessionForRouter(res.session_id)
+      // Discovery is NOT started here — only when the operator reaches step 3.
+      // This prevents premature discovery: typing a name never marks a router
+      // as discovered or fabricates device details.
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not generate the bootstrap command.')
     } finally {
@@ -316,33 +317,13 @@ export function ProvisioningPage() {
     }
   }
 
-  /** Edge case: bootstrap response without router_id — resolve it from the
-   *  session status, then wait for the scan as usual. */
-  function watchSessionForRouter(sid: string) {
-    stopStream()
-    const tick = async () => {
-      try {
-        const st = await fetchProvisioningSessionStatus(sid)
-        if (st.router_id != null) {
-          stopStream()
-          setRouterId(st.router_id)
-          void watchScan(st.router_id)
-        }
-      } catch (e) {
-        pushLog('warning', e instanceof Error ? e.message : 'Session status poll failed.')
-      }
-    }
-    void tick()
-    pollRef.current = window.setInterval(() => void tick(), 2000)
-  }
-
   /* ── 3: wait for the router's scan report (DB-only, NAT-safe) ─────────── */
 
-  async function watchScan(rid: number) {
+  async function watchScan(rid: number, sessionId?: string) {
     setDiscovering(true)
     setStep((s) => (s === 1 || s === 2 ? 3 : s))
     try {
-      const s = await waitForScanReport(rid, {
+      const s = await waitForScanReport(rid, sessionId, {
         onProgress: (secs) => pushLog(
           'info',
           `Waiting for the router's scan report (${secs}s) — paste the bootstrap one-liner in the router terminal (Winbox: New Terminal) if you have not yet.`,
@@ -358,14 +339,13 @@ export function ProvisioningPage() {
     }
   }
 
-  /** Store the REAL scan and prefill every later step from it. */
+  /** Store the REAL scan and prefill network values from it.
+   *  Interface assignment is left to the ISP on the Interfaces step — we
+   *  never auto-pick WAN/HotSpot/PPPoE roles from discovery data.
+   */
   function applyScan(s: DeviceScan) {
     setScan(s)
     stopStream()
-    const others = s.interfaces.filter((i) => i !== s.wan_interface)
-    setWanIface(s.wan_interface || wanIface)
-    setHotspotIface((prev) => prev || others.find((i) => /^ether/.test(i)) || others[0] || '')
-    setPppoeIface((prev) => prev || others.filter((i) => /^ether/.test(i))[1] || others[1] || '')
     const n = s.network_config
     setCfg((prev) => ({
       ...prev,
@@ -375,10 +355,11 @@ export function ProvisioningPage() {
       ip_pool_start: n.dhcp_start || prev.ip_pool_start,
       ip_pool_end: n.dhcp_end || prev.ip_pool_end,
       dns_servers: n.dns_servers?.length ? n.dns_servers.join(',') : prev.dns_servers,
-      bridge_ports: others.join(', ') || prev.bridge_ports,
+      bridge_ports: prev.bridge_ports,
     }))
     pushLog('success', `Scan complete: ${s.interfaces.length} interface(s), RouterOS ${s.system_info.version || '?'}${s.system_info.board_name ? ` on ${s.system_info.board_name}` : ''}.`)
-    setStep((cur) => (cur <= 3 ? 4 : cur))
+    // Stay on Discovery step; the ISP confirms interface roles on step 4.
+    if (s.wan_interface) setWanIface(s.wan_interface)
   }
 
   /* ── 6→7: deploy via the engine, then poll its REAL status ────────────── */

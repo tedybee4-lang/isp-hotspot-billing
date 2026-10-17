@@ -76,17 +76,31 @@ async def create_bootstrap(
         from app.modules.routers.service import RouterService
         from app.services.router_provisioning import store_router_credentials
 
-        # Look for existing router by name (no org filter for public provisioning)
-        result = await db.execute(select(Router).where(Router.name == identity))
+        # Look for existing router by name — only among routers that are not
+        # yet assigned to an organization (publicly provisioned, unclaimed).
+        # Routers already claimed by an ISP must never be matched by name alone,
+        # otherwise ISP B could adopt ISP A's router simply by typing the same name.
+        result = await db.execute(
+            select(Router).where(
+                Router.name == identity,
+                Router.organization_id.is_(None),
+            )
+        )
         existing_router = result.scalars().first()
 
         router_obj = existing_router
         if not existing_router:
-            # Check if a router with the default IP already exists (no org filter)
-            result = await db.execute(select(Router).where(Router.ip_address == DEFAULT_ROUTER_IP))
+            # Check if a router with the default IP already exists — again only
+            # among unclaimed routers, so a claimed router cannot be hijacked by IP.
+            result = await db.execute(
+                select(Router).where(
+                    Router.ip_address == DEFAULT_ROUTER_IP,
+                    Router.organization_id.is_(None),
+                )
+            )
             ip_router = result.scalars().first()
             if ip_router:
-                # Use existing router with this IP, update its name if different
+                # Use existing unclaimed router with this IP, update its name if different
                 router_obj = ip_router
                 if router_obj.name != identity:
                     router_obj.name = identity

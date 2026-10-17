@@ -218,11 +218,13 @@ async function toApiError(response: Response, fallback: string): Promise<Error> 
 }
 
 /** Reads the device's interfaces / services / network config (public endpoint). */
-export async function scanDevice(routerId: number, forceRescan = false): Promise<DeviceScan> {
+export async function scanDevice(routerId: number, forceRescan = false, sessionId?: string): Promise<DeviceScan> {
+  const body: Record<string, unknown> = { router_id: routerId, force_rescan: forceRescan };
+  if (sessionId) body.session_id = sessionId;
   const response = await fetch(`${API_BASE_URL}/device/scan`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ router_id: routerId, force_rescan: forceRescan }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) throw await toApiError(response, 'Device scan failed');
   return response.json();
@@ -253,6 +255,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  */
 export async function waitForScanReport(
   routerId: number,
+  sessionId?: string,
   opts: {
     /** Overall budget for the report to arrive (default 120s). */
     deadlineMs?: number;
@@ -274,7 +277,7 @@ export async function waitForScanReport(
   // Optimistic read: resolves instantly when the cache is warm or the router
   // is directly reachable (LAN). Behind NAT it rejects — swallowed here so
   // the probe loop below keeps waiting for the phone-home report.
-  const eager = scanDevice(routerId, false).then(
+  const eager = scanDevice(routerId, false, sessionId).then(
     (s) => s,
     (e) => {
       lastDetail = e instanceof Error ? e.message : String(e);
@@ -292,7 +295,7 @@ export async function waitForScanReport(
           // force_rescan=false → the backend serves the cache; it only dials
           // when the cache is empty (stale flag), in which case we keep polling.
           try {
-            return await scanDevice(routerId, false);
+            return await scanDevice(routerId, false, sessionId);
           } catch (e) {
             lastDetail = e instanceof Error ? e.message : String(e);
           }

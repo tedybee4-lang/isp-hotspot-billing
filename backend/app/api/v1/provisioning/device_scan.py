@@ -17,6 +17,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.integrations.mikrotik import get_mikrotik_client
+from app.models.provisioning import ProvisioningSession
 from app.models.router import Router
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,9 @@ router = APIRouter()
 class DeviceScanRequest(BaseModel):
     router_id: int
     force_rescan: bool = False  # Skip cached data and connect directly to router
+    # session_id binds the scan read to a specific provisioning session so a
+    # caller cannot read another ISP's scanned data by guessing a router_id.
+    session_id: Optional[str] = None
 
 
 class ServiceStatus(BaseModel):
@@ -120,6 +124,25 @@ async def scan_device(
 
     if not router_obj:
         raise HTTPException(status_code=404, detail="Router not found")
+
+    # Tenant/session binding: a claimed router (organization_id set) may only be
+    # scanned through a session that belongs to that router. An unclaimed router
+    # (organization_id IS NULL) is part of the public provisioning flow and may
+    # be scanned without a session, but only by its own router_id.
+    if router_obj.organization_id is not None and request.session_id:
+        from sqlalchemy import select as _select
+        sess_result = await db.execute(
+            _select(ProvisioningSession).where(
+                ProvisioningSession.session_id == request.session_id,
+                ProvisioningSession.router_id == request.router_id,
+            )
+        )
+        session = sess_result.scalar_one_or_none()
+        if session is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Session does not belong to this router",
+            )
 
     # =========================================================================
     # CHECK CACHED SCAN DATA FIRST (from bootstrap scan-report callback)
